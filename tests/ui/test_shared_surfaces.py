@@ -7,6 +7,7 @@ No account or network is used.
 """
 from pathlib import Path
 import os
+import json
 from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[2]
 ART=Path(__file__).parent/'artifacts'
@@ -83,6 +84,39 @@ def run():
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             if width==390:page.get_by_test_id('provider-subpage').screenshot(path=str(ART/'desktop-theme-cache-390.png'))
         print('PASS host page/gutters retained, theme changes shared by real component and preview, narrow layouts, plain return actions')
+        # Change host tokens in place, without remounting or changing a user's theme.
+        page.set_viewport_size({'width':1700,'height':1200})
+        audit=[]
+        for name,base,bg,accent,green,yellow,red in (
+            ('green-dark','#e0eee5','#0e2118','#67dc9a','#81d978','#e5cd76','#ed8796'),
+            ('blue-light','#182736','#f4f7fb','#2159b8','#237843','#946400','#bc243c'),
+        ):
+            page.evaluate('''v=>{const root=document.documentElement;Object.entries(v).forEach(([k,x])=>root.style.setProperty(k,x));for(const e of [root,document.body,document.getElementById('root')])e.style.background=v['--ui-bg-chrome']}''',
+                          {'--ui-base':base,'--ui-bg-chrome':bg,'--ui-accent':accent,
+                           '--ui-text-primary':base,'--ui-text-secondary':base,'--ui-text-tertiary':base,
+                           '--ui-stroke-secondary':accent,'--ui-green':green,'--ui-yellow':yellow,'--ui-red':red})
+            page.get_by_role('tab',name='Overview',exact=True).click()
+            amount=page.locator('.au-provider-cost').first
+            expect(amount).to_contain_text('$')
+            styles=amount.evaluate('''e=>({weight:getComputedStyle(e).fontWeight,colour:getComputedStyle(e).color,parent:getComputedStyle(e.parentElement).fontWeight,primary:getComputedStyle(document.querySelector('.au-ledger')).color})''')
+            assert int(styles['weight'])>=700 and int(styles['parent'])<700
+            assert styles['colour']==styles['primary']
+            values={'theme':name,'card':rgba(cards.first),'amount':styles['colour'],
+                    'line':page.locator('.au-line').first.evaluate('(e)=>getComputedStyle(e).stroke'),
+                    'status':page.locator('.au-connection').evaluate('(e)=>getComputedStyle(e).color')}
+            page.get_by_test_id('usage-hero').screenshot(path=str(ART/f'theme-amount-{name}.png'))
+            page.get_by_role('tab',name='Skills usage',exact=True).click()
+            expect(page.get_by_test_id('skill-frequency').locator('svg')).to_be_visible()
+            values['pie']=page.get_by_test_id('skill-frequency').locator('svg path,svg circle').evaluate_all('(els)=>els.map(e=>getComputedStyle(e).fill)')
+            page.get_by_role('tab',name='Requests',exact=True).click()
+            values['table']=rgba(page.locator('.au-table').first)
+            audit.append(values)
+        for key in ('card','amount','line','table'):
+            assert audit[0][key]!=audit[1][key],(key,audit)
+        assert audit[0]['pie'][0]!=audit[1]['pie'][0]
+        (ART/'theme-following-audit.json').write_text(json.dumps(audit,indent=2))
+        print('PASS live host-token switching: cards, tables, chart, primary pie colour and bold dollar values follow dark/light palettes')
+        print('Theme audit semantic colours:',json.dumps(audit))
         assert not errors,errors
         assert not network,network
         browser.close()

@@ -7,12 +7,19 @@ ROOT = Path(__file__).resolve().parents[2]
 ART = Path(__file__).parent / 'artifacts'
 
 
+def top(locator):
+    box = locator.bounding_box()
+    assert box is not None
+    return box['y']
+
+
 def run():
     ART.mkdir(exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'), headless=True,
                                    args=['--no-sandbox', '--disable-dev-shm-usage'])
         page = browser.new_page(viewport={'width': 1500, 'height': 1100})
+        page.clock.install()
         errors, network = [], []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.on('request', lambda r: network.append(r.url))
@@ -60,7 +67,8 @@ def run():
         expect(context).to_contain_text('Before compression')
         snapshot.select_option('snapshot-demo-2')
         expect(context).to_contain_text('7,000')
-        expect(context).to_contain_text('unknown after compression')
+        assert surface.locator('.au-snapshot-picker').evaluate('(e)=>e.getBoundingClientRect().bottom<=e.nextElementSibling.getBoundingClientRect().top')
+        assert surface.locator('.au-snapshot-picker').evaluate('(e)=>getComputedStyle(e).justifyContent')=='flex-end'
         context.get_by_role('button', name='Before compression · 18,000 tokens', exact=True).click()
         expect(context).to_contain_text('Compression demo-comp-0')
         expect(snapshot).to_have_value('snapshot-demo-1')
@@ -68,15 +76,24 @@ def run():
         timeline = page.get_by_test_id('skill-timeline')
         expect(timeline).to_contain_text('Before compression')
         expect(timeline).to_contain_text('After compression')
+        expect(timeline.locator('details[open]')).to_have_count(0)
+        header=timeline.locator('details').first.locator('summary')
+        expect(header).to_contain_text('demo-session-0')
+        expect(header).to_contain_text('Context footprint')
+        expect(header).to_contain_text('Not recorded')
+        expect(header).to_contain_text('Recorded')
+        header.focus()
+        header.press('Enter')
         timeline.get_by_role('button', name='Inspect snapshot', exact=True).first.click()
         expect(context).to_be_visible()
         expect(context).to_contain_text('Turn completed')
         expect(context).to_contain_text('Context: Not recorded')
         views.get_by_role('button', name='Session timeline', exact=True).click()
+        timeline.locator('details').first.locator('summary').click()
         timeline.get_by_role('button', name='demo-session-0', exact=True).first.click()
         expect(page.get_by_label('Session ID', exact=True)).to_have_value('demo-session-0')
         expect(timeline).to_be_visible()
-        assert all('demo-session-0' in x for x in timeline.locator('tbody tr').all_text_contents())
+        assert all('demo-session-0' in x for x in timeline.locator('details>summary').all_text_contents())
         page.get_by_role('button', name='Clear filters', exact=True).click()
         views.get_by_role('button', name='Frequency', exact=True).click()
         chart.get_by_role('button', name='frontend-ui-iteration · 2 loads · inspect', exact=True).click()
@@ -99,7 +116,8 @@ def run():
         chart.screenshot(path=str(ART / 'skills-frequency-850.png'))
         # Missing history is not a zero-use assertion.
         page.evaluate('demoSkillsMissing=true;queryClient.invalidateQueries()')
-        expect(page.get_by_test_id('skills-coverage')).to_contain_text('Not recorded')
+        expect(surface.locator('.au-metrics .au-number').first).to_have_text('—')
+        expect(page.get_by_test_id('skills-coverage')).to_have_count(0)
         expect(chart).to_contain_text('No recorded values')
         page.evaluate('failSkills=true;queryClient.invalidateQueries()')
         expect(surface.get_by_role('alert')).to_contain_text('Skills history unavailable')
@@ -119,6 +137,30 @@ def run():
         page.evaluate('window.holdSkillsRequests.forEach(resolve=>resolve());window.holdSkillsRequests=null')
         expect(surface).not_to_contain_text('Loading skills history')
         expect(chart.get_by_role('button', name='frontend-ui-iteration · 65 loads · inspect', exact=True)).to_be_visible()
+        views.get_by_role('button', name='Session timeline', exact=True).click()
+        for width in (1500,390):
+            page.set_viewport_size({'width':width,'height':1000})
+            entry=timeline.locator('[data-event-id="extra-20"]')
+            entry.evaluate('e=>{e.open=true;e.scrollIntoView({block:"center"});window.retainedEntry=e}')
+            page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+            scroller=timeline.locator('.au-timeline-scroll')
+            assert scroller.evaluate('(e)=>e.scrollTop>0&&e.scrollHeight>e.clientHeight&&e.clientHeight<=Math.min(innerHeight*.52,560)+1')
+            document_scroll=page.evaluate('scrollY')
+            before=top(entry)
+            page.evaluate('''w=>{window.holdSkillsRequests=[];demoSkillEvents.push({...demoSkillEvents[0],id:'incoming-'+w,ts:now-1})}''',width)
+            page.clock.fast_forward(61000)
+            page.wait_for_function('window.holdSkillsRequests.length>=1')
+            expect(surface).not_to_contain_text('Loading skills history')
+            assert entry.evaluate('e=>e===window.retainedEntry&&e.open')
+            assert abs(top(entry)-before)<=3
+            page.evaluate('window.holdSkillsRequests.forEach(resolve=>resolve());window.holdSkillsRequests=null')
+            expect(timeline.locator(f'[data-event-id="incoming-{width}"]')).to_have_count(1)
+            page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+            assert entry.evaluate('e=>e===window.retainedEntry&&e.open')
+            assert abs(top(entry)-before)<=3,(width,before,entry.bounding_box())
+            assert abs(page.evaluate('scrollY')-document_scroll)<=3
+            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+            page.screenshot(path=str(ART/f'timeline-accordion-{width}.png'))
         assert not errors, errors
         assert not network, network
         browser.close()
