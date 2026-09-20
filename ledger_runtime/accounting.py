@@ -10,6 +10,9 @@ RAW_KEYS = {'input_tokens','output_tokens','prompt_tokens','completion_tokens','
     'reasoning_tokens','input_tokens_details','output_tokens_details','prompt_tokens_details',
     'completion_tokens_details','cache_creation','ephemeral_5m_input_tokens','ephemeral_1h_input_tokens'}
 
+def usage_priority(source):
+    return {'wire_terminal_usage':100,'native_terminal_usage':80,'native_assembled_usage':20,'hermes_normalized':0,'missing':0,None:0}.get(source,10)
+
 def mapping(value: Any) -> dict:
     if isinstance(value, dict): return value
     if hasattr(value, 'model_dump'):

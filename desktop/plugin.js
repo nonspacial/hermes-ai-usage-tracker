@@ -671,9 +671,16 @@ function UsageChart({data,mode}){
  active?h('div',{className:'au-chart-tip',role:'status'},new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · ',cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens',' · '+count(active.attempts)+' requests',active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
+function missingFieldNote(summary,key){
+ const n=summary?.missing_fields?.[key]||0;if(!n)return 'Reported tokens';
+ const labels={awaiting_usage:'awaiting usage',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
+ const reasons=summary?.missing_reasons?.[key];
+ const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>count(reasons[name])+' '+label):[];
+ return (parts.length?parts.join(' · '):count(n)+' requests without this value')+' · subtotal';
+}
 function Summary({data,label,mode,agent,onSubagents}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
- const t=key=>data?viewTokens(s,key):'—';const note=key=>missing[key]?(missing[key]>=s?.attempts?'No reported value':count(missing[key])+' records missing; subtotal'):'Reported tokens';
+ const t=key=>data?viewTokens(s,key):'—';const note=key=>missingFieldNote(s,key);
  const groups=data?.provider_groups||[];
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
    h('span',{},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
@@ -686,7 +693,7 @@ function Summary({data,label,mode,agent,onSubagents}){
  metric('Uncached input',t('input_tokens'),note('input_tokens'),'Input processed without cache reads or writes'),
  metric('Output',t('output_tokens'),note('output_tokens'),'Includes reasoning when reported'),
  metric('Cache writes',sessionWrites(s),sessionWriteNote(s),SESSION_WRITE_BASIS),
- metric('Cache savings',savingsValue(s),(s?.savings_missing?.cache_savings_usd?count(s.savings_missing.cache_savings_usd)+' records missing · net subtotal':'Net of cache-write premium'),'Estimated read discount minus extra cache-write cost at the same rates.'),
+ metric('Cache savings',savingsValue(s),(s?.savings_missing?.cache_savings_usd?count(s.savings_missing.cache_savings_usd)+' incomplete savings estimates · subtotal':'Net of cache-write premium'),'Estimated read discount minus extra cache-write cost at the same rates. Incomplete estimates can reflect unavailable token fields, not just missing prices.'),
  h('button',{className:'au-subagent-card','data-testid':'subagent-summary','aria-pressed':agent==='subagent',onClick:onSubagents,title:'Filter to subagent requests. These tokens are already included in the total.'},
  h('span',{className:'au-muted'},'Subagent tokens'),h('span',{className:'au-number'},viewTokens(data?.subagent_summary,'total_tokens')),
  h('span',{className:'au-muted'},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
@@ -816,16 +823,16 @@ function ComponentCostCards({summary:s}){
     [['Calculated tokens',sessionWrites(s,count),'tokens'],
      ['Read comparisons',count(s.session_cache_writes?.compared_requests||0),'comparisons'],
      ['Provider write cost',amount+(priceMissing?' *':''),'reported_cost'],
-     ['Missing reported writes',count(tokenMissing),'missing'],
-     ['Unpriced components',count(priceMissing),'unpriced']]:
+     ['Unavailable reported writes',count(tokenMissing),'missing'],
+     ['Incomplete cost estimates',count(priceMissing),'unpriced']]:
     [[total?'Processed tokens':'Known tokens',viewTokens(s,tokenKey,count),'tokens'],
-     ['Missing token records',count(tokenMissing),'missing'],
-     [total?'Unpriced requests':'Unpriced components',count(priceMissing),'unpriced']];
+     ['Requests without this value',count(tokenMissing),'missing'],
+     ['Incomplete cost estimates',count(priceMissing),'unpriced']];
   return h('article',{key,className:'au-cost-card','data-testid':'cost-card-'+key,'aria-label':label+' cost'},
    h('div',{className:'au-muted'},label),
    h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?' *':''),
    h('div',{className:'au-muted'},writes?sessionWriteNote(s):priceMissing?'API-equivalent cost · subtotal':'API-equivalent cost'),
-   h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
+   h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i,title:field==='missing'?missingFieldNote(s,tokenKey):field==='unpriced'?'A token value or its saved unit rate is unavailable. This is not a count of lost requests.':undefined},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
  }));
 }
 function SavingsCards({summary:s}){

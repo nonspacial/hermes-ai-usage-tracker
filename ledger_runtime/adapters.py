@@ -302,11 +302,12 @@ def install_anthropic(m):
 def codex_run_wrapper(original):
     @functools.wraps(original)
     def wrapped(agent,api_kwargs,*args,**kwargs):
-        cur=r.agent_context(agent)
+        resolved=r.agent_context(agent)
+        cur=dict(resolved) if resolved else None
         token=r.CURRENT.set(cur)
         try:
             result=original(agent,api_kwargs,*args,**kwargs)
-            r.capture_raw(result,agent,source='native_assembled_usage')
+            if cur:r.capture_raw(result,source='native_assembled_usage',context=cur)
             return result
         finally:r.CURRENT.reset(token)
     return wrapped

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from .accounting import METRICS, BUCKETS, costs, validate_rate, effective_record
+from .accounting import METRICS, BUCKETS, costs, validate_rate, effective_record, usage_priority
 
 LOCK=threading.RLock()
 SCHEMA='''
@@ -74,17 +74,32 @@ class Store:
     def latest_rate(self,c,rec):
         from .pricing import lookup
         return lookup(c,rec)
-    def request(self,rec,kind):
+    def request(self,rec,kind,*,expected=None):
         rec=dict(rec); key=rec['id']
         with LOCK,self.db() as c:
             c.execute('BEGIN IMMEDIATE')
             old=c.execute('SELECT data FROM requests WHERE id=?',(key,)).fetchone()
             data=json.loads(old[0]) if old else {}
             old_cost=data.get('cost')
+            # Compare-and-update inside the transaction, not against the earlier
+            # cleanup SELECT. Another callback may already have completed it.
+            if expected and (not old or any(data.get(k) not in values for k,values in expected.items())):return
+            old_status=data.get('status')
             was_final=data.get('status') not in ('pending',None) and data.get('ended') is not None
             # Repeated pre/success notifications must not duplicate or downgrade a row.
             if old and kind=='request_started': return
+            previous_usage=data.get('usage') or {}
+            incoming=rec.get('usage')
+            if isinstance(incoming,dict) and previous_usage:
+                weaker=usage_priority(incoming.get('usage_source'))<usage_priority(previous_usage.get('usage_source'))
+                empty=all(incoming.get(k) is None for k in METRICS) and any(previous_usage.get(k) is not None for k in METRICS)
+                if weaker or empty:
+                    for field in ('usage','response_model','returned_service_tier','provider_response_id'):
+                        rec.pop(field,None)
             data.update({k:v for k,v in rec.items() if v is not None})
+            if was_final and rec.get('status')=='usage_received':data['status']=old_status
+            if data.get('status')=='ended_without_usage' and any((data.get('usage') or {}).get(k) is not None for k in METRICS):
+                data['status']='ended_with_usage'
             data.setdefault('started',time.time());data.setdefault('status','pending')
             from .attribution import attach
             attach(c,data)
@@ -216,6 +231,7 @@ class Store:
 def summary(rows):
     out={'sessions':len({r.get('session_id') for r in rows if r.get('session_id')}),'attempts':len(rows),'pending':0,'missing_usage':0,'partial_breakdown':0,'aggregate_records':0,
          'known':{k:0 for k in METRICS},'missing_fields':{k:0 for k in METRICS},
+         'missing_reasons':{k:{r:0 for r in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS},
          'cost_components':{k:Decimal(0) for k in BUCKETS},'cost_missing_fields':{k:0 for k in BUCKETS},'unpriced_requests':0,'priced_requests':0,'known_cost_usd':Decimal(0)}
     savings_keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:Decimal(0) for k in savings_keys};out['savings_missing']={k:0 for k in savings_keys}
@@ -230,7 +246,12 @@ def summary(rows):
         if any(u.get(k) is None for k in BUCKETS):out['partial_breakdown']+=1
         if u.get('request_count',1)>1:out['aggregate_records']+=1
         for k in METRICS:
-            if u.get(k) is None: out['missing_fields'][k]+=1
+            if u.get(k) is None:
+                out['missing_fields'][k]+=1
+                reason=('awaiting_usage' if r.get('status') in ('pending','usage_received') and r.get('ended') is None else
+                        'unverified_accounting' if (u.get('field_provenance') or {}).get(k) in ('unverified_normalized_zero','unverified_cache_decomposition') else
+                        'ended_without_usage' if r.get('ended') is not None and all(u.get(m) is None for m in METRICS) else 'unreported_field')
+                out['missing_reasons'][k][reason]+=1
             else:out['known'][k]+=u[k]
         cost=r.get('cost') or {}
         if cost.get('complete'):out['priced_requests']+=1
@@ -270,6 +291,11 @@ def _exprs():
       "COALESCE(SUM(json_extract(data,'$.calculated_cache_writes.tokens') IS NULL),0) AS cw_missing"]
     for k in METRICS:
         cols += ["COALESCE(SUM(json_extract(data,'$.usage."+k+"')),0) AS k_"+k,"COALESCE(SUM(json_extract(data,'$.usage."+k+"') IS NULL),0) AS m_"+k]
+        reason=("CASE WHEN status IN ('pending','usage_received') AND ended IS NULL THEN 'awaiting_usage' "
+                "WHEN json_extract(data,'$.usage.field_provenance."+k+"') IN ('unverified_normalized_zero','unverified_cache_decomposition') THEN 'unverified_accounting' "
+                "WHEN ended IS NOT NULL AND COALESCE("+','.join("json_extract(data,'$.usage."+m+"')" for m in METRICS)+") IS NULL THEN 'ended_without_usage' ELSE 'unreported_field' END")
+        for name in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field'):
+            cols.append("COALESCE(SUM(json_extract(data,'$.usage."+k+"') IS NULL AND ("+reason+")='"+name+"'),0) AS mr_"+k+'_'+name)
     for k in BUCKETS:
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost.components."+k+"')),'0') AS c_"+k,"COALESCE(SUM(json_extract(data,'$.cost.components."+k+"') IS NULL),0) AS cm_"+k]
     for k in ('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd'):
@@ -284,6 +310,7 @@ def summary_from_sql(row):
     out['unpriced_requests']=out['attempts']-out['priced_requests']
     keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:row['s_'+k] for k in keys};out['savings_missing']={k:row['sm_'+k] for k in keys}
+    out['missing_reasons']={k:{name:row['mr_'+k+'_'+name] for name in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS}
     for group,prefix,fields in [('known','k_',METRICS),('missing_fields','m_',METRICS),('cost_components','c_',BUCKETS),('cost_missing_fields','cm_',BUCKETS)]:
         out[group]={k:row[prefix+k] for k in fields}
     out['cache_hit_rate']=out['known']['cache_read_tokens']/out['known']['prompt_tokens'] if out['known']['prompt_tokens'] and not out['missing_fields']['cache_read_tokens'] and not out['missing_fields']['prompt_tokens'] else None

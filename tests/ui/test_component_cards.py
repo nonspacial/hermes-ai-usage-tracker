@@ -33,10 +33,20 @@ def run():
   assert page.evaluate('dollars(12.5)') == '$12.50'
   assert page.evaluate('dollars(-12.5)') == '-$12.50'
   page.evaluate(FIXTURE)
+  page.evaluate('''() => {
+   const original=rest;
+   rest=async(...args)=>{
+    const result=await original(...args);
+    if(result.summary)result.summary.missing_reasons=Object.fromEntries(Object.entries(result.summary.missing_fields).map(([key,n])=>[key,{awaiting_usage:n}]));
+    return result;
+   };
+  }''')
   page.get_by_role('navigation',name='Providers',exact=True).get_by_role('tab',name='Codex',exact=True).click()
   page.get_by_role('navigation',name='Provider subpages',exact=True).get_by_role('tab',name='Cache & costs',exact=True).click()
   cache=page.get_by_test_id('cache-costs');cards=page.get_by_test_id('component-cost-cards');rates=page.get_by_test_id('published-rates')
   expect(cards.locator('article')).to_have_count(5)
+  expect(page.get_by_test_id('cost-card-total').locator('dt').filter(has_text='Requests without this value')).to_have_attribute('title','1 awaiting usage · subtotal')
+  assert 'records missing' not in page.locator('body').inner_text()
   expect(cache.locator('table')).to_have_count(1)
   expect(page.get_by_test_id('component-costs')).to_have_count(0)
   expected={'total':('60,060','$0.03582','1','1'),'input_tokens':('33,000','$0.0330','1','1'),'output_tokens':('60','$0.00012','1','1'),'cache_read_tokens':('27,000','$0.0027','1','1'),'cache_write_tokens':('15,000','15,000','1','1')}

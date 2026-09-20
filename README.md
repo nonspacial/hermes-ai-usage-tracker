@@ -34,6 +34,8 @@ The installer copies only named plugin files and runtime directories, not reposi
 
 ## Development checks
 
+See [RECORDER_LIFECYCLE.md](RECORDER_LIFECYCLE.md) for turn-scoped cleanup, late-usage handling and the meaning of unavailable-field indicators. Historical unknown counters are not fabricated or backfilled.
+
 Use an isolated environment; do not install test dependencies into a running Hermes environment:
 
 ```bash

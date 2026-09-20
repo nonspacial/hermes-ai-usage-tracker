@@ -3,14 +3,14 @@ from __future__ import annotations
 import atexit, contextvars, functools, logging, os, threading, time, uuid
 from datetime import datetime
 from .storage import Store,home
-from .accounting import mapping,normalize,num,safe_usage
+from .accounting import mapping,normalize,num,safe_usage,usage_priority
 
 log=logging.getLogger('hermes.ai_usage_ledger')
 PROCESS=f'{os.getpid()}-{uuid.uuid4().hex[:12]}'
 CURRENT=contextvars.ContextVar('usage_current_request',default=None)
 AUX=contextvars.ContextVar('usage_aux_request',default=None)
 COMPRESSION=contextvars.ContextVar('usage_current_compression',default=None)
-_STORES={};_LOOKUP={};_LOCK=threading.RLock()
+_STORES={};_LOOKUP={};_TURN_ROOTS={};_LOCK=threading.RLock()
 ADAPTERS={};FAILURES=0;LAST_FAILURE_AT=0
 _HEARTBEATS={}
 _REGISTERED_ROOTS=set()
@@ -121,6 +121,10 @@ def pre(**kw):
     root=str(home()); CURRENT.set({'id':key,'root':root,'session_id':rec['session_id'],'provider':rec['provider'],'api_mode':rec['api_mode'],'api_request_id':aid})
     with _LOCK:
         _LOOKUP[(root,rec['session_id'],aid)]=key
+        if rec['turn_id']:
+            _TURN_ROOTS[(root,rec['session_id'],rec['turn_id'])]=True
+            if len(_TURN_ROOTS)>20000:
+                for k in list(_TURN_ROOTS)[:10000]:_TURN_ROOTS.pop(k,None)
         if len(_LOOKUP)>20000:
             for k in list(_LOOKUP)[:10000]:_LOOKUP.pop(k,None)
     from .attribution import capture
@@ -162,12 +166,9 @@ def agent_context(agent):
     if cur and sid and cur['session_id']==sid:return cur
     return None
 
-def usage_priority(source):
-    return {'wire_terminal_usage':100,'native_terminal_usage':80,'native_assembled_usage':20,'hermes_normalized':0,'missing':0,None:0}.get(source,10)
-
 @safe
-def capture_raw(response,agent=None,source='response_usage'):
-    cur=agent_context(agent) if agent is not None else CURRENT.get()
+def capture_raw(response,agent=None,source='response_usage',context=None):
+    cur=context if context is not None else agent_context(agent) if agent is not None else CURRENT.get()
     if not cur:return
     raw=mapping(response).get('usage') if isinstance(response,dict) else getattr(response,'usage',None)
     if not safe_usage(raw):return
@@ -211,22 +212,42 @@ def post(**kw):
 def error(**kw):
     cur=request_context(kw)
     if cur:
+        error=kw.get('error')
+        error_class=mapping(error).get('type') if isinstance(error,dict) else type(error).__name__
+        if not isinstance(error_class,str) or len(error_class)>100 or not error_class.isidentifier():error_class='UnknownError'
         store(cur['root']).request({'id':cur['id'],'ended':timestamp(kw.get('ended_at')),'status':'failed',
-            'status_code':num(kw.get('status_code')),'error_class':type(kw.get('error')).__name__},'request_failed')
+            'status_code':num(kw.get('status_code')),'error_class':error_class},'request_failed')
     else:ADAPTERS['orphan_error']='error hook without matching request'
     health()
     if cur and CURRENT.get() and CURRENT.get()['id']==cur['id']:CURRENT.set(None)
 
 @safe
 def session_end(**kw):
-    # On interruption mark still-open requests in this process/session. Do not guess tokens.
-    s=store()
+    # Hermes emits this at TURN completion; missing identity must not sweep a session.
+    sid,turn=text(kw.get('session_id')),text(kw.get('turn_id'))
+    if not sid or not turn:return
+    root=str(home())
+    with _LOCK:
+        if (root,sid,turn) not in _TURN_ROOTS:
+            roots=[p for p,s,t in _TURN_ROOTS if s==sid and t==turn]
+            if len(roots)!=1:return
+            root=roots[0]
+    outcome={k:kw[k] for k in ('completed','failed','interrupted') if isinstance(kw.get(k),bool)}
+    reason=kw.get('turn_exit_reason')
+    allowed={'unknown','completed','interrupted','failed','interpreter_shutdown','partial_stream_recovery',
+             'fallback_prior_turn_content','empty_response_exhausted','session_persistence_failed',
+             'guardrail_halt','review_input_budget_exhausted','budget_exhausted',
+             'redirect_restart_limit_exceeded','compaction_handoff_not_actionable',
+             'rebuilt_restart_limit_exceeded','all_retries_exhausted_no_response',
+             'context_compression_timeout','ollama_runtime_context_too_small'}
+    if isinstance(reason,str):outcome['exit_reason']=reason if reason in allowed else 'other'
+    s=store(root)
     with s.db() as c:
-        rows=c.execute("SELECT id FROM requests WHERE session_id=? AND status='pending'",(text(kw.get('session_id')),)).fetchall()
+        rows=c.execute("SELECT id FROM requests WHERE session_id=? AND status IN ('pending','usage_received') AND json_extract(data,'$.turn_id')=? AND json_extract(data,'$.process')=?",(sid,turn,PROCESS)).fetchall()
     for r in rows:
-        if r['id'].startswith(PROCESS+':'):
-            s.request({'id':r['id'],'ended':time.time(),'status':'ended_without_usage'},'request_ended_without_usage')
-    health()
+        s.request({'id':r['id'],'ended':time.time(),'status':'ended_without_usage','turn_outcome':outcome},
+                  'request_ended_without_usage',expected={'status':('pending','usage_received'),'turn_id':(turn,), 'process':(PROCESS,)})
+    health(root)
 
 
 @safe

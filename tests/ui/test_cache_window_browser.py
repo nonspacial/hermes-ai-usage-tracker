@@ -78,6 +78,9 @@ def run():
   local.get_by_role('button',name='Custom',exact=True).click()
   a=page.evaluate('new Date((now-3600)*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19)')
   b=page.evaluate('new Date(now*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19)')
+  # Chromium canonicalises zero seconds away; Playwright fill checks exact value.
+  a=a[:-3] if a.endswith(':00') else a
+  b=b[:-3] if b.endswith(':00') else b
   filters.get_by_label('Cache window start',exact=True).fill(a)
   filters.get_by_label('Cache window end',exact=True).fill(b)
   expect(page.get_by_label('Window start',exact=True)).to_have_value(a)
