@@ -358,14 +358,14 @@ function ChipPicker({ providers, value, onSelect }) {
 
 function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider, setChipProvider, isFetching, refetch, meta, hiddenCount, showHidden, setShowHidden, refreshMenu, refreshBusy }) {
   return jsxs('div', {
-    className: 'flex flex-wrap items-center gap-2',
+    className: 'au-header-main',
     children: [
-      jsx('span', { className: 'text-sm font-medium', children: 'AI usage' }),
+      jsx('span', { className: 'au-header-title text-sm font-medium', title: meta || '', children: 'AI usage' }),
       jsx('span', {
-        className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
+        className: 'au-header-meta text-[0.6875rem] text-(--ui-text-quaternary)',
+        title: meta || '',
         children: meta || ''
       }),
-      jsx('span', { className: 'flex-1' }),
       hiddenCount > 0
         ? jsxs(Button, {
             variant: 'ghost',
@@ -390,11 +390,15 @@ function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider
             children: 'Unhide all'
           })
         : null,
-      jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: 'Status Bar:' }),
-      jsx(ChipPicker, { providers: chipProviders, value: chipProvider, onSelect: setChipProvider }),
-      jsx(ProfilePicker, { profiles, value: profile, onSelect: setProfile }),
+      jsxs('div', { className: 'au-header-chip', children: [
+        jsx('span', { className: 'au-header-chip-label text-[0.6875rem] text-(--ui-text-quaternary)', children: 'Status Bar:' }),
+        jsx('div', { className: 'au-header-picker', children: jsx(ChipPicker, { providers: chipProviders, value: chipProvider, onSelect: setChipProvider }) })
+      ] }),
+      jsx('div', { className: 'au-header-profile au-header-picker', children: jsx(ProfilePicker, { profiles, value: profile, onSelect: setProfile }) }),
       jsxs('div', { className: 'au-refresh-split', children: [jsxs(Button, {
         variant: 'secondary',
+        title: isFetching ? 'Refreshing data' : 'Refresh data',
+        'aria-label': isFetching ? 'Refreshing…' : 'Refresh',
         onClick: () => {
           haptic('tap')
           pendingRefresh = true
@@ -457,8 +461,29 @@ const ledgerCss = `
 .au-ledger .au-provider-select{display:none}.au-ledger .au-notice{border-left:3px solid var(--ui-accent);padding:9px 13px;margin:12px 0;color:var(--ui-text-secondary);line-height:1.6}
 .au-ledger .au-meter{height:6px;width:110px;background:var(--ui-stroke-secondary);border-radius:3px;margin:5px 0;overflow:hidden}
 .au-ledger .au-meter > i{display:block;height:100%;background:var(--ui-accent)}
-.au-ledger .au-page-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.au-ledger .au-page-header{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
 .au-ledger .au-original-header{flex:1;min-width:0}
+.au-header-main{display:flex;align-items:center;flex-wrap:nowrap;gap:8px;min-width:0}
+.au-header-title,.au-header-chip-label{white-space:nowrap;flex-shrink:0}
+.au-header-meta{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-header-chip{display:flex;align-items:center;gap:8px;flex:0 1 300px;min-width:90px}
+.au-header-picker{min-width:0;flex:1 1 auto}
+.au-header-profile{flex:0 1 176px;min-width:70px}
+.au-ledger .au-header-picker>:is(button,select){width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.au-header-main>.au-refresh-split,.au-page-header>.au-connection{flex-shrink:0}
+.au-header-main>button{white-space:nowrap;flex-shrink:0}
+@container(max-width:1000px){.au-header-chip-label{display:none}.au-header-chip{flex-basis:224px}}
+@container(max-width:650px){
+ .au-header-meta{display:none}.au-header-main{gap:5px}.au-ledger .au-page-header{gap:5px}
+ .au-header-chip{min-width:60px}.au-header-profile{min-width:55px}
+ .au-header-main .au-refresh-split>button span:last-child{display:none}
+ .au-header-main>button{max-width:40px;overflow:hidden;text-overflow:ellipsis}
+}
+@container(max-width:400px){
+ .au-header-title{font-size:11px}.au-page-header>.au-connection span:last-child{display:none}
+ .au-ledger .au-page-header>.au-connection{padding:7px}
+ .au-ledger .au-header-picker>:is(button,select){padding-left:5px;padding-right:5px}
+}
 .au-ledger .au-connection{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;font-size:11px;line-height:1.4;white-space:nowrap;border-radius:999px;background:transparent;flex:none}
 .au-ledger .au-connection-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 .au-ledger .au-connection[data-state="online"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-stroke-success,#2d514b)}
@@ -474,7 +499,7 @@ const ledgerCss = `
 .au-refresh-menu>summary::-webkit-details-marker{display:none}
 .au-refresh-options{position:absolute;right:0;top:100%;z-index:20;min-width:220px;padding:5px;background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px;display:grid;gap:4px}
 .au-ledger .au-refresh-options button{text-align:left;border:0}
-@container(max-width:600px){.au-refresh-options{left:0;right:auto}}
+
 .au-ledger [data-testid="cache-costs"] tfoot th,.au-ledger [data-testid="cache-costs"] tfoot td{font-weight:650;border-top:2px solid var(--ui-stroke-secondary);background:var(--au-table-head-bg)}
 .au-ledger .au-cache-window{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:12px 0}
 .au-ledger .au-cache-window .au-segment{margin:0}

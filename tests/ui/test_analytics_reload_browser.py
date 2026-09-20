@@ -137,6 +137,18 @@ def run():
         page.evaluate("release('status')")
         expect(badge).to_have_text('Not recording')
         page.set_viewport_size({'width': 390, 'height': 1000})
+        for width in (1500, 1032, 847, 650, 500, 390, 320):
+            page.set_viewport_size({'width': width, 'height': 1000})
+            boxes = [page.locator(selector).bounding_box() for selector in (
+                '.au-header-title', '.au-header-chip', '.au-header-profile', '.au-refresh-split', '.au-connection')]
+            assert all(box is not None for box in boxes)
+            boxes = [box for box in boxes if box is not None]
+            centres = [box['y'] + box['height']/2 for box in boxes]
+            assert max(centres)-min(centres)<2, (width, boxes)
+            assert all(box['x']>=0 and box['x']+box['width']<=width for box in boxes), (width, boxes)
+            assert all(a['x']+a['width']<=b['x']+1 for a,b in zip(boxes,boxes[1:])), (width,boxes)
+            page.locator('.au-page-header').screenshot(path=str(ART / f'inline-header-{width}.png'))
+        page.set_viewport_size({'width': 390, 'height': 1000})
         page.get_by_label('Refresh actions', exact=True).click()
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         menu_box = page.locator('.au-refresh-options').bounding_box()
