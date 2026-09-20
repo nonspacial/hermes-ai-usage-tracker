@@ -1152,7 +1152,7 @@ function knownTokens(summary,key,format=short){
   return summary?.attempts > (summary?.missing_fields?.[key]||0) ? format(summary.known?.[key]) : '—'
 }
 
-const dollars = n => n == null ? '—' : Number(n).toLocaleString(undefined,{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2})
+const dollars = n => n == null ? '—' : Number(n).toLocaleString(undefined,{style:'currency',currency:'USD',currencyDisplay:'narrowSymbol',minimumFractionDigits:2,maximumFractionDigits:2})
 const uiNames = {'openai-codex':'Codex',nous:'Nous Portal',ollama:'Ollama Cloud','ollama-cloud':'Ollama Cloud',openrouter:'OpenRouter'}
 function selectedCost(s){return !s?.attempts?'$0.00':Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]||0)<s.attempts)?dollars(s.known_cost_usd):'—'}
 function savingsValue(s,key='cache_savings_usd'){return !s?.attempts?'$0.00':s.attempts>(s.savings_missing?.[key]??s.attempts)?dollars(s.savings?.[key]):'—'}

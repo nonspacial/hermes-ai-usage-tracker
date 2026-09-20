@@ -25,11 +25,13 @@ def run():
  ART.mkdir(exist_ok=True)
  with sync_playwright() as p:
   b=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
-  page=b.new_page(viewport={'width':1700,'height':1100},locale='en-US',color_scheme='light')
+  page=b.new_page(viewport={'width':1700,'height':1100},locale='en-GB',color_scheme='light')
   page.set_default_timeout(7000);errors=[];network=[]
   page.on('pageerror',lambda e:errors.append(str(e)))
   page.on('request',lambda r:network.append(r.url))
   page.set_content((ROOT/'preview.html').read_text(),wait_until='domcontentloaded')
+  assert page.evaluate('dollars(12.5)') == '$12.50'
+  assert page.evaluate('dollars(-12.5)') == '-$12.50'
   page.evaluate(FIXTURE)
   page.get_by_role('navigation',name='Providers',exact=True).get_by_role('tab',name='Codex',exact=True).click()
   page.get_by_role('navigation',name='Provider subpages',exact=True).get_by_role('tab',name='Cache & costs',exact=True).click()
