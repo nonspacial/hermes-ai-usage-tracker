@@ -1110,6 +1110,7 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"] .au-json-details{min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-json-panel{width:100%;max-width:100%;min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-drill{max-width:100%}
+@container(min-width:760px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container(max-width:400px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:minmax(0,1fr)}}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}

@@ -40,7 +40,7 @@ def run():
             footer = table.locator('tfoot .au-field-value').all_text_contents()
             row_count = table.locator('tbody tr').count()
             assert row_count > 0
-            for width in [850, 500, 390, 320]:
+            for width in [850, 760, 759, 500, 401, 400, 390, 320]:
                 # Keep the browser wide: only the plugin pane shrinks.
                 page.locator('.au-ledger').evaluate('(e,w) => e.style.width=w+"px"', width)
                 settle()
@@ -51,8 +51,12 @@ def run():
                 assert table.locator('tfoot .au-field-value').all_text_contents() == footer
                 assert table.locator('tbody tr').count() == row_count
                 if table.get_attribute('data-layout') == 'records':
+                    columns = table.locator('tbody tr').first.evaluate('(e) => getComputedStyle(e).gridTemplateColumns.split(" ").length')
+                    assert columns == (3 if width >= 760 else 1 if width <= 400 else 2), (name, width, columns)
                     assert table.locator('tbody tr').first.locator('.au-field-label').all_text_contents() == table.locator('thead th').all_text_contents()
                     expect(table.locator('tbody tr').first.locator('.au-field-label').first).to_be_visible()
+                    if name == 'Requests' and width == 850:
+                        table.locator('tbody tr').first.screenshot(path=str(ART / 'responsive-request-850.png'))
             page.locator('.au-ledger').evaluate('(e) => e.style.width=""')
             expect(table).to_have_attribute('data-layout', 'table')
         print('PASS every shared table: pane-driven reflow, identical rows/values/totals/labels, no x overflow, restores wide table')
