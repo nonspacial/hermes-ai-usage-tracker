@@ -141,6 +141,8 @@ def run():
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         menu_box = page.locator('.au-refresh-options').bounding_box()
         assert menu_box['x'] >= 0 and menu_box['x'] + menu_box['width'] <= 390
+        assert page.locator('.au-refresh-options').evaluate('el=>getComputedStyle(el).borderTopWidth') == '1px'
+        assert page.locator('.au-refresh-options button').evaluate_all('items=>items.every(el=>getComputedStyle(el).borderTopWidth==="0px")')
         page.screenshot(path=str(ART / 'refresh-menu-traffic-lights.png'), full_page=True)
         page.get_by_role('button', name='Reload analytics backend', exact=True).click()
         expect(notice).to_contain_text('loaded.')
