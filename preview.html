@@ -467,7 +467,13 @@ function demoAttribution(rows){
 }
 window.demoCalls=[];window.failLedger=false;window.failStatus=false;window.demoStatusState='online';
 window.demoSocketStarts=0;window.demoSocketStops=0;
-function demoSocket(){window.demoSocketStarts++;let stopped=false;return()=>{if(!stopped){stopped=true;window.demoSocketStops++}}}
+function demoSocket(path,callback){
+ window.demoSocketStarts++;let stopped=false;
+ const emit=type=>{if(!stopped&&!window.failSocket)callback({type,mode:'native-events'})};
+ queueMicrotask(()=>emit('connected'));
+ const timer=setInterval(()=>emit('heartbeat'),20000);
+ return()=>{if(!stopped){stopped=true;clearInterval(timer);window.demoSocketStops++}};
+}
 
 
 function demoReadProgression(all,selected,resetEvents){
@@ -515,7 +521,7 @@ function demoWriteSummary(rows){
  return s;
 }
 
-async function demoRest(path,options={}){window.demoCalls.push(path);const u=new URL(path,'https://offline.test');if(u.pathname==='/ledger/status'){if(window.failStatus)throw new Error('Synthetic connection failure');return {state:window.demoStatusState,message:window.demoStatusState==='online'?'Synthetic recorder connected. No real accounts are connected.':window.demoStatusState==='limited'?'Synthetic partial adapter coverage.':window.demoStatusState==='unverified'?'Synthetic older recorder; reload updated producer.':'Synthetic recorder stopped.',warnings:window.demoStatusState==='limited'?['Example unavailable adapter']:[],active_processes:window.demoStatusState==='online'?1:0,checked_at:Date.now()/1000};}if(u.pathname==='/ledger'&&window.failLedger)throw new Error('Synthetic ledger failure');if(u.pathname==='/usage')return{generated_at:new Date().toISOString(),profile:u.searchParams.get('profile')||'infra',profiles:[{name:'infra',gateway_running:true},{name:'default',is_default:true}],providers:demoProviders,probe_seconds:0.63};
+async function demoRest(path,options={}){window.demoCalls.push(path);const u=new URL(path,'https://offline.test');if(u.pathname==='/ledger/analytics/reload'){if(window.failReload)throw new Error('Synthetic reload validation failed; previous code remains active.');window.demoAnalyticsRevision='synthetic-analytics-'+((window.demoReloadCount=(window.demoReloadCount||0)+1));return {status:'reloaded',revision:window.demoAnalyticsRevision}}if(u.pathname==='/ledger/analytics')return {revision:window.demoAnalyticsRevision||'synthetic-analytics-initial',restart_required:false};if(u.pathname==='/ledger/status'){if(window.failStatus)throw new Error('Synthetic connection failure');return {state:window.demoStatusState,message:window.demoStatusState==='online'?'Synthetic recorder connected. No real accounts are connected.':window.demoStatusState==='limited'?'Synthetic partial adapter coverage.':window.demoStatusState==='unverified'?'Synthetic older recorder; reload updated producer.':'Synthetic recorder stopped.',warnings:window.demoStatusState==='limited'?['Example unavailable adapter']:[],active_processes:window.demoStatusState==='online'?1:0,checked_at:Date.now()/1000};}if(u.pathname==='/ledger'&&window.failLedger)throw new Error('Synthetic ledger failure');if(u.pathname==='/usage')return{generated_at:new Date().toISOString(),profile:u.searchParams.get('profile')||'infra',profiles:[{name:'infra',gateway_running:true},{name:'default',is_default:true}],providers:demoProviders,probe_seconds:0.63};
  if(u.pathname==='/ledger/pricing/refresh'&&options.method==='POST'){demoCatalogs.forEach(c=>c.snapshot_at=Date.now()/1000);return{status:'queued',message:'Synthetic refresh only'}}
  if(u.pathname==='/ledger/tests'&&options.method==='POST'){const b=options.body;if(b.action==='start'){const t={id:'test-'+Date.now(),started:Date.now()/1000,label:b.label};savedTests.unshift(t);return t}else{const t=savedTests.find(t=>t.id===b.id);t.ended=Date.now()/1000;return t}}
  const marker=savedTests.find(t=>t.id===u.searchParams.get('test_id'));const start=marker?marker.started:Number(u.searchParams.get('start')||0),end=marker?(marker.ended||Date.now()/1000):Number(u.searchParams.get('end')||Date.now()/1000),provider=u.searchParams.get('provider'),session=u.searchParams.get('session'),limit=Number(u.searchParams.get('limit')||200),offset=Number(u.searchParams.get('offset')||0);
@@ -854,7 +860,7 @@ function ChipPicker({ providers, value, onSelect }) {
   })
 }
 
-function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider, setChipProvider, isFetching, refetch, meta, hiddenCount, showHidden, setShowHidden }) {
+function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider, setChipProvider, isFetching, refetch, meta, hiddenCount, showHidden, setShowHidden, refreshMenu, refreshBusy }) {
   return jsxs('div', {
     className: 'flex flex-wrap items-center gap-2',
     children: [
@@ -891,16 +897,16 @@ function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider
       jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: 'Status Bar:' }),
       jsx(ChipPicker, { providers: chipProviders, value: chipProvider, onSelect: setChipProvider }),
       jsx(ProfilePicker, { profiles, value: profile, onSelect: setProfile }),
-      jsxs(Button, {
+      jsxs('div', { className: 'au-refresh-split', children: [jsxs(Button, {
         variant: 'secondary',
         onClick: () => {
           haptic('tap')
           pendingRefresh = true
           refetch()
         },
-        disabled: isFetching,
+        disabled: isFetching || refreshBusy,
         children: [jsx(Codicon, { name: 'refresh' }), jsx('span', { children: isFetching ? 'Refreshing…' : 'Refresh' })]
-      })
+      }), refreshMenu] })
     ]
   })
 }
@@ -962,7 +968,17 @@ const ledgerCss = `
 .au-ledger .au-connection[data-state="online"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-stroke-success,#2d514b)}
 .au-ledger .au-connection[data-state="limited"],.au-ledger .au-connection[data-state="unverified"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-stroke-warning,#5b5135)}
 .au-ledger .au-connection[data-state="disconnected"],.au-ledger .au-connection[data-state="not_recording"]{color:var(--ui-text-error,#d58c96);border-color:var(--ui-stroke-error,#613f49)}
-.au-ledger .au-connection[data-state="checking"]{color:var(--ui-text-tertiary)}
+.au-ledger .au-connection[data-state="checking"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-stroke-warning,#5b5135)}
+.au-ledger .au-connection[aria-busy="true"] .au-connection-dot{width:10px;height:10px;background:transparent;border:2px solid currentColor;border-right-color:transparent;animation:au-connection-spin .8s linear infinite}
+@keyframes au-connection-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.au-ledger .au-connection[aria-busy="true"] .au-connection-dot{animation:none}}
+.au-refresh-split{display:inline-flex;align-items:center;gap:2px}
+.au-refresh-menu{position:relative}
+.au-refresh-menu>summary{cursor:pointer;padding:7px 9px;list-style:none;border:1px solid var(--ui-stroke-secondary);border-radius:6px;background:var(--au-control-bg)}
+.au-refresh-menu>summary::-webkit-details-marker{display:none}
+.au-refresh-options{position:absolute;right:0;top:100%;z-index:20;min-width:220px;padding:5px;background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px;display:grid;gap:4px}
+.au-refresh-options button{text-align:left}
+@container(max-width:600px){.au-refresh-options{left:0;right:auto}}
 .au-ledger [data-testid="cache-costs"] tfoot th,.au-ledger [data-testid="cache-costs"] tfoot td{font-weight:650;border-top:2px solid var(--ui-stroke-secondary);background:var(--au-table-head-bg)}
 .au-ledger .au-cache-window{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:12px 0}
 .au-ledger .au-cache-window .au-segment{margin:0}
@@ -1190,7 +1206,9 @@ function Summary({data,label,mode,agent,onSubagents}){
 
 function Breakdown({data,mode,onDrill,group,setGroup}){
  const timeName=data?.trend?.unit==='hour'?'Hour':'Day';
- const rows=({model:data.model_groups,time:data.trend?.buckets,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
+ // Only the time table is reversed; the shared chart keeps chronological buckets.
+ // Other groups arrive ordered by their latest call across the full filtered set.
+ const rows=group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
  const total=mode==='Cost'?Number(data.summary.known_cost_usd):data.summary.known.total_tokens;
  const grouping={model:'Model',time:timeName,project:'Project',session:'Session',subagent:'Subagents'};
  function name(g){
@@ -1401,15 +1419,84 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
 // The SDK socket has reconnect/backoff built in. REST stays available on OAuth
 // remotes, where the SDK socket is a no-op. This never restarts a gateway.
 const CONNECTION_QUERY_OPTIONS={retry:3,retryDelay:attempt=>Math.min(1000*2**attempt,30000),refetchInterval:15000,refetchIntervalInBackground:true,refetchOnReconnect:true};
-function ConnectionBadge({query,retry,readError}){
- const d=query.data;
- let state='checking',label='Connecting',detail='Checking the recording connection.';
- if(query.error||query.isPaused||readError){state='disconnected';label='Disconnected';detail='Usage connection unavailable. Retrying automatically.'}
- else if(d){state=d.state||'unverified';label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified'})[state]||'Unverified';detail=d.message||''}
- if(query.isFetching&&(query.error||readError)){label='Reconnecting'}
- const issues=(d?.warnings||[]).slice(0,3).join(' · ');
- const title=[detail,issues,'Click to reconnect and refresh. Running agents are not restarted.'].filter(Boolean).join(' ');
- return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:retry,title,'aria-label':'Usage recorder: '+label+'. Click to reconnect and refresh.','aria-busy':!!query.isFetching},
+function RefreshMenu({refresh,reload,busy}){
+ const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
+ return h('details',{className:'au-refresh-menu',onKeyDown:event=>{if(event.key==='Escape'){event.currentTarget.removeAttribute('open');event.currentTarget.querySelector('summary').focus()}}},
+  h('summary',{'aria-label':'Refresh actions',title:'Refresh data or reload analytics code'},'▾'),
+  h('div',{className:'au-refresh-options'},
+   h('button',{type:'button',disabled:busy,onClick:choose(refresh)},'Refresh data'),
+   h('button',{type:'button',disabled:busy,onClick:choose(reload),title:'Reload analytics readers in this backend process. Does not reload recorder hooks or restart agents.'},'Reload analytics backend')));
+}
+function useRecorderHealth({profile,readScope,readPath,enabled}){
+ const [control]=useState(()=>({alive:true,scope:profile,epoch:0,serial:0,busy:false,latest:{}}));
+ if(control.scope!==profile){control.scope=profile;control.epoch++;control.busy=false}
+ control.view=readScope;
+ const [health,setHealth]=useState(null),[reading,setReading]=useState(null),[operation,setOperation]=useState(null);
+ const [transport,setTransport]=useState(null),[connectionEpoch,setConnectionEpoch]=useState(0);
+ useEffect(()=>{control.alive=true;return()=>{control.alive=false;control.epoch++}},[]);
+ async function probe(kind,path){
+  const epoch=control.epoch,serial=++control.serial,view=readScope;control.latest[kind]=serial;
+  const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial&&(kind!=='read'||control.view===view);
+  const publish=value=>{if(current())(kind==='status'?setHealth:setReading)({scope:profile,epoch,view,received:Date.now(),...value})};
+  try{const data=await rest(path,{timeoutMs:kind==='status'?8000:15000});publish({ok:true,data});return data}
+  catch(error){publish({ok:false});throw error}
+ }
+ const status=()=>probe('status','/ledger/status?profile='+encodeURIComponent(profile));
+ const read=async()=>({...await probe('read',readPath),_viewScope:readScope});
+ // An old success cannot stay green indefinitely if fresh checks stop arriving.
+ useEffect(()=>{
+  if(!health?.ok||health.stale)return;
+  const timer=setTimeout(()=>setHealth(value=>value===health?{...value,stale:true}:value),Math.max(0,30000-(Date.now()-health.received)));
+  return()=>clearTimeout(timer);
+ },[health]);
+ useEffect(()=>{
+  let live=true,timer,mode='native-events';
+  const update=(state,detail)=>{if(live)setTransport({scope:profile,enabled,state,detail})};
+  if(!enabled){update('not_needed','Live analytics subscription is idle on Subscriptions.');return()=>{live=false}}
+  if(!socket){update('limited','Live update subscription unavailable; REST polling remains active.');return()=>{live=false}}
+  update('connecting','Waiting for the live update subscription to acknowledge.');
+  const deadline=ms=>{clearTimeout(timer);timer=setTimeout(()=>update('limited','No recent subscription acknowledgement; REST polling remains active.'),ms)};
+  deadline(8000);
+  let stop;
+  try{stop=socket('/ledger/events?profile='+encodeURIComponent(profile),frame=>{
+   if(!live||!['connected','heartbeat','changed'].includes(frame?.type))return;
+   if(frame.mode)mode=frame.mode;
+   update(mode==='native-events'?'connected':'limited',mode==='native-events'?'Live update subscription acknowledged.':'Server is using display-refresh fallback.');deadline(45000);
+   if(frame.type==='changed'||frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'ledger']});
+   if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]});
+  })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed; REST polling remains active.')}
+  return()=>{live=false;clearTimeout(timer);if(typeof stop==='function')stop()};
+ },[profile,enabled,connectionEpoch]);
+ async function reconnect(){
+  if(control.busy||!control.alive||control.scope!==profile||control.view!==readScope)return false;
+  control.busy=true;const epoch=++control.epoch;
+  setOperation({scope:profile,epoch,busy:true});setConnectionEpoch(value=>value+1);
+  const results=await Promise.allSettled([status(),enabled?read():Promise.resolve()]);
+  if(!control.alive||control.scope!==profile||control.epoch!==epoch)return false;
+  control.busy=false;setOperation({scope:profile,epoch,busy:false});
+  queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]});
+  return results.every(result=>result.status==='fulfilled');
+ }
+ const checked=health?.scope===profile&&health.epoch===control.epoch?health:null,readChecked=reading?.scope===profile&&reading.epoch===control.epoch&&reading.view===readScope?reading:null;
+ const link=transport?.scope===profile&&transport.enabled===enabled?transport:null;
+ const pending=operation?.scope===profile&&operation.epoch===control.epoch&&operation.busy;
+ let state='checking',label=pending?'Reconnecting':'Connecting',detail='Waiting for fresh recorder and data checks.';
+ if(checked?.ok&&!checked.stale&&checked.data.state==='not_recording'){state='not_recording';label='Not recording';detail=checked.data.message||'No live recorder reporting for this profile.'}
+ else if(checked?.ok===false||(enabled&&readChecked?.ok===false)){state='disconnected';label='Disconnected';detail='A fresh connection/data check failed. Retrying automatically.'}
+ else if(!pending&&checked?.ok&&!checked.stale&&(!enabled||readChecked?.ok)){
+  const data=checked.data;state=data.state||'unverified';detail=[data.message,...(data.warnings||[]).slice(0,3)].filter(Boolean).join(' · ');
+  if(state==='online'){
+   if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified; awaiting subscription acknowledgement.'}
+   else if(link.state==='limited'){state='limited';detail+=' '+link.detail}
+  }
+  label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
+ }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
+ return {status,read,reconnect,state,label,detail,busy:!!pending||link?.state==='connecting'};
+}
+function ConnectionBadge({connection,disabled}){
+ const {state,label,detail,busy,reconnect}=connection;
+ const title=detail+' Click to reconnect and refresh. Running agents are not restarted.';
+ return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'aria-label':'Usage recorder: '+label+'. Click to reconnect and refresh.','aria-busy':busy},
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
 }
 
@@ -1456,18 +1543,30 @@ function UsagePage(){
  const params=new URLSearchParams({profile:selected,provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest)
  const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
  const queryKey=[ID,'ledger',selected,provider,start,end||0,offset,session,filterTest,agent,project,sessionScope,subagentId]
- const ledger=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey,queryFn:async()=>({...await rest('/ledger?'+params,{timeoutMs:15000}),_viewScope:readScope}),enabled:!isQuota})
- const connection=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:()=>rest('/ledger/status?profile='+encodeURIComponent(selected),{timeoutMs:8000})});
- const [connectionEpoch,setConnectionEpoch]=useState(0);
- const reconnect=()=>{setConnectionEpoch(v=>v+1);connection.refetch();if(!isQuota)ledger.refetch()};
- useEffect(()=>{
-   if(!socket||isQuota)return
-   // Socket lifecycle is managed by the SDK; recreating disposes the old one.
-   try{const stop=socket('/ledger/events?profile='+encodeURIComponent(selected),frame=>{
-    if(frame?.type==='changed'||frame?.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'ledger']});
-    if(frame?.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',selected]});
-   });return typeof stop==='function'?stop:undefined}catch(_){/* REST fallback remains active. */}
- },[selected,isQuota,connectionEpoch])
+ const connection=useRecorderHealth({profile:selected,readScope,readPath:'/ledger?'+params,enabled:!isQuota});
+ const ledger=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey,queryFn:connection.read,enabled:!isQuota})
+ useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
+ const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
+ const [reloadBusy,setReloadBusy]=useState(false),[reloadNotice,setReloadNotice]=useState(null);
+ useEffect(()=>{reloadControl.alive=true;return()=>{reloadControl.alive=false}},[]);
+ async function reloadAnalytics(){
+  if(reloadControl.busy||connection.busy)return;
+  reloadControl.busy=true;setReloadBusy(true);setReloadNotice({scope:selected,text:'Validating analytics code…'});
+  let switched=false;
+  const message=text=>{if(reloadControl.alive&&reloadControl.scope===selected)setReloadNotice({scope:selected,text})};
+  try{
+   const result=await rest('/ledger/analytics/reload?profile='+encodeURIComponent(selected),{method:'POST',timeoutMs:30000});
+   switched=true;
+   const active=await rest('/ledger/analytics?profile='+encodeURIComponent(selected),{timeoutMs:8000});
+   if(!result.revision||result.revision!==active.revision)throw new Error('Active revision changed before verification.');
+   message('Analytics '+active.revision.slice(0,12)+' loaded. Refreshing data…');
+   const healthy=reloadControl.alive&&reloadControl.scope===selected?await connection.reconnect():false;
+   message('Analytics '+active.revision.slice(0,12)+' loaded.'+(healthy?'':' Data/status refresh incomplete; check the badge.'));
+  }catch(error){
+   message(switched?'Reload was accepted, but follow-up verification failed. Refresh to check the active backend.':
+    (error.status===404||error.status===405||/404|405/.test(String(error.message)))?'Reload support is not active yet. One backend restart is required.':String(error.message||'Analytics reload failed; previous code remains active.'));
+  }finally{reloadControl.busy=false;if(reloadControl.alive)setReloadBusy(false)}
+ }
  useEffect(()=>{if(period==='custom')return;const timer=setInterval(()=>setAnchor(Date.now()/1000),60000);return()=>clearInterval(timer)},[period])
  const [ledgerCache]=useState(()=>({scope:'',data:null}));
  const [detailEntries]=useState(()=>new Map());
@@ -1478,7 +1577,7 @@ function UsagePage(){
  const labels=Object.fromEntries(providers.map(p=>[p.id,p.label]));labels['openai-codex']='Codex';labels['nous']='Nous Portal'
  const names=[...new Set([...providers.map(p=>p.id),...(data?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
  const label=provider?(labels[provider]||provider):'All providers'
- const refresh=()=>{reconnect();quota.refetch()}
+ const refresh=()=>{if(reloadControl.busy||connection.busy)return;pendingRefresh=true;connection.reconnect();quota.refetch()}
  async function exportAll(){setBusy(true);setErr('');try{
    const rows=[];let offset=0
    for(;;){const p=new URLSearchParams(params);p.set('limit','2000');p.set('offset',String(offset));if(!end)p.set('end',String(data?.generated_at||Date.now()/1000));const d=await rest('/ledger?'+p);rows.push(...d.requests);if(d.next_offset==null)break;offset=d.next_offset}
@@ -1495,8 +1594,8 @@ function UsagePage(){
   setDrillTrail({context:navigationContext,entries:[...drillHistory,previous].slice(-50)});
   setRequestFilters(next);setRequestPage({key:nextKey,offset:0});setTab('Requests');
  }
- const header=h(PageHeader,{profiles:quota.data?.profiles||[],profile:selected||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:quota.isFetching,refetch:refresh,hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{query:connection,retry:reconnect,readError:!isQuota&&ledger.error}));
+ const header=h(PageHeader,{profiles:quota.data?.profiles||[],profile:selected||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:quota.isFetching,refetch:refresh,refreshBusy:reloadBusy||connection.busy,refreshMenu:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||quota.isFetching}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection,disabled:reloadBusy})),reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');

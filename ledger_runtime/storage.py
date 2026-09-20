@@ -182,9 +182,9 @@ class Store:
             rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+where+' ORDER BY started DESC LIMIT ? OFFSET ?',params+[limit,offset])]
             from .cache_progression import query_progression
             read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
-            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task",params)]
-            provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY provider',params)]
-            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model)",params)]
+            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
+            provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
+            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model) ORDER BY MAX(started) DESC,provider,model",params)]
             trend=sql_trend(c,where,params,start,end)
             attribution=attribution_groups(c,where,params)
             from .pricing import catalog_status
@@ -326,7 +326,7 @@ def attribution_groups(c,where,params):
       ('subagent_groups',child,",MIN(session_id) AS session_id,MAX(json_extract(data,'$.parent_session_id')) AS parent_session_id,MAX(json_extract(data,'$.root_session_id')) AS root_session_id,MAX(json_extract(data,'$.agent_role')) AS agent_role,MAX(json_extract(data,'$.project_label')) AS project_label", " AND "+role+"='subagent'")]
     out={'subagent_summary':subs,'agent_groups':roles}
     for name,expr,more,condition in configs:
-        rows=c.execute('SELECT '+expr+' AS key'+more+extra+','+SUMMARY_SQL+' FROM requests WHERE '+where+condition+' GROUP BY '+expr,params)
+        rows=c.execute('SELECT '+expr+' AS key'+more+extra+','+SUMMARY_SQL+' FROM requests WHERE '+where+condition+' GROUP BY '+expr+' ORDER BY MAX(started) DESC,key',params)
         out[name]=[dict(**{k:r[k] for k in r.keys() if k in ('key','label','path','basis','project_label','session_id','parent_session_id','root_session_id','agent_role','subagent_tokens','subagents')},**summary_from_sql(r)) for r in rows]
     out['project_options']=[dict(id=r[0],label=r[1] or 'Unattributed project',path=r[2],basis=r[3]) for r in c.execute('SELECT '+project+",MAX(json_extract(data,'$.project_label')),MAX(json_extract(data,'$.project_path')),MAX(json_extract(data,'$.project_source')) FROM requests GROUP BY "+project)]
     return out
@@ -345,7 +345,7 @@ def sql_applied_rate_groups(c,where,params):
     rate="json_extract(data,'$.cost.rate')"
     sql=('SELECT provider,'+model+' AS actual_model,'+tier+' AS applied_tier,'+rate+' AS saved_rate,'
          +SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY provider,'+model+','+tier+','+rate
-         +' ORDER BY provider,actual_model,applied_tier,saved_rate')
+         +' ORDER BY MAX(started) DESC,provider,actual_model,applied_tier,saved_rate')
     result=[]
     for row in c.execute(sql,params):
         result.append(dict(provider=row['provider'],model=row['actual_model'],

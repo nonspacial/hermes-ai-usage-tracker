@@ -10,7 +10,7 @@ This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lva
 - Displayed **Cache writes** is the sum of positive consecutive cache-read differences within each session stream. Its caption is **Calculated from session reads**. Provider counters and saved costs remain separate and unchanged; calculated writes are not additional processed tokens.
 - Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.
 
-Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
+Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract, [ANALYTICS_RELOAD.md](ANALYTICS_RELOAD.md) for the Refresh menu and real connection indicator, and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
 
 ## Repository layout
 
@@ -58,6 +58,14 @@ python3 install.py --home /actual/hermes/home --apply
 ```
 
 The first command is plan-only. Applying creates file backups and a rollback receipt, but does not enable the plugin, restart producers, alter credentials or remove ledger data. Loading changed Python code requires a separately arranged producer/backend reload. Do not disrupt active workloads. Symlink destinations are refused; identify the real installation before applying.
+
+Enable only once per intended profile. This plugin needs no built-in tool override permission. For example:
+
+```bash
+hermes --profile infra plugins enable ai-usage-tracker --no-allow-tool-override
+```
+
+The explicit denial avoids Hermes's legacy override question and clears an existing override grant in the selected profile. Ordinary file updates do not need another enable command. Native `hermes plugins install nonspacial/hermes-ai-usage-tracker --enable` is an alternative only after the intended source revision has been published; it installs remote code, not uncommitted local changes. Do not use `--force` to replace a working installation without first arranging preservation of local changes.
 
 Quotas and background pricing can make network calls. The recorder does not add inference calls, collect prompt/response text or export credentials. Local paths and session IDs are private metadata; review exports before sharing.
 

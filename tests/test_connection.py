@@ -95,7 +95,7 @@ def test_unknown_profile_not_silently_redirected(tmp_path):
 
 def test_status_failure_does_not_leak_exception(tmp_path,monkeypatch):
     Store(tmp_path)
-    monkeypatch.setattr(c,'status',lambda *a,**kw:(_ for _ in ()).throw(OSError('PRIVATE_PATH')))
+    monkeypatch.setattr(c,'summarize_health',lambda *a,**kw:(_ for _ in ()).throw(OSError('PRIVATE_PATH')))
     router=APIRouter();add_routes(router,lambda p:(tmp_path,p,None),lambda:tmp_path)
     app=FastAPI();app.include_router(router);resp=TestClient(app).get('/ledger/status')
     assert resp.status_code==503 and 'PRIVATE_PATH' not in resp.text

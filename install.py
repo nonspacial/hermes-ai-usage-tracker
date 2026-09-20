@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 NAME='ai-usage-tracker'
 PLUGIN_FILES=('LICENSE','README.md','UPSTREAM_README.md','PRICING_SOURCES.md',
-              'COST_CARDS_AND_CACHE_GROWTH.md','SESSION_CACHE_WRITES.md',
+              'COST_CARDS_AND_CACHE_GROWTH.md','SESSION_CACHE_WRITES.md','ANALYTICS_RELOAD.md',
               '__init__.py','bootstrap.py','plugin.yaml')
 PLUGIN_DIRS=('dashboard','desktop','ledger_runtime')
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
@@ -65,7 +65,8 @@ def install(home,apply):
         print('Installation interrupted. Receipt: '+str(receipt_path),file=sys.stderr);raise
     receipt['status']='installed';atomic(receipt_path,(json.dumps(receipt,indent=2)+'\n').encode())
     print('\nInstalled. Rollback receipt: '+str(receipt_path))
-    print('Enable ai-usage-tracker in this profile and restart its Python producers/gateway. Reload Desktop plugins.')
+    print('Already enabled? No enable command is needed. First-time enable: use --no-allow-tool-override.')
+    print('Arrange any required backend/producer restart separately; none was performed. Desktop files may hot-reload.')
 
 def rollback(path,apply):
     p=Path(path).expanduser().resolve();d=json.loads(p.read_text());root=Path(d['home'])
