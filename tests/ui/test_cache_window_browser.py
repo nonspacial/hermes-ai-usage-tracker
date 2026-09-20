@@ -45,6 +45,13 @@ def run():
   rates=page.get_by_test_id('published-rates');costs=page.get_by_test_id('component-cost-cards')
   local=filters.get_by_role('group',name='Cache time window',exact=True)
   global_group=page.get_by_role('group',name='Time window',exact=True)
+  expected=['Past hour','Past 24h','7 days','30 days','90 days','All recorded','Custom']
+  assert local.get_by_role('button').all_text_contents()==expected
+  assert global_group.get_by_role('button').all_text_contents()==expected
+  for label in ('Past hour','All recorded'):
+   global_group.get_by_role('button',name=label,exact=True).click()
+   expect(local.get_by_role('button',name=label,exact=True)).to_have_attribute('aria-pressed','true')
+  local.get_by_role('button',name='Past 24h',exact=True).click()
   expect(local.get_by_role('button',name='Past 24h',exact=True)).to_have_attribute('aria-pressed','true')
   expect(rates.locator('tbody tr')).to_have_count(1)
   expect(rates.locator('tbody')).to_contain_text('gpt-5.6-luna')

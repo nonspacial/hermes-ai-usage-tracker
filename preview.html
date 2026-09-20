@@ -1320,7 +1320,7 @@ function CompressionView({data,mode,setMode,details}){
 // This is a second control surface for the same page-level window, not an
 // independent filter or another set of metrics. Custom dates update both copies.
 function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,window}){
- const choices={...((period==='1h')?{'1h':'Past hour'}:{}),'24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',...((period==='all')?{all:'All recorded'}:{}),custom:'Custom'};
+ const choices={'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'};
  return h('div',{className:'au-cache-window','data-testid':'cache-window-filters'},
   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Cache time window'},...Object.entries(choices).map(([value,label])=>h('button',{key:value,type:'button','aria-pressed':period===value,onClick:()=>onPeriod(value)},label))),
   h('select',{className:'au-period-select','aria-label':'Cache time window',value:period,onChange:e=>onPeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([value,label])=>h('option',{key:value,value},label))),
@@ -1654,7 +1654,7 @@ function UsagePage(){
   h('div',{className:'au-view-controls'},
    h('div',{className:'au-segment au-mode-buttons',role:'group','aria-label':'Usage display'},...['Cost','Tokens'].map(v=>h('button',{key:v,'aria-pressed':displayMode===v,onClick:()=>{setDisplayMode(v);}},v))),
    h('select',{className:'au-mode-select','aria-label':'Usage display',value:displayMode,onChange:e=>{setDisplayMode(e.target.value);}},...['Cost','Tokens'].map(v=>h('option',{key:v,value:v},v))),
-   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({...((period==='1h')?{'1h':'Past hour'}:{}),'24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',...((period==='all')?{all:'All recorded'}:{}),custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
+   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
    h('span',{className:'au-muted au-window-label'},data?new Date(data.window.start*1000).toLocaleString()+' — '+new Date(data.window.end*1000).toLocaleString():'')),
   h('div',{className:'au-toolbar au-filters'},
