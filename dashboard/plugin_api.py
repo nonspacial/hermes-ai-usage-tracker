@@ -729,6 +729,11 @@ def get_usage(
             payload["cache_age_seconds"] = round(now - entry["at"], 1)
             return payload
     payload = _build_payload(home, resolved)
+    try:
+        if _ledger_store is not None:
+            _ledger_store(home or _server_home()).save_quota(payload)
+    except Exception:
+        log.warning("AI usage quota snapshot could not be stored; quota display still works.")
     payload["cached"] = False
     payload["cache_age_seconds"] = 0.0
     with _cache_lock:
@@ -739,3 +744,21 @@ def get_usage(
 @router.get("/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "plugin": "ai-usage-tracker", "cached_profiles": sorted(_cache)}
+
+
+# Personal ledger extension. An unavailable recorder must not remove quota routes.
+_ledger_store = None
+_quota_routes = list(router.routes)
+try:
+    import importlib.util as _ledger_importlib
+    _spec = _ledger_importlib.spec_from_file_location(
+        "_ai_usage_backend_bootstrap", Path(__file__).resolve().parent.parent / "bootstrap.py")
+    _boot = _ledger_importlib.module_from_spec(_spec)
+    _spec.loader.exec_module(_boot)
+    from _hermes_ai_usage_ledger_v2.storage import Store as _ledger_store
+    from _hermes_ai_usage_ledger_v2.api import add_routes as _ledger_add_routes
+    _ledger_add_routes(router, _resolve_profile, _server_home)
+except Exception:
+    _ledger_store = None
+    router.routes[:] = _quota_routes
+    log.warning("AI usage ledger extension unavailable; original quota routes remain active.")

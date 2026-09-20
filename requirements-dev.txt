@@ -1,0 +1,5 @@
+# Versions used for the local import verification; not Hermes runtime pins.
+pytest==9.1.1
+fastapi==0.141.1
+httpx==0.28.1
+playwright==1.63.0

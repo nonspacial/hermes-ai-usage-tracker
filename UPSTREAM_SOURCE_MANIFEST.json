@@ -1,0 +1,91 @@
+{
+  "purpose": "Selected plugin source review, not usage data",
+  "source_folders": [
+    {
+      "archive_prefix": "plugin_01_ai-usage-tracker",
+      "directory_name": "ai-usage-tracker",
+      "parent_directory_name": "desktop-plugins"
+    },
+    {
+      "archive_prefix": "plugin_02_ai-usage-tracker",
+      "directory_name": "ai-usage-tracker",
+      "parent_directory_name": "plugins"
+    }
+  ],
+  "files": [
+    {
+      "name": "plugin_01_ai-usage-tracker/plugin.js",
+      "bytes": 21331,
+      "sha256": "183f56bb68a2afa8369f5e20b3d1a0a09133434a8524bc945638ce52e646fa9f"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/LICENSE",
+      "bytes": 1068,
+      "sha256": "6604867ae75c6441bb1c1cad369a74bd2083dd305a730b33504ff966db6d3643"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/README.md",
+      "bytes": 4457,
+      "sha256": "ff58771046110d09dea9a122d02b7a6e963d1eea2effe783583ad3bfb9aaf1d6"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/__init__.py",
+      "bytes": 744,
+      "sha256": "4884c1fd9b8e9ba719448c620c7523adf7df58cee1c07c70301c5858b9dc7f17"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/plugin.yaml",
+      "bytes": 140,
+      "sha256": "755ceaec0b940dc629f54ee2f3f7d8ca836a4ce06b28173bc963f79bb61915eb"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/catalog/PR-body.md",
+      "bytes": 2081,
+      "sha256": "347e68fcb7dbe6c790f427572f8e18224fa31db7d14a3e5f878119c888280f9e"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/dashboard/manifest.json",
+      "bytes": 238,
+      "sha256": "78ce859d34490f9d0d48e6064b2efcdcca4bab5d348305d64b2c7258c80ee8c9"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/dashboard/plugin_api.py",
+      "bytes": 32723,
+      "sha256": "27a46e3eb4a4d5a4b36abfd97347f8577d08291301752fa083c6d8f578f5cbca"
+    },
+    {
+      "name": "plugin_02_ai-usage-tracker/desktop/plugin.js",
+      "bytes": 21331,
+      "sha256": "183f56bb68a2afa8369f5e20b3d1a0a09133434a8524bc945638ce52e646fa9f"
+    }
+  ],
+  "omitted": [
+    {
+      "folder": "plugin_01_ai-usage-tracker",
+      "name": ".hermes-package.json",
+      "reason": "not source allowlisted or sensitive name"
+    },
+    {
+      "folder": "plugin_02_ai-usage-tracker",
+      "name": ".gitignore",
+      "reason": "not source allowlisted or sensitive name"
+    },
+    {
+      "folder": "plugin_02_ai-usage-tracker",
+      "name": ".hermes-catalog.json",
+      "reason": "not source allowlisted or sensitive name"
+    },
+    {
+      "folder": "plugin_02_ai-usage-tracker",
+      "name": "catalog/ai-usage-tracker.yaml",
+      "reason": "not source allowlisted or sensitive name"
+    },
+    {
+      "folder": "plugin_02_ai-usage-tracker",
+      "name": "catalog/open-pr.sh",
+      "reason": "not source allowlisted or sensitive name"
+    }
+  ],
+  "network_calls": 0,
+  "inference_calls": 0
+}

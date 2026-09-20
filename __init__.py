@@ -1,19 +1,26 @@
-"""AI Usage Tracker — agent-side stub.
+"""Quota UI plus passive native request/compression ledger."""
+from pathlib import Path
+import importlib.util
 
-The real surface of this plugin is the **desktop** plugin
-(``~/.hermes/desktop-plugins/ai-usage-tracker/plugin.js``) plus this package's
-``dashboard/plugin_api.py`` backend, mounted at
-``/api/plugins/ai-usage-tracker/``.
+def _load():
+    spec=importlib.util.spec_from_file_location('_ai_usage_bootstrap',Path(__file__).parent/'bootstrap.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    from _hermes_ai_usage_ledger_v2 import recorder,adapters
+    return recorder,adapters
 
-Nothing needs to run in the agent process: the plugin registers no tools, no
-hooks and no commands. This module exists so the plugin is a well-formed
-directory plugin that ``hermes plugins enable/disable`` and the
-``plugins.enabled`` trust gate can address by name.
-"""
-
-from __future__ import annotations
-
-
-def register(ctx) -> None:  # noqa: ARG001 - contract signature requires the context
-    """No agent-side contributions by design (desktop-only plugin)."""
-    return None
+def register(ctx):
+    recorder,adapters=_load()
+    ctx.register_hook('pre_api_request',recorder.pre)
+    ctx.register_hook('post_api_request',recorder.post)
+    ctx.register_hook('api_request_error',recorder.error)
+    ctx.register_hook('on_session_end',recorder.session_end)
+    ctx.register_hook('on_session_start',recorder.session_start)
+    for event,callback in [('subagent_start',recorder.subagent_start),('subagent_stop',recorder.subagent_stop)]:
+        try:
+            ctx.register_hook(event,callback);recorder.ADAPTERS[event]='registered'
+        except Exception as exc:recorder.ADAPTERS[event]='unavailable: '+type(exc).__name__
+    recorder.ADAPTERS['request hooks']='registered'
+    adapters.install()
+    recorder.start_heartbeat()
+    from _hermes_ai_usage_ledger_v2.pricing import start_worker
+    start_worker(recorder.store())

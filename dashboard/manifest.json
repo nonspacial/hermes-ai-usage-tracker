@@ -1,8 +1,8 @@
 {
   "name": "ai-usage-tracker",
   "label": "AI Usage Tracker",
-  "description": "Live subscription-quota windows for every AI provider Hermes can route to, per profile",
+  "description": "Original provider quotas plus request, subagent, project and compression usage",
   "icon": "Graph",
-  "version": "1.0.2",
+  "version": "2.0.0-test.17",
   "api": "plugin_api.py"
 }

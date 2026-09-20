@@ -1,0 +1,42 @@
+{
+  "basis": "User-supplied installed ai-usage-tracker source ZIP, not a remote clone",
+  "desktop_functions": {
+    "QuotaBar": "1f375fe17f2d24b9c26e833089e691515ba7f77aa837a27a45610fa05aab41a9",
+    "ProviderCard": "eeffba1ac42495762eaea1429e8ed0c0e06aa698c3cb4b5676f6dc2f8d32c2e6",
+    "ProfilePicker": "a583522c8c3312a5c0655c364fe34a32454254d12d92f941a107604ef0d80ee5",
+    "ChipPicker": "587292363f42c8c323ca8dc3ab4ead96f120d65242eeaace1833ac4b7b248020",
+    "PageHeader": "2a7467137d3c776b66f373c9e843792304966a8c64f2aed47c5590fec1223143",
+    "UsageChip": "92045951b6cdbb281e326ab5d1e86333afbe726bea653d892f0c6664607436fa",
+    "useUsage": "9737d61a29343f6fd91a15f6ee5f3637aeebe5407974e499e050076a23c5bb26"
+  },
+  "quota_backend_functions": {
+    "_run_in_home": "3816a109b9e50bab603e7ddd0dbca1b194abd39a374aa16f788786ed98dfa7a7",
+    "_server_home": "7a5e3e08456da1e33fba69e3088962ef7d0d4b9645b92e10ce5ccc34942e88e3",
+    "_profile_rows": "65e43861b9fb8541e22dc4d55f9b80b3494543ddf0487594e202cef9b41e2f4c",
+    "_resolve_profile": "1167a56271347f891f1848121ad5b0adc94a0bbfcb8ab7d209e83f800b4a7ce0",
+    "_provider_labels": "f2730bbeb6d41da6c33fed8e813e01ab06481bc4357f8aeeeed1f4161efbfe0e",
+    "_normalize_provider": "be2e1b6859a1d0303a4156b71ae26f26f4d47bfbb6dd696f895a442b27411479",
+    "_active_providers": "e2a5593939630afb59d0971571e28ebe07486da577a91243c6ec5a972f5d4c16",
+    "_hermes_home": "66c80774b13a97f8079a0dd582edff4897abadd3ce4a3a421270558a8eb06ec9",
+    "_window": "6963674bc6cc747736b74a4d1e8b4e33d64a6cc1d30204504b3a6a485fb16828",
+    "_iso": "5dcc9a6c90ad7308b165daf90c1bac3e5fb953b493873e8ae3acfb04020dffa6",
+    "_unavailable": "10651b26c87e8b0758250b51bf9a3f655c131dbf8057ad8702002bd8783d53f1",
+    "_runtime_key": "b7063e42cc01c92260bf4cc5d3ae62823b8e21086830af9df5d7168fe80a7778",
+    "_get_json": "0557e7f1ede4f462ad4d34c89f4208d0d16f76b849ae99b0f078f5954521fc3c",
+    "_serialize_snapshot": "492230690e49b47a9d3c4ebe05136e36230dee1e997d75310e7825ca6a69e89d",
+    "_probe_standard": "aab07eb27e0241a9eb51716b169fc9c894e12ff990576b830ba249f0669c0ff4",
+    "_probe_nous": "6cd1f88531ce4d184e32bb5ae4dc3795cb18b082b2e3d9bc8d463061b022db7d",
+    "_probe_copilot": "7e543bf22c472a0aa59069abece7c0ecc91d05d0f08f8785344999a81bd9f84b",
+    "_probe_opencode_go": "e975ac473392698753e850edccd85e2a603b5f3fc1f6450b03dc6cbeba82959a",
+    "_probe_opencode_zen": "af16d75daf5b17bc9becd375a211b79b5bcc979374ee98c9da749a2aef85066c",
+    "_probe_zai": "64997751baeca3ddc1a182faa2c5c21f443bdcfa2dfc5fff7fe2635b1b87274a",
+    "_probe_kimi": "9c04ed2c2dc5cb023da404edff72c71d5459d869c22c3bef2c273fcbc9333545",
+    "_probe_minimax": "b245522c9959abc18c59b41bf554ef8af173a8732fd10c2b0c4dedcb706ac42f",
+    "_probe_deepseek": "b96e22f15c510a134686edeacbe0ad87e946db190b1c70ed04455dfe5f527301",
+    "_configured_providers": "17e305f89a36d4007012964812077ab8e4f20ba8e563b101e588a0c0916e0948",
+    "_build_payload": "3e36c190eaac132742a6b723732cdf3317ef73211d1f6e3c530526ee259e32ea",
+    "get_profiles": "be7f0f2228130f1692f228d5b814ca63f1536937d7f22bea82bbd3584abb2a1b",
+    "health": "b5e4f7a788510292f61998b06f322d52d23998673f79b2c8f5a6087c3836db2e"
+  },
+  "get_usage_difference": "Original quota payload and cache logic retained; optional fail-soft ledger snapshot only."
+}

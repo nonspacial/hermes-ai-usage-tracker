@@ -1,0 +1,460 @@
+{
+  "schema": 1,
+  "note": "Reviewed public provider data. Bundled fallback; not an authenticated bill or live sync. Unknown aliases not mapped.",
+  "snapshots": [
+    {
+      "source_id": "openai",
+      "source": "OpenAI",
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "observed_at": 1789862400.0,
+      "parser_version": "provider-catalog-v1",
+      "content_sha256": "d16417e9d4d30ef3fc70bc3e98a0950f0c3abe44e1608b3040aee6cc0b022366",
+      "origin": "bundled_provider_snapshot_reviewed_2026-09-20",
+      "rates": [
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "standard",
+          "input_tokens": "10",
+          "output_tokens": "50",
+          "cache_read_tokens": "1",
+          "cache_write_tokens": "12.50",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "standard",
+          "input_tokens": "20",
+          "output_tokens": "75.0",
+          "cache_read_tokens": "2",
+          "cache_write_tokens": "25.00",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "fast",
+          "input_tokens": "20",
+          "output_tokens": "100",
+          "cache_read_tokens": "2",
+          "cache_write_tokens": "25.00",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "fast",
+          "input_tokens": "40",
+          "output_tokens": "150.0",
+          "cache_read_tokens": "4",
+          "cache_write_tokens": "50.00",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "batch",
+          "input_tokens": "5.0",
+          "output_tokens": "25.0",
+          "cache_read_tokens": "0.5",
+          "cache_write_tokens": "6.250",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "batch",
+          "input_tokens": "10.0",
+          "output_tokens": "37.50",
+          "cache_read_tokens": "1.0",
+          "cache_write_tokens": "12.500",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "flex",
+          "input_tokens": "5.0",
+          "output_tokens": "25.0",
+          "cache_read_tokens": "0.5",
+          "cache_write_tokens": "6.250",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-6-astra",
+          "service_tier": "flex",
+          "input_tokens": "10.0",
+          "output_tokens": "37.50",
+          "cache_read_tokens": "1.0",
+          "cache_write_tokens": "12.500",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "standard",
+          "input_tokens": "4",
+          "output_tokens": "20",
+          "cache_read_tokens": "0.4",
+          "cache_write_tokens": "5",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "standard",
+          "input_tokens": "8",
+          "output_tokens": "30.0",
+          "cache_read_tokens": "0.8",
+          "cache_write_tokens": "10",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "fast",
+          "input_tokens": "8",
+          "output_tokens": "40",
+          "cache_read_tokens": "0.8",
+          "cache_write_tokens": "10",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "fast",
+          "input_tokens": "16",
+          "output_tokens": "60.0",
+          "cache_read_tokens": "1.6",
+          "cache_write_tokens": "20",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "batch",
+          "input_tokens": "2.0",
+          "output_tokens": "10.0",
+          "cache_read_tokens": "0.20",
+          "cache_write_tokens": "2.5",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "batch",
+          "input_tokens": "4.0",
+          "output_tokens": "15.00",
+          "cache_read_tokens": "0.40",
+          "cache_write_tokens": "5.0",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "flex",
+          "input_tokens": "2.0",
+          "output_tokens": "10.0",
+          "cache_read_tokens": "0.20",
+          "cache_write_tokens": "2.5",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "service_tier": "flex",
+          "input_tokens": "4.0",
+          "output_tokens": "15.00",
+          "cache_read_tokens": "0.40",
+          "cache_write_tokens": "5.0",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "standard",
+          "input_tokens": "2",
+          "output_tokens": "12",
+          "cache_read_tokens": "0.2",
+          "cache_write_tokens": "2.5",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "standard",
+          "input_tokens": "4",
+          "output_tokens": "18.0",
+          "cache_read_tokens": "0.4",
+          "cache_write_tokens": "5.0",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "fast",
+          "input_tokens": "4",
+          "output_tokens": "24",
+          "cache_read_tokens": "0.4",
+          "cache_write_tokens": "5.0",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "fast",
+          "input_tokens": "8",
+          "output_tokens": "36.0",
+          "cache_read_tokens": "0.8",
+          "cache_write_tokens": "10.0",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "batch",
+          "input_tokens": "1.0",
+          "output_tokens": "6.0",
+          "cache_read_tokens": "0.10",
+          "cache_write_tokens": "1.25",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "batch",
+          "input_tokens": "2.0",
+          "output_tokens": "9.00",
+          "cache_read_tokens": "0.20",
+          "cache_write_tokens": "2.50",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "flex",
+          "input_tokens": "1.0",
+          "output_tokens": "6.0",
+          "cache_read_tokens": "0.10",
+          "cache_write_tokens": "1.25",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "service_tier": "flex",
+          "input_tokens": "2.0",
+          "output_tokens": "9.00",
+          "cache_read_tokens": "0.20",
+          "cache_write_tokens": "2.50",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "standard",
+          "input_tokens": "0.2",
+          "output_tokens": "1.2",
+          "cache_read_tokens": "0.02",
+          "cache_write_tokens": "0.25",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "standard",
+          "input_tokens": "0.4",
+          "output_tokens": "1.80",
+          "cache_read_tokens": "0.04",
+          "cache_write_tokens": "0.50",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "fast",
+          "input_tokens": "0.4",
+          "output_tokens": "2.4",
+          "cache_read_tokens": "0.04",
+          "cache_write_tokens": "0.50",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "fast",
+          "input_tokens": "0.8",
+          "output_tokens": "3.60",
+          "cache_read_tokens": "0.08",
+          "cache_write_tokens": "1.00",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "batch",
+          "input_tokens": "0.10",
+          "output_tokens": "0.60",
+          "cache_read_tokens": "0.010",
+          "cache_write_tokens": "0.125",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "batch",
+          "input_tokens": "0.20",
+          "output_tokens": "0.900",
+          "cache_read_tokens": "0.020",
+          "cache_write_tokens": "0.250",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "flex",
+          "input_tokens": "0.10",
+          "output_tokens": "0.60",
+          "cache_read_tokens": "0.010",
+          "cache_write_tokens": "0.125",
+          "context_band": "short",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "service_tier": "flex",
+          "input_tokens": "0.20",
+          "output_tokens": "0.900",
+          "cache_read_tokens": "0.020",
+          "cache_write_tokens": "0.250",
+          "context_band": "long",
+          "threshold_tokens": 272000,
+          "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+        }
+      ]
+    },
+    {
+      "source_id": "ollama",
+      "source": "Ollama Cloud",
+      "source_url": "https://ollama.com/pricing",
+      "observed_at": 1789862400.0,
+      "parser_version": "provider-catalog-v1",
+      "content_sha256": "733f5fb0ef2a5651a9f720bd1eca23e66f2b6a06d770baedf829119a757ed76b",
+      "origin": "bundled_provider_snapshot_reviewed_2026-09-20",
+      "rates": [
+        {
+          "model": "deepseek-v4.1-flash",
+          "service_tier": "standard",
+          "input_tokens": ".15",
+          "output_tokens": ".60",
+          "cache_read_tokens": ".003",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "deepseek-v4-flash",
+          "service_tier": "standard",
+          "input_tokens": ".22",
+          "output_tokens": ".66",
+          "cache_read_tokens": ".007",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "service_tier": "standard",
+          "input_tokens": ".66",
+          "output_tokens": "1.98",
+          "cache_read_tokens": ".022",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "gemma4",
+          "service_tier": "standard",
+          "input_tokens": ".14",
+          "output_tokens": ".40",
+          "cache_read_tokens": ".05",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "glm-5.3",
+          "service_tier": "standard",
+          "input_tokens": "1.40",
+          "output_tokens": "4.40",
+          "cache_read_tokens": ".26",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "glm-5.3-flash",
+          "service_tier": "standard",
+          "input_tokens": ".15",
+          "output_tokens": ".50",
+          "cache_read_tokens": ".03",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "glm-5.2",
+          "service_tier": "standard",
+          "input_tokens": "1.40",
+          "output_tokens": "4.40",
+          "cache_read_tokens": ".26",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "glm-5.1",
+          "service_tier": "standard",
+          "input_tokens": "1",
+          "output_tokens": "3.20",
+          "cache_read_tokens": ".20",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "gpt-oss:120b",
+          "service_tier": "standard",
+          "input_tokens": ".15",
+          "output_tokens": ".60",
+          "cache_read_tokens": ".014",
+          "cache_write_tokens": null
+        },
+        {
+          "model": "gpt-oss:20b",
+          "service_tier": "standard",
+          "input_tokens": ".07",
+          "output_tokens": ".30",
+          "cache_read_tokens": ".035",
+          "cache_write_tokens": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,3 +1,11 @@
 name: ai-usage-tracker
-version: "1.0.2"
-description: Live subscription-quota windows for every AI provider Hermes can route to, per profile
+version: "2.0.0-test.17"
+description: "AI quota, native request ledger, cache costs and compaction observability (test build)"
+provides_hooks:
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - on_session_end
+  - on_session_start
+  - subagent_start
+  - subagent_stop

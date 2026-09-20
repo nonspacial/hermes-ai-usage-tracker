@@ -1,101 +1,68 @@
-# AI Usage Tracker — Hermes desktop plugin
+# AI Usage Tracker — native request ledger
 
-Live **subscription quota** for every AI provider Hermes can route to, inside the Hermes
-desktop: a page (sidebar → *AI usage*), a status-bar chip showing the worst remaining
-window, and a per-profile picker.
+This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lvabarajithan/hermes-ai-usage-tracker) with the **2.0.0-test.17** request ledger. The original MIT licence and quota components are retained.
 
-Scope is deliberately narrow: **quota windows only** — provider, plan, window name,
-% remaining, reset countdown. No token counting, no cost estimates, no period filters.
+## Behaviour
 
-| Provider | Live quota endpoint |
-| --- | --- |
-| `openai-codex` | `chatgpt.com/backend-api/wham/usage` (session + weekly windows) |
-| `anthropic` | `api.anthropic.com/api/oauth/usage` (OAuth accounts only) |
-| `nous` | portal account (subscription credits + renewal) |
-| `openrouter` | `api/v1/credits` + `/key` (balance / key limit) |
-| `copilot` | `api.github.com/copilot_internal/user` |
-| `opencode-go` | `opencode.ai/zen/go/v1/usage` (rolling / weekly / monthly) |
-| `opencode-zen` | credits endpoint (pay-as-you-go) |
-| `zai` | `api.z.ai/api/monitor/usage/quota/limit` |
-| `kimi-coding` | `api.kimi.com/coding/v1/usages` |
-| `minimax` | `api.minimax.io/v1/api/openplatform/coding_plan/remains` |
-| `deepseek` | `api.deepseek.com/user/balance` |
+- **Subscriptions** opens first with the original quota cards, profile picker, refresh, status-bar provider selection and hide/unhide controls.
+- All providers and individual providers have nested Overview, Requests, Cache & costs, Compressions and Models & tasks pages. Individual provider pages retain their quota card above analytics.
+- Native request hooks and guarded runtime adapters record usage in each producing Hermes home's `usage-ledger/events.sqlite3`. The UI refreshes persisted events; it does not reconstruct usage from cumulative session counters.
+- Displayed **Cache writes** is the sum of positive consecutive cache-read differences within each session stream. Its caption is **Calculated from session reads**. Provider counters and saved costs remain separate and unchanged; calculated writes are not additional processed tokens.
+- Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.
 
-Providers with no quota API are listed with an explicit reason instead of a fabricated
-bar. Absence-path providers (Grok/SuperGrok, Gemini Code Assist OAuth, Cursor, Kiro) need
-browser cookies and are deliberately not attempted.
+Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
 
-## Install
+## Repository layout
+
+The plugin now lives at the repository root, matching the upstream installation layout:
+
+```text
+plugin.yaml                 Plugin identity and hook declarations
+__init__.py / bootstrap.py   Recorder registration and runtime loading
+desktop/plugin.js           Desktop quota and analytics UI
+dashboard/plugin_api.py     Original quota routes plus ledger API
+ledger_runtime/             Capture, accounting, attribution, storage and pricing
+tests/                      Offline Python and browser checks
+install.py                  Explicit-home installer with receipts and rollback
+doctor.py                   Offline Hermes source-signature inspection
+cache_write_report.py       Explicit-home cache-evidence report
+build_preview.py            Refresh the synthetic preview from desktop/plugin.js
+preview.html                Synthetic offline SDK/React harness
+```
+
+The installer copies only named plugin files and runtime directories, not repository history, tests or private archives. The retained `catalog/` files describe the original upstream release and are **not a release declaration for this fork**. Do not run the upstream publication script to publish this build.
+
+## Development checks
+
+Use an isolated environment; do not install test dependencies into a running Hermes environment:
 
 ```bash
-# from the curated catalog (once merged):
-hermes plugins install ai-usage-tracker --enable
-
-# from this repo directly:
-hermes plugins install <owner>/<repo> --enable
+uv venv .venv
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest -q --ignore=tests/ui
+node --check --input-type=module < desktop/plugin.js
 ```
 
-Or ship an install link in any README/site:
+Browser suites are executable scripts, not pytest test functions. Install Chromium with Playwright, set `CHROMIUM_PATH` to its executable, regenerate `preview.html` with `build_preview.py`, then run the individual `tests/ui/test_*.py` scripts. They use synthetic records and an offline SDK; passing them does not establish live capture coverage or native clipboard behaviour.
 
-```html
-<a href="hermes://plugin/install?repo=<owner>/<repo>&enable=1">Install in Hermes</a>
-```
+Tests set `HERMES_USAGE_PRICING_OFFLINE=1` and use temporary fixture databases. Keep `HOME`, `HERMES_HOME` and temporary output isolated from real Hermes data when running verification.
 
-Then enable it **for each profile** you want it in — desktop backends are profile-scoped,
-and a plugin enabled only in the default profile 404s on every other:
+## Installation is separate from source changes
+
+Against an explicitly chosen, existing real Hermes home:
 
 ```bash
-for p in forge jewel penny smoke teknium; do
-  ln -s ~/.hermes/plugins/ai-usage-tracker ~/.hermes/profiles/$p/plugins/ai-usage-tracker
-  hermes --profile $p plugins enable ai-usage-tracker
-done
+python3 install.py --home /actual/hermes/home
+# Only when installation is intended:
+python3 install.py --home /actual/hermes/home --apply
 ```
 
-Relaunch the desktop app after enabling (backend routes mount at web-server start).
+The first command is plan-only. Applying creates file backups and a rollback receipt, but does not enable the plugin, restart producers, alter credentials or remove ledger data. Loading changed Python code requires a separately arranged producer/backend reload. Do not disrupt active workloads. Symlink destinations are refused; identify the real installation before applying.
 
-## Profiles
+Quotas and background pricing can make network calls. The recorder does not add inference calls, collect prompt/response text or export credentials. Local paths and session IDs are private metadata; review exports before sharing.
 
-The header picker lists **every profile on this machine** and probes the selected one:
-``GET /usage?profile=<name>`` runs the quota probes with that profile's `HERMES_HOME`
-bound through `hermes_constants`' context-local override, so credentials, `auth.json`
-and `.env` resolve for that profile — not the server's own. The chip follows the same
-selection, and the choice is persisted plugin-scoped.
+## Local import provenance
 
-Honest limits:
+The fork and upstream `main` both resolved to `77bdf112117d6d8811477d8837d3cb9a3a9d99d9` during import. All original-source entries in `UPSTREAM_SOURCE_MANIFEST.json` matched that checkout. `PRESERVED_UPSTREAM.json` retains component/probe regression fingerprints.
 
-- **Local machine only.** A profile that lives on a *remote* gateway (another machine
-  reached over Tailscale/SSH) cannot be read from this backend — the plugin's REST door
-  is profile-scoped to the serving machine, and the SDK exposes no cross-gateway route
-  to a plugin's own backend.
-- Credential lookup uses the profile's own home first and falls back to the server
-  process environment (exactly how Hermes itself resolves them for that profile).
-
-## Hiding providers
-
-Each card has a **✕** control. Hidden providers leave the page and are excluded from the
-status-bar chip. The header's **`Hidden N`** toggle reveals them dimmed, with **Unhide all**
-to reset. The list persists through `ctx.storage`
-(`hermes.plugin.ai-usage-tracker.hidden-providers-v1`).
-
-## Layout (one package, both SDKs)
-
-```
-ai-usage-tracker/
-├── plugin.yaml              # agent half (no tools/hooks — declares nothing by design)
-├── __init__.py              # register(ctx) no-op; exists so plugins.enabled can gate it
-├── dashboard/
-│   ├── manifest.json        # { "name": "ai-usage-tracker", "api": "plugin_api.py" }
-│   └── plugin_api.py        # FastAPI router → /api/plugins/ai-usage-tracker/{usage,profiles,health}
-└── desktop/
-    └── plugin.js            # desktop half; Electron copies it to desktop-plugins/<id>/
-```
-
-Endpoints: `GET /usage?profile=<name>&refresh=0|1`, `GET /profiles`, `GET /health`.
-Responses are cached in-process for 60s per profile; `refresh=1` bypasses.
-
-## Privacy
-
-- Read-only. Nothing is written except the plugin's own cache and the two UI prefs.
-- Credentials are resolved in-process and **never serialized**; the wire carries
-  `configured: true/false` and a source label only.
-- The only outbound calls are the provider quota endpoints above.
+On the originating workstation, all pre-existing project contents were preserved under Git-ignored `.local-history/`, including the complete handoff, original test.17 package, archives and historical usage exports. They are not part of the publishable repository. Runtime/UI source is imported unchanged; development paths and installer packaging were adapted to this root layout. No installation or publication is implied by this import.
