@@ -5,7 +5,8 @@ This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lva
 ## Behaviour
 
 - **Subscriptions** opens first with the original quota cards, profile picker, refresh, status-bar provider selection and hide/unhide controls.
-- All providers and individual providers have nested Overview, Requests, Cache & costs, Compressions and Models & tasks pages. Individual provider pages retain their quota card above analytics.
+- All providers and individual providers have nested Overview, Requests, Cache & costs, Compressions, Models & tasks and **Skills usage** pages. Individual provider pages retain their quota card above analytics.
+- **Skills usage** uses the global period/profile/provider/project/session/agent filters, plus a model filter. Click the frequency pie or its legend to inspect timestamped loads and reference reads. Context footprint and Session timeline show recorded estimates and linked compression boundaries. No duplicate frequency bar chart, historical reconstruction or prompt/result body storage. See [SKILLS_USAGE.md](SKILLS_USAGE.md) for capture limits and the API contract. New recording requires reloading the updated backend and producer processes; analytics-only reload cannot install these hooks.
 - Native request hooks and guarded runtime adapters record usage in each producing Hermes home's `usage-ledger/events.sqlite3`. The UI refreshes persisted events; it does not reconstruct usage from cumulative session counters.
 - Displayed **Cache writes** is the sum of positive consecutive cache-read differences within each session stream. Its caption is **Calculated from session reads**. Provider counters and saved costs remain separate and unchanged; calculated writes are not additional processed tokens.
 - Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.

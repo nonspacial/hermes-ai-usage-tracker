@@ -54,6 +54,8 @@ class Store:
         with self.db() as c:
             c.execute('PRAGMA journal_mode=WAL')
             c.executescript(SCHEMA)
+            from .skills import SCHEMA as SKILLS_SCHEMA
+            c.executescript(SKILLS_SCHEMA)
         try: os.chmod(self.path,0o600)
         except OSError: pass
         from .pricing import seed

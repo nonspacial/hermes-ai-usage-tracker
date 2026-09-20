@@ -591,6 +591,16 @@ const ledgerCss = `
 @container (max-width:620px){.au-ledger .au-main-tabs{flex-wrap:nowrap;overflow-x:auto}.au-ledger .au-main-tabs button{flex-shrink:0}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .au-ledger .au-field-label{display:none}
+.au-ledger .au-skill-chart{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;align-items:center}
+.au-ledger .au-skill-pie{display:block;width:100%;max-width:180px;height:auto}
+.au-ledger .au-skill-legend{display:grid;gap:6px;min-width:0}
+.au-ledger .au-skill-legend-row{display:flex;align-items:center;gap:9px;padding:8px;text-align:left;min-width:0;flex-wrap:wrap}
+.au-ledger .au-skill-legend-row>span:not(.au-skill-swatch){flex:1;min-width:0;overflow-wrap:anywhere}
+.au-ledger .au-skill-legend-row>strong{font-size:12px;font-variant-numeric:tabular-nums}
+.au-ledger .au-skill-swatch{display:block;width:10px;height:10px;flex:none;border-radius:2px}
+.au-ledger [data-testid="skills-usage"] .au-segment{flex-wrap:wrap}
+.au-ledger [data-testid="skills-usage"] :is(h3,label){overflow-wrap:anywhere;min-width:0;max-width:100%}
+@container(max-width:620px){.au-ledger .au-skill-chart{grid-template-columns:minmax(0,1fr);gap:14px}}
 .au-ledger .au-table[data-layout="records"]{max-height:none;overflow:visible;background:transparent}
 .au-ledger .au-table[data-layout="records"] table{display:block;white-space:normal}
 .au-ledger .au-table[data-layout="records"] thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
@@ -947,7 +957,7 @@ function CacheView({data,profile,provider,refresh,onError}){
 const QUOTA_PAGE='Subscriptions';
 // Providers are the main destinations; detail pages never enter that navigation.
 const QUOTA_HOME='__quota_home__';
-const PROVIDER_SUBPAGES=['Overview','Requests','Cache & costs','Compressions','Models & tasks'];
+const PROVIDER_SUBPAGES=['Overview','Requests','Cache & costs','Compressions','Models & tasks','Skills usage'];
 function tabKeys(event){
  const keys=['ArrowLeft','ArrowRight','Home','End'];
  if(!keys.includes(event.key)||event.target.getAttribute('role')!=='tab')return;
@@ -1078,6 +1088,74 @@ function ConnectionBadge({connection,disabled}){
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
 }
 
+// Palette stays within the host theme; labels and counts never rely on colour.
+const skillColours=['var(--ui-accent,#a799ef)','var(--ui-text-success,#64bba8)','var(--ui-text-warning,#d2b776)','var(--ui-text-error,#d58c96)','var(--ui-text-secondary,#b8b6cf)'];
+function UsagePie({items,label,onChoose,selected}){
+ const total=items.reduce((n,v)=>n+v.value,0);let angle=-Math.PI/2;
+ return h('div',{className:'au-skill-chart'},
+  total>0?h('svg',{viewBox:'0 0 200 200',className:'au-skill-pie',role:'img','aria-label':label},...items.map((item,i)=>{
+   const start=angle;angle+=item.value/total*2*Math.PI;
+   const props={key:item.id,fill:skillColours[i%skillColours.length],stroke:'var(--au-surface-bg)',strokeWidth:2,...(onChoose?{onClick:()=>onChoose(item.id),style:{cursor:'pointer'}}:{})};
+   const title=h('title',{},item.label+': '+count(item.value)+' ('+(item.value/total*100).toFixed(1)+'%)');
+   return item.value===total?h('circle',{...props,cx:100,cy:100,r:96},title):h('path',{...props,d:`M100 100 L${100+96*Math.cos(start)} ${100+96*Math.sin(start)} A96 96 0 ${angle-start>Math.PI?1:0} 1 ${100+96*Math.cos(angle)} ${100+96*Math.sin(angle)} Z`},title);
+  })):h('p',{className:'au-muted'},'No recorded values in this selection.'),
+  h('div',{className:'au-skill-legend'},...items.map((item,i)=>h(onChoose?'button':'div',{
+   key:item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
+  },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
+}
+function SkillsUsageView({params,scope,onSession}){
+ const [view,setView]=useState('Frequency'),[model,setModel]=useState(''),[skill,setSkill]=useState(''),[offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
+ useEffect(()=>{setModel('');setSkill('');setOffset(0);setSnapshotId('')},[scope]);
+ const p=new URLSearchParams(params);p.set('model',model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
+ const path='/ledger/skills?'+p,key=path;
+ const query=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await rest(path),_skillsScope:key})});
+ const data=query.data?._skillsScope===key?query.data:null;
+ const chooseSkill=name=>{setSkill(name===skill?'':name);setOffset(0)};
+ const kinds={skill_load:'Skill load',context_snapshot:'Before request',compression_before:'Before compression',compression_after:'After compression',turn_end:'Turn completed'};
+ const eventLabel=e=>e.kind==='skill_load'?(e.success===false?'Failed load':e.is_reference?'Reference read':e.repeat?'Repeat skill load':'Skill load'):(kinds[e.kind]||e.kind);
+ const snapshots=data?.snapshots||[];
+ const snapshot=snapshotId?snapshots.find(s=>s.id===snapshotId):(snapshots.find(s=>s.context_used!=null)||snapshots[0]);
+ const categories=(snapshot?.categories||[]).filter(c=>Number.isFinite(c.tokens)&&c.tokens>0);
+ const inspected=(data?.skills||[]).find(s=>s.name===skill);
+ const sessionLink=e=>e.session_id?h('button',{className:'au-drill',onClick:()=>onSession(e.session_id),title:'Filter all analytics to this session'},e.session_id):'Unattributed';
+ const eventRows=(data?.events||[]).map(e=>[
+  when(e.ts),eventLabel(e),e.skill||'—',e.file_path||'Main file / not applicable',e.provider||'Unknown',e.model||'Unknown',
+  e.project_label||e.project_id||'Unattributed',sessionLink(e),e.agent_kind||'Unattributed',
+  e.estimated_tokens==null?'Not recorded':'~'+count(e.estimated_tokens),e.context_used==null?'—':'~'+count(e.context_used),e.source||'Not recorded',e.compression_id||'—',
+  e.kind==='skill_load'?'—':h('button',{onClick:()=>{setView('Context footprint');setSnapshotId(e.id)}},'Inspect snapshot')
+ ]);
+ const eventList=()=>h('div',{'data-testid':'skill-events'},
+  table(['Recorded at','Event','Skill','File','Provider','Model','Project','Session','Agent','Returned text · estimated tokens','Context footprint','Measurement source','Compression ID','Snapshot'],eventRows,null,(data?.events||[]).map(e=>e.id)),
+  !(data?.events||[]).length?h('p',{className:'au-muted'},'No recorded events match this selection.'):null,
+  h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},count(data?.event_count)+' matching events'),
+   h('button',{disabled:offset===0,onClick:()=>setOffset(Math.max(0,offset-50))},'Previous events'),
+   h('button',{disabled:data?.next_offset==null,onClick:()=>setOffset(data.next_offset)},'Next events')));
+ return h('section',{'data-testid':'skills-usage','aria-label':'Skills usage'},
+  h('div',{className:'au-toolbar'},h('div',{className:'au-segment',role:'group','aria-label':'Skills view'},...['Frequency','Context footprint','Session timeline'].map(v=>h('button',{key:v,'aria-pressed':view===v,onClick:()=>{setView(v);setOffset(0)}},v))),
+   h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:model,onChange:e=>{setModel(e.target.value);setOffset(0);setSnapshotId('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[])])].map(m=>h('option',{key:m,value:m},m))))),
+  h('p',{className:'au-muted'},'Uses the selected provider, profile, time window, project, session and agent filters above. Skill loads are not proof of application or effectiveness.'),
+  query.error?h('div',{className:'au-notice',role:'alert'},'Skills history unavailable. Newly installed recorder/API code requires a backend and producer restart. ',h('button',{onClick:()=>query.refetch()},'Retry skills history')):null,
+  !data?h('p',{className:'au-muted',role:'status'},query.error?'No history shown for this selection.':'Loading skills history…'):h('div',{},
+   h('div',{className:'au-notice','data-testid':'skills-coverage'},data.coverage?.note||'Historical coverage is not established.',data.coverage?.since?' Recording observed since '+when(data.coverage.since)+'.':''),
+   h('div',{className:'au-metrics'},metric('Recorded main-skill loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.loads),'Successful main-file loads in this window'),metric('Reference reads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.references),'Separate from pie frequency'),metric('Failed loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.failures),'Not counted as successful use')),
+   skill?h('div',{className:'au-toolbar'},h('strong',{},'Inspecting '+skill),h('button',{onClick:()=>{setSkill('');setOffset(0)}},'Clear skill selection')):null,
+   view==='Frequency'?h('div',{},
+    h('div',{className:'au-box','data-testid':'skill-frequency'},h('h3',{},'Most frequently loaded skills'),h('p',{className:'au-muted'},'Share of successful main-skill loads in the selected window. Click a skill to inspect its timestamped events. Repeat loads count; references and failed loads do not.'),
+     h(UsagePie,{label:'Skill load frequency',items:(data.skills||[]).filter(s=>s.loads>0).map(s=>({id:s.name,label:s.name,value:s.loads})),selected:skill,onChoose:chooseSkill})),
+    (data.skills||[]).some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...(data.skills||[]).filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},s.name))):null,
+    skill?h('div',{className:'au-box','data-testid':'skill-drilldown'},h('h3',{},skill),h('p',{className:'au-muted'},count(inspected?.loads)+' successful loads · '+count(inspected?.sessions)+' distinct sessions · '+count(inspected?.repeat_loads)+' repeat loads · '+(inspected?.estimated_tokens==null?'Text size not recorded':'~'+count(inspected.estimated_tokens)+' returned tokens (estimate, not billing)')),eventList()):null):null,
+   view==='Context footprint'?h('div',{'data-testid':'skill-context'},
+    h('div',{className:'au-toolbar'},h('label',{},'Snapshot ',h('select',{'aria-label':'Context snapshot',value:snapshotId,onChange:e=>setSnapshotId(e.target.value)},h('option',{value:''},'Latest measured snapshot'),...snapshots.map(s=>h('option',{key:s.id,value:s.id},when(s.ts)+' · '+eventLabel(s)+' · '+(s.session_id||'Unattributed')))))),
+    data.snapshots_truncated?h('p',{className:'au-muted'},'Showing the newest '+count(snapshots.length)+' of '+count(data.snapshot_count)+' snapshots. Narrow the time window or session to inspect older snapshots.'):null,
+    snapshot?h('div',{className:'au-box'},h('h3',{},eventLabel(snapshot)+' · '+when(snapshot.ts)),h('p',{},sessionLink(snapshot),' · '+(snapshot.model||'Unknown model')),h('p',{},'Context: '+(snapshot.context_used==null?'Not recorded':'~'+count(snapshot.context_used))+(snapshot.context_max?' / '+count(snapshot.context_max):'')+' tokens'),
+     snapshot.compression_id?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Compression '+snapshot.compression_id),...snapshots.filter(s=>s.compression_id===snapshot.compression_id&&s.id!==snapshot.id).map(s=>h('button',{key:s.id,onClick:()=>setSnapshotId(s.id)},eventLabel(s)+' · '+(s.context_used==null?'Not recorded':count(s.context_used)+' tokens')))):null,
+     h(UsagePie,{label:'Estimated context composition',items:categories.map(c=>({id:c.id,label:c.label,value:c.tokens}))}),h('p',{className:'au-muted'},'Category estimates describe this snapshot, not billed tokens. Never add successive snapshots together as usage. Source: '+(snapshot.source||'Not recorded')+'. Skill attribution: '+(snapshot.attribution||'Not recorded')+'.')):
+     h('p',{className:'au-muted'},snapshotId?'This snapshot is outside the returned window. Choose another snapshot.':'No context snapshots recorded for this selection.')):null,
+   view==='Session timeline'?h('div',{'data-testid':'skill-timeline'},h('p',{className:'au-muted'},'Newest first. Filter to a session above or click a session below. Before/after compression snapshots remain separate; unavailable attribution is not zero.'),eventList()):null,
+   h('p',{className:'au-muted'},'History updated '+when(data.generated_at)+'. Counts and numeric estimates only; prompt and tool-output bodies are not stored in this history.')
+  ));
+}
+
 function UsagePage(){
  const [showHidden,setShowHidden]=useState(false), hiddenIds=useValue($hidden),selected=useValue($profile),chipProvider=useValue($chipProvider)
  const quota=useUsage(selected,REFRESH_PAGE_MS)
@@ -1192,8 +1270,10 @@ function UsagePage(){
    if(tab==='Requests')body=h(RequestView,{key:pageKey+':'+offset,data,offset,details:detailContext,onDrill:drill,more:()=>setOffset(offset+200),back:()=>setOffset(Math.max(0,offset-200))})
    if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:()=>ledger.refetch(),onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data,mode:compMode,setMode:setCompMode,details:detailContext})
+
    if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',g.task,g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]))
  }
+ if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
  return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all'},
   provider?h(ProviderLimits,{quota,providerId:provider,label,selected,hiddenIds}):null,

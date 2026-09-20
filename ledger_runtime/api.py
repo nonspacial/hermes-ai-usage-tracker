@@ -61,6 +61,19 @@ def add_routes(router,resolve_profile,server_home):
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,test_id=test_id)
         except ValueError as exc:raise HTTPException(400,str(exc))
 
+    @router.get('/ledger/skills')
+    def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',
+                     session_scope:str='exact',agent:str='',project:str='',subagent:str='',test_id:str='',
+                     model:str='',skill:str='',offset:int=0,limit:int=200):
+        from .skills import read
+        root=check_profile(profile)
+        try:
+            return read(root,start=start,end=end,provider=provider,session=session,session_scope=session_scope,
+                        agent=agent,project=project,subagent=subagent,test_id=test_id,model=model,skill=skill,
+                        offset=offset,limit=limit)
+        except ValueError as exc:raise HTTPException(400,str(exc)) from exc
+        except (sqlite3.Error,OSError):raise HTTPException(503,'Skills observations temporarily unavailable.')
+
     @router.post('/ledger/rates')
     def rate(body:dict,profile:str=''):
         raise HTTPException(410,'Manual rate entry retired. Prices are supplied by provider catalogs.')

@@ -15,6 +15,12 @@ def register(ctx):
     ctx.register_hook('api_request_error',recorder.error)
     ctx.register_hook('on_session_end',recorder.session_end)
     ctx.register_hook('on_session_start',recorder.session_start)
+    from _hermes_ai_usage_ledger_v2 import skills
+    try:
+        ctx.register_hook('post_tool_call',skills.tool)
+        recorder.ADAPTERS['skills post_tool_call']='registered'
+    except Exception as exc:
+        recorder.ADAPTERS['skills post_tool_call']='unavailable: '+type(exc).__name__
     for event,callback in [('subagent_start',recorder.subagent_start),('subagent_stop',recorder.subagent_stop)]:
         try:
             ctx.register_hook(event,callback);recorder.ADAPTERS[event]='registered'

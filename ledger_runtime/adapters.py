@@ -171,10 +171,15 @@ def compression_wrapper(original):
     @functools.wraps(original)
     def wrapped(agent,messages,system_message,**kwargs):
         item=comp_start(agent,kwargs,'compression');token=r.COMPRESSION.set(item[1] if item else None)
+        from .skills import compression, compression_result
+        compression(item,agent,messages,getattr(agent,'_cached_system_prompt',None),'compression_before')
         try:
             result=original(agent,messages,system_message,**kwargs)
         except BaseException as exc:comp_end(item,agent,exc);raise
-        else:comp_end(item,agent);return result
+        else:
+            comp_end(item,agent)
+            compression_result(item,agent,result)
+            return result
         finally:r.COMPRESSION.reset(token)
     return wrapped
 

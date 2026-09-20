@@ -130,6 +130,8 @@ def pre(**kw):
     from .attribution import capture
     rec.update(capture(store(root),rec['session_id'],rec.get('platform','')))
     store(root).request(rec,'request_started');health()
+    from .skills import pre as skills_pre
+    skills_pre(store(root),rec,kw)
 
 def request_context(kw):
     root=str(home());aid=text(kw.get('api_request_id'));sid=text(kw.get('session_id'))
@@ -247,6 +249,8 @@ def session_end(**kw):
     for r in rows:
         s.request({'id':r['id'],'ended':time.time(),'status':'ended_without_usage','turn_outcome':outcome},
                   'request_ended_without_usage',expected={'status':('pending','usage_received'),'turn_id':(turn,), 'process':(PROCESS,)})
+    from .skills import turn_end as skills_turn_end
+    skills_turn_end(s,kw)
     health(root)
 
 
