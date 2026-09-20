@@ -590,6 +590,23 @@ const ledgerCss = `
 @container (max-width:900px){.au-ledger .au-totals{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container (max-width:620px){.au-ledger .au-main-tabs{flex-wrap:nowrap;overflow-x:auto}.au-ledger .au-main-tabs button{flex-shrink:0}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+.au-ledger .au-field-label{display:none}
+.au-ledger .au-table[data-layout="records"]{max-height:none;overflow:visible;background:transparent}
+.au-ledger .au-table[data-layout="records"] table{display:block;white-space:normal}
+.au-ledger .au-table[data-layout="records"] thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.au-ledger .au-table[data-layout="records"] tbody,.au-ledger .au-table[data-layout="records"] tfoot{display:block}
+.au-ledger .au-table[data-layout="records"] tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;padding:14px;margin-bottom:10px;border:1px solid var(--ui-stroke-secondary);border-radius:7px;background:var(--au-table-bg)}
+.au-ledger .au-table[data-layout="records"] thead tr{display:table-row;padding:0;margin:0}
+.au-ledger .au-table[data-layout="records"] :is(td,th){display:block;min-width:0;padding:0;border:0;text-align:left;background:transparent;overflow-wrap:anywhere;white-space:normal}
+.au-ledger .au-table[data-layout="records"] .au-field-label{display:block;color:var(--ui-text-tertiary);font-size:11px;font-weight:400;margin-bottom:4px}
+.au-ledger .au-table[data-layout="records"] .au-field-value{min-width:0;line-height:1.5;overflow-wrap:anywhere}
+.au-ledger .au-table[data-layout="records"] .au-record-heading{grid-column:1 / -1;padding-bottom:10px;border-bottom:1px solid var(--ui-stroke-secondary);font-weight:600}
+.au-ledger .au-table[data-layout="records"] .au-record-details{grid-column:1 / -1}
+.au-ledger .au-table[data-layout="records"] .au-record-empty{display:none}
+.au-ledger .au-table[data-layout="records"] .au-json-details{min-width:0}
+.au-ledger .au-table[data-layout="records"] .au-json-panel{width:100%;max-width:100%;min-width:0}
+.au-ledger .au-table[data-layout="records"] .au-drill{max-width:100%}
+@container(max-width:400px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:minmax(0,1fr)}}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
 const count = n => n == null ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
@@ -599,7 +616,39 @@ const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
 function notice(t){return h('div',{className:'au-notice'},t)}
 function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted'},note))}
-function table(headers,rows,footer=null,rowKeys=null){return h('div',{className:'au-table'},h('table',{},h('thead',{},h('tr',{},...headers.map((v,i)=>h('th',{key:i,scope:'col'},v)))),h('tbody',{},...rows.map((row,i)=>h('tr',{key:rowKeys?.[i]??i,'data-row-id':rowKeys?.[i]},...row.map((v,j)=>h('td',{key:j},v))))),footer?h('tfoot',{},h('tr',{},...footer.map((v,i)=>h(i===0?'th':'td',{key:i,...(i===0?{scope:'row'}:{})},v)))):null))}
+function ResponsiveTable({headers,rows,footer,rowKeys}){
+ const [nodes]=useState(()=>({root:null}));
+ useEffect(()=>{
+  const root=nodes.root;if(!root)return;
+  let frame=0,lastWidth=-1,disposed=false;
+  function measure(){
+   frame=0;if(disposed)return;
+   const top=root.scrollTop;
+   // Measure the real table, not the stacked layout. Keep the same keyed nodes,
+   // so resizing cannot discard an open JSON snapshot or keyboard focus.
+   root.dataset.layout='table';
+   root.dataset.layout=root.querySelector('table').scrollWidth>root.clientWidth+1?'records':'table';
+   root.scrollTop=top;
+  }
+  function schedule(){if(!frame)frame=requestAnimationFrame(measure)}
+  const observer=new ResizeObserver(entries=>{
+   const width=entries[0].contentRect.width;
+   if(width!==lastWidth){lastWidth=width;schedule()}
+  });
+  observer.observe(root);root.addEventListener('toggle',schedule,true);schedule();
+  document.fonts?.ready.then(()=>{if(!disposed)schedule()});
+  return()=>{disposed=true;observer.disconnect();root.removeEventListener('toggle',schedule,true);cancelAnimationFrame(frame)};
+ },[headers,rows,footer]);
+ const cells=(row,total=false)=>row.map((value,i)=>h(total&&i===0?'th':'td',{
+  key:i,role:total&&i===0?'rowheader':'cell',...(total&&i===0?{scope:'row'}:{}),
+  className:(i===0?'au-record-heading ':headers[i]==='Details'?'au-record-details ':'')+(value===''?'au-record-empty':'')
+ },h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
+ return h('div',{className:'au-table',ref:node=>{nodes.root=node}},h('table',{role:'table'},
+  h('thead',{role:'rowgroup'},h('tr',{role:'row'},...headers.map((v,i)=>h('th',{key:i,scope:'col',role:'columnheader'},v)))),
+  h('tbody',{role:'rowgroup'},...rows.map((row,i)=>h('tr',{role:'row',key:rowKeys?.[i]??i,'data-row-id':rowKeys?.[i]},...cells(row)))),
+  footer?h('tfoot',{role:'rowgroup'},h('tr',{role:'row'},...cells(footer,true))):null));
+}
+function table(headers,rows,footer=null,rowKeys=null){return h(ResponsiveTable,{headers,rows,footer,rowKeys})}
 function downloadFile(name,body,type='text/csv'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([body],{type}));a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function csvText(rows){if(!rows.length)return '';const keys=[...new Set(rows.flatMap(row=>Object.keys(row)))],cell=v=>'"'+String(typeof v==='object'&&v!==null?JSON.stringify(v):v??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';return [keys.map(cell).join(','),...rows.map(row=>keys.map(k=>cell(row[k])).join(','))].join('\r\n')}
 // The SDK clipboard is available in Desktop even when Web Clipboard is denied.

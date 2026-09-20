@@ -62,7 +62,7 @@ def run():
   expect(costs.get_by_test_id('cost-card-input_tokens')).to_contain_text('17,459')
   expect(costs.get_by_test_id('cost-card-output_tokens')).to_contain_text('61')
   # Prices have units; totals never sum price-per-million columns.
-  footer_cells=rates.locator('tfoot td').all_text_contents()
+  footer_cells=rates.locator('tfoot td .au-field-value').all_text_contents()
   assert footer_cells[4:8]==['','','',''],footer_cells
   boxes=[x.bounding_box() for x in (filters,costs,page.get_by_test_id('cache-savings-summary'),rates,page.get_by_test_id('price-refresh-controls'))]
   assert all(a['y']+a['height']<=b['y']+.5 for a,b in zip(boxes,boxes[1:]))

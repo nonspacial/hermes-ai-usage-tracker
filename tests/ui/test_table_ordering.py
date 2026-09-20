@@ -32,7 +32,7 @@ def run():
             expected = page.evaluate('''hour => [...orderingData.trend.buckets].sort((a,b)=>b.start-a.start).map(
                 b => new Date(b.start*1000).toLocaleString(undefined, {
                     timeZone:'UTC',month:'short',day:'numeric',...(hour?{hour:'numeric'}:{})}))''', grouping == 'Hour')
-            expect(page.locator('.au-breakdown tbody tr td:first-child')).to_have_text(expected)
+            expect(page.locator('.au-breakdown tbody tr td:first-child .au-field-value')).to_have_text(expected)
             after = page.evaluate('orderingData.trend.buckets.map(b => b.start)')
             assert after == before == sorted(before)
             # Switching tables must not leave the chart's bucket array reversed.
