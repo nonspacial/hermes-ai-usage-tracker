@@ -1191,6 +1191,9 @@ const ledgerCss = `
 .au-reader-content{display:flow-root;min-width:0}
 /* Synchronous normal-line measurement; never close live details or clone IDs. */
 .au-reader.au-measure-lines .au-json-panel{display:none}
+.au-reader.au-measure-sparse .au-table[data-layout="records"][data-accordions="true"] tr>td:not(:first-child),
+.au-reader.au-measure-sparse .au-timeline-entry>:not(summary){display:none}
+.au-reader.au-measure-sparse .au-table[data-layout="records"][data-accordions="true"] .au-record-heading{padding-bottom:0;border-bottom:0}
 .au-pane .au-chart svg{height:clamp(160px,24cqh,320px)}
 @container(max-height:700px){.au-pane .au-hero{margin:12px 0;gap:20px}.au-pane .au-provider-totals{margin-top:12px}.au-pane .au-provider-row{margin:9px 0}.au-pane .au-totals{margin-bottom:12px;gap:8px}}
 .au-reader:focus-visible,.au-upper:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
@@ -1243,11 +1246,12 @@ function AnalyticsPane({children}){
    frame=0;if(disposed)return;
    const pane=root.querySelector('.au-provider-pane'),reader=root.querySelector('.au-reader'),nav=root.querySelector('.au-subpage-tabs');
    if(!pane||!reader||!nav)return;
-   // Intrinsic lower chrome + ten normal lines, independent of the allocation
-   // being computed. Expanded bodies never redefine a normal collapsed line.
+   // Reserve at most ten normal lines, independently of the current viewport.
+   // Sparse tabs return unused space even beyond the usual two-thirds cap.
+   // Expanded bodies never redefine a normal collapsed line.
    const rows=[...reader.querySelectorAll(reader.querySelector('tbody')?'tbody tr':reader.querySelector('.au-timeline-entry')?'.au-timeline-entry':'.au-skill-legend-row')];
    const scrollTop=reader.scrollTop;
-   let heights;
+   let heights,sparseNeed;
    // Measure even an initially open, sole record without its inspector body.
    // Restore in the same frame: no toggle events, lost state or scroll clamping.
    reader.classList.add('au-measure-lines');
@@ -1258,15 +1262,21 @@ function AnalyticsPane({children}){
     if(row.matches('.au-timeline-entry'))return row.querySelector('summary').getBoundingClientRect().height+padding+margin;
     if(disclosure&&getComputedStyle(disclosure).display!=='none')return disclosure.getBoundingClientRect().height+padding+margin;
     return row.getBoundingClientRect().height+margin;
-   }).filter(n=>n>0)}finally{
-    reader.classList.remove('au-measure-lines');reader.scrollTop=scrollTop;
+   }).filter(n=>n>0);
+    if(rows.length<10){
+     reader.classList.add('au-measure-sparse');
+     sparseNeed=reader.firstElementChild.getBoundingClientRect().height+nav.getBoundingClientRect().height;
+    }
+   }finally{
+    reader.classList.remove('au-measure-lines','au-measure-sparse');reader.scrollTop=scrollTop;
    }
    const line=heights.length?Math.max(...heights):0;
    const first=rows[0],last=rows[rows.length-1];
    const span=first&&last?last.getBoundingClientRect().bottom-first.getBoundingClientRect().top:0;
    const chrome=Math.max(0,reader.firstElementChild.getBoundingClientRect().height-span)+nav.getBoundingClientRect().height;
    const height=pane.clientHeight;
-   const cap=line?Math.max(height/2,Math.min(height*2/3,height-chrome-10*line)):height/2;
+   const cap=sparseNeed!==undefined?Math.max(height/2,height-sparseNeed)
+    :Math.max(height/2,Math.min(height*2/3,height-chrome-10*line));
    const value=Math.floor(cap)+'px';
    if(pane.style.getPropertyValue('--au-upper-cap')!==value)pane.style.setProperty('--au-upper-cap',value);
   }

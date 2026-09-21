@@ -17,7 +17,7 @@ def geometry(page):
       const rows=[...reader.querySelectorAll('tbody tr')];
       const span=rows.at(-1).getBoundingClientRect().bottom-rows[0].getBoundingClientRect().top;
       return {height:pane.clientHeight,cap:parseFloat(pane.style.getPropertyValue('--au-upper-cap')),
-        line:Math.max(...rows.map(r=>r.getBoundingClientRect().height)),
+        rows:rows.length,line:Math.max(...rows.map(r=>r.getBoundingClientRect().height)),
         chrome:Math.max(0,reader.firstElementChild.getBoundingClientRect().height-span)+document.querySelector('.au-subpage-tabs').getBoundingClientRect().height};
     }''')
 
@@ -45,8 +45,9 @@ def run():
         def check(label):
             settle(page)
             g = geometry(page)
-            expected = math.floor(max(g['height']/2, min(2*g['height']/3,
-                                      g['height']-g['chrome']-10*baseline['line'])))
+            reserve = g['rows'] * baseline['line'] if g['rows'] < 10 else 10 * baseline['line']
+            expected = math.floor(max(g['height']/2, min(g['height'] if g['rows'] < 10 else 2*g['height']/3,
+                                      g['height']-g['chrome']-reserve)))
             assert g['cap'] == expected, (label, g, baseline, expected)
             assert not page.locator('.au-measure-lines').count()
             checks.append((label, g['height'], g['cap']))
