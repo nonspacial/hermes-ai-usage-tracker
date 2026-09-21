@@ -34,6 +34,11 @@ def run():
             button.press('Enter')
             expect(button).to_have_attribute('aria-expanded', 'true')
             expect(row.locator('td').nth(1)).to_be_visible()
+            if name == 'Compressions':
+                start = row.locator('td').nth(5).locator('.au-field-value').inner_text()
+                end = row.locator('td').nth(8).locator('.au-field-value').inner_text().splitlines()[0]
+                expect(button.locator('strong')).to_have_text(f'Start: {start} · End: {end} tokens')
+                assert 'not measured starting usage' in (button.locator('strong span').get_attribute('title') or '')
             row.evaluate('(e)=>window.savedRow=e')
             page.evaluate('queryClient.invalidateQueries()')
             page.wait_for_timeout(150)
