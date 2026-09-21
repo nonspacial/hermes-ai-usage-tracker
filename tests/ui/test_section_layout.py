@@ -1,4 +1,4 @@
-"""Test.10: remove duplicate headings; move refresh and compression notes below tables.
+"""Keep section controls ordered and omit redundant compression prose.
 
 Only the offline synthetic preview is exercised. No account or provider calls.
 """
@@ -78,19 +78,19 @@ def run():
             sub.get_by_role('tab', name='Compressions', exact=True).click()
             expect(comps).to_be_visible()
             assert 'Compression and compaction events' not in comps.inner_text()
-            assert comps.locator('h3,h4,strong').count() == 0
+            assert comps.locator('h3,h4').count() == 0
             controls = comps.locator(':scope > .au-toolbar')
             table = page.get_by_test_id('compression-table')
             note = page.get_by_test_id('compression-note')
             before(controls, table)
-            before(table, note)
-            expect(note).to_have_text(NOTE)
+            expect(note).to_have_count(0)
+            expect(comps.get_by_text(NOTE, exact=True)).to_have_count(0)
             kind = page.get_by_role('combobox', name='Compression type', exact=True)
             expect(table.locator('tbody tr')).to_have_count(2)
             for value in ('compression', 'micro_compaction'):
                 kind.select_option(value)
                 expect(table.locator('tbody tr')).to_have_count(1)
-                before(table, note)
+                expect(note).to_have_count(0)
             kind.select_option('all')
             expect(table.locator('tbody tr')).to_have_count(2)
             with page.expect_download() as downloaded:
@@ -100,13 +100,13 @@ def run():
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             if width != 320:
                 page.get_by_test_id('provider-subpage').screenshot(path=str(ART / f'compressions-clean-{width}.png'))
-            print(f'PASS {width}px compression: no repeated heading; note follows table; filtering/export unchanged')
+            print(f'PASS {width}px compression: no repeated heading; no footer disclaimer; filtering/export unchanged')
 
-        # No-data views still put explanatory text after the empty table/message.
+        # No-data views retain the empty-state message without the footer disclaimer.
         page.get_by_role('textbox', name='Session ID', exact=True).fill('no-matching-session')
         expect(page.get_by_test_id('compression-table').locator('tbody tr')).to_have_count(0)
         expect(comps.get_by_text('No compression events in this window.', exact=True)).to_be_visible()
-        before(comps.get_by_text('No compression events in this window.', exact=True), page.get_by_test_id('compression-note'))
+        expect(page.get_by_test_id('compression-note')).to_have_count(0)
         page.get_by_role('button', name='Clear filters', exact=True).click()
         expect(page.get_by_test_id('compression-table').locator('tbody tr')).to_have_count(2)
         # Retain actual unavailable-price indication while removing normal prose/headers.

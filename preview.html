@@ -1444,8 +1444,7 @@ function CompressionView({data,mode,setMode,details}){
  h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id),
   visible.map(c=>({identity:c.session_id||c.session_after||'Unattributed session',started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
  !rows.length?h('p',{className:'au-muted'},'No compression events in this window.'):null,
- data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null,
- h('div',{'data-testid':'compression-note'},notice('Before/after/threshold are Hermes context estimates. Next-call input is provider-reported when supplied and may include newly added tool or user content; it is not a pure measurement of compression savings. Auxiliary token/cost totals are already included in request totals.')))
+ data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null)
 }
 // This is a second control surface for the same page-level window, not an
 // independent filter or another set of metrics. Custom dates update both copies.
