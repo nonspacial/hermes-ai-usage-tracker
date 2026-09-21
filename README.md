@@ -4,90 +4,11 @@ Subscription quotas, request-level token accounting, cache analysis and skills/c
 
 This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lvabarajithan/hermes-ai-usage-tracker). It started from the **2.0.0-test.17** ledger import and includes subsequent recording, performance and UI improvements. The original MIT licence and quota integrations are retained. This is a development fork, not an official Hermes release.
 
+<a href="docs/images/live-subscriptions.png"><img width="600" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
+
+<a href="docs/images/live-overview.png"><img width="400" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
+
 [Features](#behaviour) · [Provider coverage](#provider-coverage) · [Installation](#installation-is-separate-from-source-changes) · [Development](#development-checks)
-
-## A look inside
-
-Captured from the **running Hermes Desktop app**, not the synthetic preview. Unrelated panes are cropped out; account links and session/project/task identifiers are redacted. Values are live snapshots taken at different moments. Dollar figures are API-equivalent estimates, not subscription charges. Click an image for full resolution.
-
-<table>
-<tr>
-<td valign="top" width="50%">
-<strong>1. Subscriptions — the original starting point</strong><br>
-Provider allowances, resets and compact Nous Portal details.<br><br>
-<a href="docs/images/live-subscriptions.png"><img width="350" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
-</td>
-<td valign="top" width="50%">
-<strong>2. All providers — Overview</strong><br>
-Token totals, cache summaries, subagent usage and trends.<br><br>
-<a href="docs/images/live-overview.png"><img width="217" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
-</td>
-</tr>
-<tr>
-<td colspan="2" valign="top">
-<strong>3. Requests — wide table layout</strong><br>
-Individual attempts, provider/model attribution, token counts and expandable usage details.<br><br>
-<a href="docs/images/live-requests-table.png"><img width="720" src="docs/images/live-requests-table.png" alt="Live Requests tab as a wide table; private identifier columns redacted"></a>
-</td>
-</tr>
-<tr>
-<td valign="top">
-<strong>4. Cache &amp; costs</strong><br>
-Component costs, calculated cache writes, savings and saved rates.<br><br>
-<a href="docs/images/live-cache-wide.png"><img width="350" src="docs/images/live-cache-wide.png" alt="Live Cache and costs tab with component cards and saved-rate table"></a>
-</td>
-<td valign="top">
-<strong>5. Compressions</strong><br>
-Expandable events with Start/End headers, outcomes and linked helper usage.<br><br>
-<a href="docs/images/live-compressions.png"><img width="252" src="docs/images/live-compressions.png" alt="Live Compressions tab showing a committed compression record"></a>
-</td>
-</tr>
-<tr>
-<td valign="top">
-<strong>Responsive Requests</strong><br>
-The same request view becomes collapsed accordions; expand a record for its fields and JSON.<br><br>
-<a href="docs/images/live-requests-cards.png"><img width="350" src="docs/images/live-requests-cards.png" alt="Live Requests tab with collapsed session headers and an expanded request"></a>
-</td>
-<td valign="top">
-<strong>Responsive Cache &amp; costs</strong><br>
-Metric cards wrap and saved-rate groups become accordions as space shrinks.<br><br>
-<a href="docs/images/live-cache-cards.png"><img width="170" src="docs/images/live-cache-cards.png" alt="Live Cache and costs in a narrower pane with wrapped metrics and record-style rates"></a>
-</td>
-</tr>
-</table>
-
-### More detail, without losing the overview
-
-<table>
-<tr><td colspan="2" valign="top">
-<strong>Subscription line and wide token overview</strong><br>
-The provider allowance stays above the main token counter, cache metrics and usage trend.<br><br>
-<a href="docs/images/live-wide-summary.png"><img width="546" src="docs/images/live-wide-summary.png" alt="Wide Codex view with subscription allowance, main token counter and hourly usage chart"></a>
-</td></tr>
-<tr><td valign="top" width="50%">
-<strong>Models &amp; tasks</strong><br>
-Provider/model/task groups with known totals and expandable accounting details.<br><br>
-<a href="docs/images/live-models-tasks.png"><img width="247" src="docs/images/live-models-tasks.png" alt="Models and tasks accordions with one group expanded and private task IDs redacted"></a>
-</td><td valign="top" width="50%">
-<strong>Skills frequency — narrow pane</strong><br>
-A bounded pie above a two-column skills legend.<br><br>
-<a href="docs/images/live-skills-thin.png"><img width="160" src="docs/images/live-skills-thin.png" alt="Skills frequency in a narrow pane with the pie above two legend columns"></a>
-</td></tr>
-<tr><td colspan="2" valign="top">
-<strong>Skills frequency — wide pane</strong><br>
-The pie stays capped while the legend uses three columns. Very narrow panes use one.<br><br>
-<a href="docs/images/live-skills-wide.png"><img width="451" src="docs/images/live-skills-wide.png" alt="Wide Skills frequency view with a capped pie and three-column legend"></a>
-</td></tr>
-<tr><td valign="top">
-<strong>Context footprint</strong><br>
-Select a recorded snapshot to inspect its estimated context composition.<br><br>
-<a href="docs/images/live-context-footprint.png"><img width="350" src="docs/images/live-context-footprint.png" alt="Context footprint snapshot with estimated system, skill and conversation token composition"></a>
-</td><td valign="top">
-<strong>Session timeline</strong><br>
-Expand a timestamped observation for its context, source and linked snapshot.<br><br>
-<a href="docs/images/live-timeline.png"><img width="350" src="docs/images/live-timeline.png" alt="Session timeline with an expanded observation and redacted session and project identifiers"></a>
-</td></tr>
-</table>
 
 ## Behaviour
 
@@ -188,3 +109,36 @@ Quotas and background pricing can make network calls. The recorder does not add 
 The fork and upstream `main` both resolved to `77bdf112117d6d8811477d8837d3cb9a3a9d99d9` during import. All original-source entries in `UPSTREAM_SOURCE_MANIFEST.json` matched that checkout. `PRESERVED_UPSTREAM.json` retains component/probe regression fingerprints.
 
 On the originating workstation, all pre-existing project contents were preserved under Git-ignored `.local-history/`, including the complete handoff, original test.17 package, archives and historical usage exports. They are not part of the publishable repository. At the original import, runtime/UI source was unchanged and development paths and installer packaging were adapted to this root layout. Subsequent changes are recorded in Git history; see [IMPORT_NOTES.md](IMPORT_NOTES.md) for the historical import checks.
+
+## Screenshots
+
+Real-app captures with private identifiers redacted. Click to enlarge. Token values are snapshots; dollar figures are API-equivalent estimates, not subscription charges.
+
+<p>
+<a href="docs/images/live-requests-table.png"><img width="700" src="docs/images/live-requests-table.png" alt="Live Requests tab as a wide table; private identifier columns redacted"></a>
+<a href="docs/images/live-cache-wide.png"><img width="393" src="docs/images/live-cache-wide.png" alt="Live Cache and costs tab with component cards and saved-rate table"></a>
+</p>
+
+<p>
+<a href="docs/images/live-compressions.png"><img width="218" src="docs/images/live-compressions.png" alt="Live Compressions tab showing a committed compression record"></a>
+<a href="docs/images/live-requests-cards.png"><img width="306" src="docs/images/live-requests-cards.png" alt="Live Requests tab with collapsed session headers and an expanded request"></a>
+</p>
+
+<p>
+<a href="docs/images/live-cache-cards.png"><img width="147" src="docs/images/live-cache-cards.png" alt="Live Cache and costs in a narrower pane with wrapped metrics and record-style rates"></a>
+<a href="docs/images/live-wide-summary.png"><img width="473" src="docs/images/live-wide-summary.png" alt="Wide Codex view with subscription allowance, main token counter and hourly usage chart"></a>
+</p>
+
+<p>
+<a href="docs/images/live-models-tasks.png"><img width="214" src="docs/images/live-models-tasks.png" alt="Models and tasks accordions with one group expanded and private task IDs redacted"></a>
+<a href="docs/images/live-skills-thin.png"><img width="139" src="docs/images/live-skills-thin.png" alt="Skills frequency in a narrow pane with the pie above two legend columns"></a>
+</p>
+
+<p>
+<a href="docs/images/live-skills-wide.png"><img width="391" src="docs/images/live-skills-wide.png" alt="Wide Skills frequency view with a capped pie and three-column legend"></a>
+<a href="docs/images/live-context-footprint.png"><img width="527" src="docs/images/live-context-footprint.png" alt="Context footprint snapshot with estimated system, skill and conversation token composition"></a>
+</p>
+
+<p>
+<a href="docs/images/live-timeline.png"><img width="529" src="docs/images/live-timeline.png" alt="Session timeline with an expanded observation and redacted session and project identifiers"></a>
+</p>
