@@ -10,7 +10,9 @@ def test_original_desktop_components_unchanged():
     for name,sha in json.loads((ROOT/'PRESERVED_UPSTREAM.json').read_text())['desktop_functions'].items():
         # Header now has the explicitly requested split refresh control. Its
         # existing quota controls and new actions are covered by browser suites.
-        if name == 'PageHeader':
+        # ProviderCard now has requested responsive quota columns, covered by
+        # test_quota_columns_browser; quota content and probes are unchanged.
+        if name in ('PageHeader', 'ProviderCard'):
             continue
         start=source.index('function '+name+'(');body=source[start:source.index('\n}',start)+2]
         assert hashlib.sha256(body.encode()).hexdigest()==sha,name

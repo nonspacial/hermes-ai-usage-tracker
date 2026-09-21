@@ -268,7 +268,7 @@ function ProviderCard({ provider, isHidden }) {
 
   return jsxs('div', {
     className: cn(
-      'flex flex-col gap-2 rounded-[5px] border border-(--ui-stroke-secondary) p-3',
+      'au-quota-card flex flex-col gap-2 rounded-[5px] border border-(--ui-stroke-secondary) p-3',
       isHidden && 'opacity-60'
     ),
     children: [
@@ -298,13 +298,19 @@ function ProviderCard({ provider, isHidden }) {
           })
         ]
       }),
-      windows.map((window, index) => jsx(QuotaBar, { window }, index)),
+      jsxs('div', {
+        className: 'au-quota-rows',
+        'data-columns': windows.length + details.length >= 6 ? 'multiple' : 'single',
+        children: [
+          ...windows.map((window, index) => jsx(QuotaBar, { window }, `window-${index}`)),
+          ...details.map((detail, index) =>
+            jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, `detail-${index}`)
+          )
+        ]
+      }),
       !provider.quota?.available && provider.quota?.unavailable_reason
         ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: provider.quota.unavailable_reason })
-        : null,
-      details.map((detail, index) =>
-        jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, index)
-      )
+        : null
     ]
   })
 }
@@ -584,6 +590,11 @@ const ledgerCss = `
 .au-ledger .au-quota-home .border{background:transparent;border-radius:5px;padding:12px;margin:0}
 .au-ledger .au-quota-home .border button{background:transparent;border:0;padding:0 4px}
 .au-ledger .au-provider-limits{margin:0 0 16px;min-width:0}
+.au-quota-card{container-type:inline-size;min-width:0}
+.au-quota-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 24px}
+.au-quota-rows>*{min-width:0;overflow-wrap:anywhere}
+.au-quota-rows:empty{display:none}
+@container (min-width:520px){.au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .au-ledger .au-provider-limits .border button{background:transparent;border:0;padding:0 4px}
 .au-ledger .au-provider-quota-status{display:flex;align-items:center;gap:10px;min-height:44px;color:var(--ui-text-tertiary)}
 .au-ledger .au-drill{background:transparent;border:0;text-align:left;padding:0;color:var(--ui-accent);max-width:260px;white-space:normal;overflow-wrap:anywhere}
