@@ -5,7 +5,8 @@ read-only transaction. No token counters, messages, titles or configurations.
 No process cwd fallback: an unattributed project stays unattributed.
 """
 from __future__ import annotations
-import hashlib, json, posixpath, sqlite3, time
+import json, sqlite3, time
+from .projects import canonical_path, project_for, read_projects
 from pathlib import Path
 
 FIELDS=('agent_kind','parent_session_id','root_session_id','session_lineage','lineage_complete',
@@ -69,7 +70,22 @@ def persist(c,meta):
     if old and data==json.loads(old[0]):return
     c.execute('INSERT INTO session_context VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET updated=excluded.updated,data=excluded.data',(sid,time.time(),json.dumps(data,separators=(',',':'))))
 
-def resolve(c,sid,platform=''):
+def persist_state(c,row):
+    """Current state paths and parent (including NULL) replace cached metadata."""
+    sid=row['id']
+    old=c.execute('SELECT data FROM session_context WHERE session_id=?',(sid,)).fetchone()
+    data=json.loads(old[0]) if old else {}
+    for key in ('cwd','git_repo_root','parent_session_id'):
+        if key in row:data.pop(key,None)
+    current=from_state(row)
+    if data.get('agent_kind')=='subagent':current.pop('agent_kind',None)
+    if data.get('attribution_source')=='subagent_lifecycle':current.pop('attribution_source',None)
+    data.update(current)
+    c.execute('INSERT INTO session_context VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET updated=excluded.updated,data=excluded.data',
+              (sid,time.time(),json.dumps(data,separators=(',',':'))))
+
+
+def resolve(c,sid,platform='',projects=()):
     """Resolve stored ancestry; never confuse a guessed top ancestor with a root."""
     chain=[];seen=set();cur=sid;complete=False
     while cur and cur not in seen and len(chain)<64:
@@ -93,24 +109,26 @@ def resolve(c,sid,platform=''):
         result[k]=own.get(k) or None
     # Delegates use the nearest owning parent's project when recorded. Child
     # working directories may be temporary worktrees or a generic launcher cwd.
-    project_chain=chain[1:]+chain[:1] if kind=='subagent' and len(chain)>1 else chain
-    candidates=[(owner,meta,key) for key in ('git_repo_root','cwd') for owner,meta in project_chain if meta.get(key)]
-    for owner,meta,key in candidates:
-        path=clean(meta[key],2048).replace('\\','/').rstrip('/') or '/'
-        project_kind='repository' if key=='git_repo_root' else 'working_directory'
-        result.update(project_id=hashlib.sha256((project_kind+':'+path).encode()).hexdigest()[:24],
-          project_label=posixpath.basename(path) or path,project_path=path,
-          project_source=('parent_' if owner!=sid else '')+project_kind)
-        break
-    else:result.update(project_id=None,project_label=None,project_path=None,project_source='unavailable')
+    project_chain=chain
+    if kind=='subagent' and len(chain)>1:
+        # Nested delegates inherit the nearest primary owner's workspace rather
+        # than an intermediate delegate's temporary launcher/worktree directory.
+        owners=[entry for entry in chain[1:] if entry[1].get('agent_kind')!='subagent']
+        project_chain=owners+chain[:1]
+    # A continuation/branch with its own explicit workspace may have moved away
+    # from the ancestor's project. Parent linkage alone must not undo that move.
+    if kind!='subagent' and any(canonical_path(own.get(k)) for k in ('cwd','git_repo_root')):
+        project_chain=chain[:1]
+    result.update(project_for(project_chain,sid,projects))
     return result
 
 def capture(store,sid,platform='',explicit=None):
     if not sid:return {}
     rows=state_rows(store.root,sid)
+    projects=read_projects(store.root)
     with store.db() as c:
         c.execute('BEGIN IMMEDIATE')
-        for row in reversed(rows):persist(c,from_state(row))
+        for row in reversed(rows):persist_state(c,row)
         base={'session_id':sid}
         if platform:
             base['platform']=clean(platform,80)
@@ -118,12 +136,12 @@ def capture(store,sid,platform='',explicit=None):
             elif platform in PRIMARY_PLATFORMS:base['agent_kind']='primary'
         if explicit:base.update(explicit)
         persist(c,base)
-        return resolve(c,sid,platform)
+        return resolve(c,sid,platform,projects)
 
-def attach(c,data):
+def attach(c,data,projects=()):
     sid=data.get('session_id')
     if not sid:return data
-    ctx=resolve(c,sid,data.get('platform',''))
+    ctx=resolve(c,sid,data.get('platform',''),projects)
     for k,v in ctx.items():
         # Metadata first discovered later may fill a gap; do not silently move
         # already-attributed historical requests to a different project.
@@ -152,7 +170,7 @@ def lifecycle(store,kind,kw):
         # Late lifecycle notifications can fill unknown attribution without
         # importing parent's totals, repricing, or introducing another request.
         for row in c.execute('SELECT id,data FROM requests WHERE session_id=?',(sid,)).fetchall():
-            data=json.loads(row['data']);attach(c,data)
+            data=json.loads(row['data']);attach(c,data,read_projects(store.root))
             c.execute('UPDATE requests SET data=? WHERE id=?',(json.dumps(data,separators=(',',':')),row['id']))
     from .storage import notify
     notify(store.folder)

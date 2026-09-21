@@ -1342,7 +1342,7 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
   if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(timeName==='Hour'?{hour:'numeric'}:{})});
   const label=group==='project'?(g.label||'Unattributed project'):g.key;
   return h('button',{className:'au-drill',title:g.path||g.key,onClick:()=>onDrill(group,g)},label,
-   group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(g.parent_session_id||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
+   group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(g.parent_session_id||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('named_project')?'Named project':g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
  }
  const detail=group==='project'||group==='session'||group==='subagent';
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),

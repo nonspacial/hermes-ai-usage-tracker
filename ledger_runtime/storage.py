@@ -104,7 +104,8 @@ class Store:
                 data['status']='ended_with_usage'
             data.setdefault('started',time.time());data.setdefault('status','pending')
             from .attribution import attach
-            attach(c,data)
+            from .projects import read_projects
+            attach(c,data,read_projects(self.root))
             if 'usage' in data:
                 # Final records keep the price snapshot chosen at completion, even
                 # if a duplicate notification arrives after a catalog refresh.
@@ -135,7 +136,8 @@ class Store:
             data=json.loads(old[0]) if old else {}
             data.update({k:v for k,v in rec.items() if v is not None});data.setdefault('started',time.time())
             from .attribution import attach
-            attach(c,data)
+            from .projects import read_projects
+            attach(c,data,read_projects(self.root))
             self._put_comp(c,data);self.event(c,kind,rec['id'],rec)
         notify(self.folder)
     def health(self,process,data):

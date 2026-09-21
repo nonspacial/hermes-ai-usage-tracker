@@ -10,6 +10,7 @@ This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lva
 - Native request hooks and guarded runtime adapters record usage in each producing Hermes home's `usage-ledger/events.sqlite3`. The UI refreshes persisted events; it does not reconstruct usage from cumulative session counters.
 - Displayed **Cache writes** is the sum of positive consecutive cache-read differences within each session stream. Its caption is **Calculated from session reads**. Provider counters and saved costs remain separate and unchanged; calculated writes are not additional processed tokens.
 - Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.
+- New attribution uses same-profile active named projects and explicit folder ownership. Historical changes are operator-only: see [PROJECT_ATTRIBUTION.md](PROJECT_ATTRIBUTION.md) for the dry-run/apply reconciliation CLI and preservation guarantees.
 
 Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract, [ANALYTICS_RELOAD.md](ANALYTICS_RELOAD.md) for the Refresh menu and real connection indicator, and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
 
