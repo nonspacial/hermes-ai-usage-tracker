@@ -1,4 +1,42 @@
-# Test.14 SDK boundary extension
+# Provider capture verification
+
+The recorder follows protocol boundaries, not a fixed provider-name allowlist.
+Normal Hermes main-agent hooks cover OpenAI-compatible Chat Completions,
+Responses and Anthropic Messages paths when the producing process loads this
+plugin. This is not a guarantee for every custom provider/runtime or every SDK
+retry beneath those hooks.
+
+Additional native observers preserve Gemini `usageMetadata` before conversion,
+and Anthropic main-stream `message_start`/`message_delta` usage before successful
+finalisation. Anthropic snapshots are cumulative, not additive. Interrupted
+streams retain only counts actually received; they cannot reconstruct later
+unreported usage. Gemini thinking is included once in output, missing native
+fields stay unknown, and reported totals are retained even when they differ
+from the component sum. Both native sources outrank lossy assembled responses.
+
+`tests/test_native_provider_capture.py` executes selected real Hermes source
+definitions against synthetic transports and disposable ledgers. Set
+`HERMES_CAPTURE_CORE` to an explicitly supplied read-only Hermes source tree to
+run these contract tests; without it they skip rather than inspect a personal
+installation implicitly. This verifies the selected conversion, accumulator
+and dispatch seams, not authenticated providers or the complete SDK/Relay stack.
+`tests/test_provider_accounting.py` covers native modes, field aliases, missing
+counts, Gemini thinking and authoritative totals without Hermes core imports.
+
+Cost and quota coverage are separate from recording. Automatic price catalogues
+currently cover OpenAI, OpenRouter, Nous and Ollama; other providers, including
+direct Anthropic and Gemini, may record tokens while remaining unpriced. Missing
+prices are not zero costs. Subscription cards use only provider-reported quota
+windows. Nous supplies a subscription gauge when monthly allowance/remaining
+credits are available, plus a renewal detail when supplied; no weekly window is
+invented. Generic direct-streaming auxiliary calls and separate app-server/ACP
+runtimes are not certified as complete request ledgers.
+
+These observer/accounting changes require restarting the producing processes
+and backend at a user-arranged time. Analytics-only reload is insufficient.
+Existing historical rows are not rewritten or backfilled.
+
+## Historical test.14 SDK boundary extension
 
 Guarded OpenAI BaseClient._build_request(self, options, ...) and
 _process_response_data(self, *, data, cast_to, response, ...) wrappers are new.

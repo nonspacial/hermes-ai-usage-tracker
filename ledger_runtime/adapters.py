@@ -4,7 +4,7 @@ Never change provider request arguments, inference results, retries, compaction
 decisions, or exceptions. The hook summary gains a numeric-only usage envelope. No on-disk Hermes core patches. Signature drift is reported.
 """
 from __future__ import annotations
-import functools, importlib, inspect, threading, time, uuid
+import contextvars, functools, importlib, inspect, threading, time, uuid
 from . import recorder as r
 from .accounting import mapping,normalize,safe_usage,num
 _LOCK=threading.RLock();_LAST=0
@@ -28,7 +28,9 @@ def install():
         _LAST=time.monotonic()
         specs=[('run_agent',lambda m:patch(m.AIAgent,'_usage_summary_for_api_request_hook',raw_wrapper,('self','response'))),
           ('openai._base_client',install_wire_probe),('agent.auxiliary_client',install_aux),('agent.conversation_compression',install_comp),
-          ('agent.context_compressor',install_micro),('agent.codex_runtime',install_codex_stream),('agent.anthropic_adapter',install_anthropic)]
+          ('agent.context_compressor',install_micro),('agent.codex_runtime',install_codex_stream),('agent.anthropic_adapter',install_anthropic),
+          ('agent.gemini_native_adapter',install_gemini),('agent.chat_completion_helpers',install_native_main),
+          ('agent.relay_llm',install_anthropic_accumulator)]
         for name,fn in specs:
             try:fn(importlib.import_module(name))
             except Exception as exc:r.ADAPTERS[name]='unavailable: '+type(exc).__name__
@@ -302,6 +304,110 @@ def anthropic_wrapper(original):
     return wrapped
 def install_anthropic(m):
     patch(m,'create_anthropic_message',anthropic_wrapper,('client','api_kwargs'))
+
+
+# A worker may not inherit CURRENT (and may retain a stale one). Resolve the
+# exact agent/request pair at the actual Hermes dispatch boundary instead.
+_ANTHROPIC_SCOPE: contextvars.ContextVar[dict | None]=contextvars.ContextVar('usage_anthropic_stream',default=None)
+
+def native_main_wrapper(original,anthropic=False,agent_argument=False):
+    @functools.wraps(original)
+    def wrapped(owner,*args,**kwargs):
+        agent=owner if agent_argument else getattr(owner,'agent',None)
+        resolved=r.agent_context(agent)
+        cur=dict(resolved) if resolved else None
+        token=r.CURRENT.set(cur)
+        # Main requests must not accidentally attach to inherited auxiliary state.
+        aux_token=r.AUX.set(None)
+        scope_token=_ANTHROPIC_SCOPE.set({'context':cur,'usage':{},'response':{}} if anthropic else None)
+        try:return original(owner,*args,**kwargs)
+        finally:
+            _ANTHROPIC_SCOPE.reset(scope_token)
+            r.AUX.reset(aux_token)
+            r.CURRENT.reset(token)
+    return wrapped
+
+def install_native_main(m):
+    cls=getattr(m,'_StreamingCall',None)
+    if cls is not None:
+        patch(cls,'_call_anthropic',lambda fn:native_main_wrapper(fn,anthropic=True),('self','request_client'))
+        patch(cls,'_call_chat_completions',native_main_wrapper,('self','stream_attempt_id'))
+    patch(m,'_dispatch_nonstreaming_api_request',lambda fn:native_main_wrapper(fn,agent_argument=True),('agent','api_kwargs','make_client'))
+
+
+@r.safe
+def capture_gemini_usage(usage_meta):
+    if safe_usage(usage_meta):
+        capture_native_response({'usage':usage_meta},'native_gemini_usage')
+        return
+    # Even wholly absent metadata is evidence that the converter's zeroes were
+    # not reported. Retain unknowns at native priority; do not claim usage arrived.
+    item=r.AUX.get()
+    cur=r.CURRENT.get()
+    if item:
+        root,rec=item
+    elif cur:
+        root,rec=cur['root'],cur
+    else:return
+    usage=normalize()
+    usage.update(usage_source='native_gemini_usage',raw_usage={})
+    r.store(root).request({'id':rec['id'],'usage':usage},'native_usage_absent')
+
+
+def gemini_usage_wrapper(original):
+    @functools.wraps(original)
+    def wrapped(usage_meta,*args,**kwargs):
+        # BEFORE Gemini's OpenAI conversion inserts zero cache/total fields and
+        # drops thoughtsTokenCount. Never alter the conversion or its result.
+        capture_gemini_usage(usage_meta)
+        return original(usage_meta,*args,**kwargs)
+    return wrapped
+
+def install_gemini(m):
+    patch(m,'_usage_from_metadata',gemini_usage_wrapper,('usage_meta',))
+
+
+def native_mapping(value):
+    # SDK defaults are not provider reports. In particular an output-only delta
+    # must not overwrite input/cache evidence with model default zeroes.
+    if hasattr(value,'model_dump'):
+        return value.model_dump(exclude_none=True,exclude_unset=True)
+    return mapping(value)
+
+@r.safe
+def observe_anthropic_usage(event):
+    scope=_ANTHROPIC_SCOPE.get()
+    if not scope or not scope['context']:return
+    payload=native_mapping(event)
+    kind=payload.get('type')
+    if kind=='message_start':
+        message=native_mapping(payload.get('message'))
+        scope['usage']={}
+        scope['response']={k:message[k] for k in ('id','model') if isinstance(message.get(k),str)}
+        raw=safe_usage(native_mapping(message.get('usage')))
+    elif kind=='message_delta':
+        raw=safe_usage(native_mapping(payload.get('usage')))
+    else:return
+    if not raw:return
+    # Anthropic reports cumulative snapshots, NOT additive deltas. Retain the
+    # start's cache categories when a later event only reports output_tokens.
+    scope['usage'].update(raw)
+    # The existing native evidence priority protects these reported snapshots
+    # from later lossy assembled usage. This does NOT mark a request completed;
+    # an interrupted stream retains the last provider-reported snapshot only.
+    r.capture_raw({**scope['response'],'usage':dict(scope['usage'])},
+                  source='native_anthropic_stream_usage',context=scope['context'])
+
+def anthropic_observe_wrapper(original):
+    @functools.wraps(original)
+    def wrapped(self,event,*args,**kwargs):
+        observe_anthropic_usage(event)
+        return original(self,event,*args,**kwargs)
+    return wrapped
+
+def install_anthropic_accumulator(m):
+    cls=getattr(m,'AnthropicStreamAccumulator',None)
+    if cls is not None:patch(cls,'observe',anthropic_observe_wrapper,('self','event'))
 
 
 def codex_run_wrapper(original):

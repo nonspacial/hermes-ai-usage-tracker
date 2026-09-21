@@ -8,10 +8,13 @@ RAW_KEYS = {'input_tokens','output_tokens','prompt_tokens','completion_tokens','
     'cache_read_input_tokens','cache_creation_input_tokens','prompt_cache_hit_tokens',
     'prompt_cache_miss_tokens','cached_tokens','cache_write_tokens','cache_creation_tokens',
     'reasoning_tokens','input_tokens_details','output_tokens_details','prompt_tokens_details',
-    'completion_tokens_details','cache_creation','ephemeral_5m_input_tokens','ephemeral_1h_input_tokens'}
+    'completion_tokens_details','cache_creation','ephemeral_5m_input_tokens','ephemeral_1h_input_tokens',
+    'promptTokenCount','candidatesTokenCount','totalTokenCount','cachedContentTokenCount','thoughtsTokenCount'}
 
 def usage_priority(source):
-    return {'wire_terminal_usage':100,'native_terminal_usage':80,'native_assembled_usage':20,'hermes_normalized':0,'missing':0,None:0}.get(source,10)
+    return {'wire_terminal_usage':100,'native_terminal_usage':80,'native_gemini_usage':80,
+            'native_anthropic_stream_usage':80,'native_assembled_usage':20,
+            'hermes_normalized':0,'missing':0,None:0}.get(source,10)
 
 def mapping(value: Any) -> dict:
     if isinstance(value, dict): return value
@@ -71,16 +74,20 @@ def normalize(raw=None, canonical=None, provider='', api_mode=''):
                 'normalization_version':2}
     d = u.get('input_tokens_details',u.get('prompt_tokens_details',{}))
     o = u.get('output_tokens_details',u.get('completion_tokens_details',{}))
-    rd = first(d.get('cached_tokens'),u.get('cache_read_input_tokens'),u.get('prompt_cache_hit_tokens'),u.get('cached_tokens'))
-    wr = first(d.get('cache_write_tokens'),d.get('cache_creation_tokens'),u.get('cache_creation_input_tokens'),u.get('cache_write_tokens'),u.get('cache_creation_tokens'))
-    out = first(u.get('output_tokens'),u.get('completion_tokens'))
-    reason = first(o.get('reasoning_tokens'),u.get('reasoning_tokens'))
-    inp = first(u.get('input_tokens'),u.get('prompt_tokens'))
+    rd = first(d.get('cached_tokens'),u.get('cache_read_input_tokens'),u.get('prompt_cache_hit_tokens'),u.get('cached_tokens'),u.get('cachedContentTokenCount'))
+    wr = first(d.get('cache_write_tokens'),d.get('cache_creation_tokens'),d.get('cache_creation_input_tokens'),u.get('cache_creation_input_tokens'),u.get('cache_write_tokens'),u.get('cache_creation_tokens'))
+    out = first(u.get('output_tokens'),u.get('completion_tokens'),u.get('candidatesTokenCount'))
+    reason = first(o.get('reasoning_tokens'),u.get('reasoning_tokens'),u.get('thoughtsTokenCount'))
+    inp = first(u.get('input_tokens'),u.get('prompt_tokens'),u.get('promptTokenCount'))
+    gemini = any(k in u for k in ('promptTokenCount','candidatesTokenCount','totalTokenCount','thoughtsTokenCount'))
+    if gemini and out is not None and reason is not None:
+        # Native candidate counts exclude thinking; output includes it once.
+        out += reason
     warnings=[]
     # Explicit Anthropic cache keys establish exclusive input semantics, including
     # Anthropic-native shapes returned through aggregators. Generic prompt_tokens
     # is inclusive; never guess exclusive just from the model name.
-    anth = 'input_tokens' in u and ('cache_read_input_tokens' in u or 'cache_creation_input_tokens' in u or api_mode == 'anthropic')
+    anth = 'input_tokens' in u and ('cache_read_input_tokens' in u or 'cache_creation_input_tokens' in u or api_mode in ('anthropic','anthropic_messages'))
     if anth:
         base=inp
         prompt=(inp+rd+wr) if inp is not None and rd is not None and wr is not None else None
@@ -93,13 +100,16 @@ def normalize(raw=None, canonical=None, provider='', api_mode=''):
             base=None; warnings.append('cache_components_exceed_input')
         if rd is None or wr is None: warnings.append('cache_breakdown_incomplete')
     total=prompt+out if prompt is not None and out is not None else None
-    if 'total_tokens' in u and total is not None and u['total_tokens']!=total:
+    reported_total = first(u.get('total_tokens'),u.get('totalTokenCount'))
+    if reported_total is not None and total is not None and reported_total!=total:
         warnings.append('provider_total_differs_from_input_plus_output')
+    if reported_total is not None:
+        total = reported_total
     if reason is not None and out is not None and reason>out: warnings.append('reasoning_exceeds_output')
     return dict(input_tokens=base,output_tokens=out,cache_read_tokens=rd,cache_write_tokens=wr,
                 reasoning_tokens=reason,prompt_tokens=prompt,total_tokens=total,request_count=1,
                 raw_usage=u,usage_source='response_usage',warnings=warnings,normalization_version=2,
-                field_provenance={k:('missing' if v is None else 'derived_from_response' if k in ('input_tokens','prompt_tokens','total_tokens') else 'response_field') for k,v in dict(input_tokens=base,prompt_tokens=prompt,total_tokens=total,output_tokens=out,cache_read_tokens=rd,cache_write_tokens=wr,reasoning_tokens=reason).items()})
+                field_provenance={k:('missing' if v is None else 'response_field' if k=='total_tokens' and reported_total is not None else 'derived_from_response' if k in ('input_tokens','prompt_tokens','total_tokens') or (k=='output_tokens' and gemini and reason is not None) else 'response_field') for k,v in dict(input_tokens=base,prompt_tokens=prompt,total_tokens=total,output_tokens=out,cache_read_tokens=rd,cache_write_tokens=wr,reasoning_tokens=reason).items()})
 
 def decimal_value(value):
     if value is None or value == '': return None
