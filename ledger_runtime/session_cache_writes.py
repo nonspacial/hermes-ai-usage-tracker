@@ -9,6 +9,7 @@ separate. Restarting a process or changing the service tier does not reset it.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from typing import Iterable
 
@@ -105,6 +106,32 @@ def _sequence_rows(c, sid, end):
         d['usage'] = dict(cache_read_tokens=d.pop('reads'), cache_write_tokens=d.pop('writes'),
                           request_count=d.pop('request_count') or 1)
         yield d
+
+
+def materialise_summary(c, sql):
+    """Extract aggregate inputs once per snapshot, not once per rollup.
+
+    Keep SQLite's JSON scalar types (including NULL and decimal strings); never
+    round costs through REAL. Only selected rows have projected accounting, and
+    the original full-ledger view remains available for predecessor lookups.
+    """
+    if not c.execute("SELECT 1 FROM sqlite_temp_master WHERE name='session_write_projection'").fetchone():
+        return sql
+    expressions = dict.fromkeys(re.findall(r"json_extract\(data,'[^']+'\)", sql))
+    fields = {expr: 'summary_value_' + str(i) for i, expr in enumerate(expressions)}
+    c.execute('CREATE TEMP TABLE read_summary_values AS SELECT id,' +
+              ','.join(expr + ' AS ' + name for expr, name in fields.items()) +
+              ' FROM session_write_projection')
+    c.execute('CREATE UNIQUE INDEX temp.read_summary_id ON read_summary_values(id)')
+    c.execute('DROP VIEW temp.requests')
+    c.execute('CREATE TEMP VIEW requests AS SELECT r.id,r.started,r.ended,r.provider,r.model,'
+              'r.session_id,r.task,r.compression_id,r.status,COALESCE(p.data,r.data) AS data,' +
+              ','.join('v.' + name for name in fields.values()) +
+              ' FROM main.requests r LEFT JOIN session_write_projection p ON p.id=r.id'
+              ' LEFT JOIN read_summary_values v ON v.id=r.id')
+    for expr, name in fields.items():
+        sql = sql.replace(expr, name)
+    return sql
 
 
 def project(c, where, params, end):

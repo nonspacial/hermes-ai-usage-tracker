@@ -194,16 +194,18 @@ class Store:
             legacy_read_view(c,where,params)
             from .session_cache_writes import project as project_session_writes
             project_session_writes(c,where,params,end)
-            total=sql_summary(c,where,params)
-            applied_rates=sql_applied_rate_groups(c,where,params)
+            from .session_cache_writes import materialise_summary
+            summary_sql=materialise_summary(c,SUMMARY_SQL)
+            total=sql_summary(c,where,params,summary_sql)
+            applied_rates=sql_applied_rate_groups(c,where,params,summary_sql)
             rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+where+' ORDER BY started DESC LIMIT ? OFFSET ?',params+[limit,offset])]
             from .cache_progression import query_progression
             read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
-            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
-            provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
-            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+SUMMARY_SQL+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model) ORDER BY MAX(started) DESC,provider,model",params)]
-            trend=sql_trend(c,where,params,start,end)
-            attribution=attribution_groups(c,where,params)
+            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
+            provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
+            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model) ORDER BY MAX(started) DESC,provider,model",params)]
+            trend=sql_trend(c,where,params,start,end,summary_sql)
+            attribution=attribution_groups(c,where,params,summary_sql)
             from .pricing import catalog_status
             catalogs=catalog_status(c,provider)
             for row in rows:
@@ -317,11 +319,11 @@ def summary_from_sql(row):
         out[group]={k:row[prefix+k] for k in fields}
     out['cache_hit_rate']=out['known']['cache_read_tokens']/out['known']['prompt_tokens'] if out['known']['prompt_tokens'] and not out['missing_fields']['cache_read_tokens'] and not out['missing_fields']['prompt_tokens'] else None
     return out
-def sql_summary(c,where,params):
-    return summary_from_sql(c.execute('SELECT '+SUMMARY_SQL+' FROM requests WHERE '+where,params).fetchone())
+def sql_summary(c,where,params,summary_sql=SUMMARY_SQL):
+    return summary_from_sql(c.execute('SELECT '+summary_sql+' FROM requests WHERE '+where,params).fetchone())
 
 
-def sql_trend(c,where,params,start,end):
+def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL):
     """Aggregate the complete filtered ledger, not the paginated request table.
 
     UTC calendar buckets clipped to the selected bounds. A bucket with attempts
@@ -334,34 +336,34 @@ def sql_trend(c,where,params,start,end):
     if (end-start)/step>400:step=86400*max(1,int((end-start)/86400/400)+1)
     lo=int(start//step)*step
     rows={int(row['bucket']):summary_from_sql(row) for row in c.execute(
-      'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
+      'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
     blank=summary([])
     buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank)) for t in range(lo,int(end)+1,step) if t<end]
     return {'unit':'hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'),'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
-def attribution_groups(c,where,params):
+def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL):
     """Complete filtered-set rollups; a child is a subset, never an extra total."""
     role="COALESCE(json_extract(data,'$.agent_kind'),'unknown')"
     project="COALESCE(json_extract(data,'$.project_id'),'unattributed')"
     root="COALESCE(NULLIF(json_extract(data,'$.root_session_id'),''),NULLIF(session_id,''),'unattributed')"
     child="COALESCE(NULLIF(json_extract(data,'$.subagent_id'),''),NULLIF(session_id,''),'unattributed')"
-    subs=sql_summary(c,where+" AND "+role+"='subagent'",params)
+    subs=sql_summary(c,where+" AND "+role+"='subagent'",params,summary_sql)
     subs['agents']=c.execute('SELECT COUNT(DISTINCT '+child+') FROM requests WHERE '+where+" AND "+role+"='subagent'",params).fetchone()[0]
-    roles=[dict(agent_kind=r['key'],**summary_from_sql(r)) for r in c.execute('SELECT '+role+' AS key,'+SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY '+role,params)]
+    roles=[dict(agent_kind=r['key'],**summary_from_sql(r)) for r in c.execute('SELECT '+role+' AS key,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY '+role,params)]
     extra=",COALESCE(SUM(CASE WHEN "+role+"='subagent' THEN json_extract(data,'$.usage.total_tokens') ELSE 0 END),0) AS subagent_tokens,COUNT(DISTINCT CASE WHEN "+role+"='subagent' THEN "+child+" END) AS subagents"
     configs=[('project_groups',project,",MAX(json_extract(data,'$.project_label')) AS label,MAX(json_extract(data,'$.project_path')) AS path,MAX(json_extract(data,'$.project_source')) AS basis",''),
       ('session_groups',root,",MAX(json_extract(data,'$.project_label')) AS project_label",''),
       ('subagent_groups',child,",MIN(session_id) AS session_id,MAX(json_extract(data,'$.parent_session_id')) AS parent_session_id,MAX(json_extract(data,'$.root_session_id')) AS root_session_id,MAX(json_extract(data,'$.agent_role')) AS agent_role,MAX(json_extract(data,'$.project_label')) AS project_label", " AND "+role+"='subagent'")]
     out={'subagent_summary':subs,'agent_groups':roles}
     for name,expr,more,condition in configs:
-        rows=c.execute('SELECT '+expr+' AS key'+more+extra+','+SUMMARY_SQL+' FROM requests WHERE '+where+condition+' GROUP BY '+expr+' ORDER BY MAX(started) DESC,key',params)
+        rows=c.execute('SELECT '+expr+' AS key'+more+extra+','+summary_sql+' FROM requests WHERE '+where+condition+' GROUP BY '+expr+' ORDER BY MAX(started) DESC,key',params)
         out[name]=[dict(**{k:r[k] for k in r.keys() if k in ('key','label','path','basis','project_label','session_id','parent_session_id','root_session_id','agent_role','subagent_tokens','subagents')},**summary_from_sql(r)) for r in rows]
     out['project_options']=[dict(id=r[0],label=r[1] or 'Unattributed project',path=r[2],basis=r[3]) for r in c.execute('SELECT '+project+",MAX(json_extract(data,'$.project_label')),MAX(json_extract(data,'$.project_path')),MAX(json_extract(data,'$.project_source')) FROM requests GROUP BY "+project)]
     return out
 
 
-def sql_applied_rate_groups(c,where,params):
+def sql_applied_rate_groups(c,where,params,summary_sql=SUMMARY_SQL):
     """Actual saved rate snapshots used by the complete filtered request set.
 
     Never read the current catalogue or infer prices from the model name here.
@@ -373,7 +375,7 @@ def sql_applied_rate_groups(c,where,params):
     tier="COALESCE(NULLIF(json_extract(data,'$.cost.rate.service_tier'),''),NULLIF(json_extract(data,'$.returned_service_tier'),''),NULLIF(json_extract(data,'$.service_tier'),''),'unspecified')"
     rate="json_extract(data,'$.cost.rate')"
     sql=('SELECT provider,'+model+' AS actual_model,'+tier+' AS applied_tier,'+rate+' AS saved_rate,'
-         +SUMMARY_SQL+' FROM requests WHERE '+where+' GROUP BY provider,'+model+','+tier+','+rate
+         +summary_sql+' FROM requests WHERE '+where+' GROUP BY provider,'+model+','+tier+','+rate
          +' ORDER BY MAX(started) DESC,provider,actual_model,applied_tier,saved_rate')
     result=[]
     for row in c.execute(sql,params):

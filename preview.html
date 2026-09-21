@@ -1545,6 +1545,12 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
 // The SDK socket has reconnect/backoff built in. REST stays available on OAuth
 // remotes, where the SDK socket is a no-op. This never restarts a gateway.
 const CONNECTION_QUERY_OPTIONS={retry:3,retryDelay:attempt=>Math.min(1000*2**attempt,30000),refetchInterval:15000,refetchIntervalInBackground:true,refetchOnReconnect:true};
+const pendingLedgerReads=new Map();
+function sharedLedgerRead(path,options){
+ const existing=pendingLedgerReads.get(path);if(existing)return existing;
+ const pending=Promise.resolve().then(()=>rest(path,options)).finally(()=>{if(pendingLedgerReads.get(path)===pending)pendingLedgerReads.delete(path)});
+ pendingLedgerReads.set(path,pending);return pending;
+}
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
  return h('details',{className:'au-refresh-menu',onKeyDown:event=>{if(event.key==='Escape'){event.currentTarget.removeAttribute('open');event.currentTarget.querySelector('summary').focus()}}},
@@ -1564,7 +1570,7 @@ function useRecorderHealth({profile,readScope,readPath,enabled}){
   const epoch=control.epoch,serial=++control.serial,view=readScope;control.latest[kind]=serial;
   const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial&&(kind!=='read'||control.view===view);
   const publish=value=>{if(current())(kind==='status'?setHealth:setReading)({scope:profile,epoch,view,received:Date.now(),...value})};
-  try{const data=await rest(path,{timeoutMs:kind==='status'?8000:15000});publish({ok:true,data});return data}
+  try{const data=await sharedLedgerRead(path,{timeoutMs:kind==='status'?8000:15000});publish({ok:true,data});return data}
   catch(error){publish({ok:false});throw error}
  }
  const status=()=>probe('status','/ledger/status?profile='+encodeURIComponent(profile));
@@ -1588,8 +1594,11 @@ function useRecorderHealth({profile,readScope,readPath,enabled}){
    if(!live||!['connected','heartbeat','changed'].includes(frame?.type))return;
    if(frame.mode)mode=frame.mode;
    update(mode==='native-events'?'connected':'limited',mode==='native-events'?'Live update subscription acknowledged.':'Server is using display-refresh fallback.');deadline(45000);
-   if(frame.type==='changed'||frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'ledger']});
-   if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]});
+   if(frame.type==='changed'||frame.type==='connected'){
+    queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
+    queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
+   }
+   if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]},{cancelRefetch:false});
   })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed; REST polling remains active.')}
   return()=>{live=false;clearTimeout(timer);if(typeof stop==='function')stop()};
  },[profile,enabled,connectionEpoch]);
@@ -1600,7 +1609,7 @@ function useRecorderHealth({profile,readScope,readPath,enabled}){
   const results=await Promise.allSettled([status(),enabled?read():Promise.resolve()]);
   if(!control.alive||control.scope!==profile||control.epoch!==epoch)return false;
   control.busy=false;setOperation({scope:profile,epoch,busy:false});
-  queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]});
+  queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
   return results.every(result=>result.status==='fulfilled');
  }
  const checked=health?.scope===profile&&health.epoch===control.epoch?health:null,readChecked=reading?.scope===profile&&reading.epoch===control.epoch&&reading.view===readScope?reading:null;
@@ -1646,7 +1655,7 @@ function SkillsUsageView({params,scope,onSession}){
  useEffect(()=>{setModel('');setSkill('');setOffset(0);setSnapshotId('')},[scope]);
  const p=new URLSearchParams(params);p.set('model',model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
  const path='/ledger/skills?'+p,key=path;
- const query=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await rest(path),_skillsScope:key})});
+ const query=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(path),_skillsScope:key})});
  const [retained]=useState(()=>({scope:null,data:null}));
  const stableScope=JSON.stringify([scope,model,skill,offset]);
  const fresh=query.data?._skillsScope===key?query.data:null;
