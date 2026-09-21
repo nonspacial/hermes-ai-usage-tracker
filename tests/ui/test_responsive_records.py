@@ -54,7 +54,12 @@ def run():
                     columns = table.locator('tbody tr').first.evaluate('(e) => getComputedStyle(e).gridTemplateColumns.split(" ").length')
                     assert columns == (3 if width >= 760 else 1 if width <= 400 else 2), (name, width, columns)
                     assert table.locator('tbody tr').first.locator('.au-field-label').all_text_contents() == table.locator('thead th').all_text_contents()
-                    expect(table.locator('tbody tr').first.locator('.au-field-label').first).to_be_visible()
+                    if name == 'Overview':
+                        expect(table.locator('tbody tr').first.locator('.au-field-label').first).to_be_visible()
+                    else:
+                        disclosure = table.locator('tbody tr').first.locator('.au-record-disclosure')
+                        expect(disclosure).to_be_visible()
+                        expect(disclosure).to_have_attribute('aria-expanded', 'false')
                     if name == 'Requests' and width == 850:
                         table.locator('tbody tr').first.screenshot(path=str(ART / 'responsive-request-850.png'))
             page.locator('.au-ledger').evaluate('(e) => e.style.width=""')

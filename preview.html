@@ -1165,6 +1165,14 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"] .au-json-details{min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-json-panel{width:100%;max-width:100%;min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-drill{max-width:100%}
+.au-ledger .au-record-disclosure{display:none}
+.au-ledger .au-table[data-layout="records"][data-accordions="true"]{max-height:65vh;overflow:auto;overflow-anchor:none}
+.au-ledger .au-table[data-layout="records"][data-accordions="true"] .au-record-disclosure{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;width:100%;border:0;background:transparent;text-align:left;padding:0;color:var(--ui-text-primary)}
+.au-record-identity{flex:1;min-width:100px;overflow-wrap:anywhere}
+.au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody .au-record-heading>.au-field-label,
+.au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody .au-record-heading>.au-field-value{display:none}
+.au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody tr[data-expanded="false"]>td:not(:first-child){display:none}
+.au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody tr[data-expanded="false"] .au-record-heading{padding-bottom:0;border-bottom:0}
 @container(min-width:760px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container(max-width:400px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:minmax(0,1fr)}}
 `
@@ -1176,18 +1184,28 @@ const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
 function notice(t){return h('div',{className:'au-notice'},t)}
 function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted'},note))}
-function ResponsiveTable({headers,rows,footer,rowKeys}){
+function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
+ const [expanded,setExpanded]=useState({});
  const [nodes]=useState(()=>({root:null}));
  useEffect(()=>{
   const root=nodes.root;if(!root)return;
   let frame=0,lastWidth=-1,disposed=false;
   function measure(){
    frame=0;if(disposed)return;
-   const top=root.scrollTop;
+   const top=root.scrollTop,focused=document.activeElement;
+   const focusedRow=focused?.closest('tbody tr');
+   if(focusedRow&&root.contains(focusedRow)&&!focused.classList.contains('au-record-disclosure')){
+    const key=focusedRow.dataset.rowId;
+    if(key!=null)setExpanded(old=>old[key]?old:{...old,[key]:true});
+   }
    // Measure the real table, not the stacked layout. Keep the same keyed nodes,
    // so resizing cannot discard an open JSON snapshot or keyboard focus.
    root.dataset.layout='table';
    root.dataset.layout=root.querySelector('table').scrollWidth>root.clientWidth+1?'records':'table';
+   if(root.dataset.layout==='table'&&root.contains(focused)&&focused.classList.contains('au-record-disclosure')){
+    focusedRow.tabIndex=-1;focusedRow.focus({preventScroll:true});
+    focusedRow.addEventListener('blur',()=>focusedRow.removeAttribute('tabindex'),{once:true});
+   }
    root.scrollTop=top;
   }
   function schedule(){if(!frame)frame=requestAnimationFrame(measure)}
@@ -1199,16 +1217,19 @@ function ResponsiveTable({headers,rows,footer,rowKeys}){
   document.fonts?.ready.then(()=>{if(!disposed)schedule()});
   return()=>{disposed=true;observer.disconnect();root.removeEventListener('toggle',schedule,true);cancelAnimationFrame(frame)};
  },[headers,rows,footer]);
- const cells=(row,total=false)=>row.map((value,i)=>h(total&&i===0?'th':'td',{
+ const cells=(row,total=false,entry=null,key=null)=>row.map((value,i)=>h(total&&i===0?'th':'td',{
   key:i,role:total&&i===0?'rowheader':'cell',...(total&&i===0?{scope:'row'}:{}),
   className:(i===0?'au-record-heading ':headers[i]==='Details'?'au-record-details ':'')+(value===''?'au-record-empty':'')
- },h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
- return h('div',{className:'au-table',ref:node=>{nodes.root=node}},h('table',{role:'table'},
+ },i===0&&entry?h('button',{type:'button',className:'au-record-disclosure','aria-expanded':!!expanded[key],onClick:()=>setExpanded(old=>({...old,[key]:!old[key]}))},
+  h('span',{'aria-hidden':true},expanded[key]?'▾':'▸'),h('span',{className:'au-record-identity'},entry.identity),
+  entry.started?h('span',{className:'au-muted'},when(entry.started)):null,h('strong',{},entry.value)):null,
+ h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
+ return h('div',{className:'au-table','data-accordions':!!accordions,tabIndex:accordions?0:undefined,'aria-label':accordions?'Expandable records':undefined,ref:node=>{nodes.root=node}},h('table',{role:'table'},
   h('thead',{role:'rowgroup'},h('tr',{role:'row'},...headers.map((v,i)=>h('th',{key:i,scope:'col',role:'columnheader'},v)))),
-  h('tbody',{role:'rowgroup'},...rows.map((row,i)=>h('tr',{role:'row',key:rowKeys?.[i]??i,'data-row-id':rowKeys?.[i]},...cells(row)))),
+  h('tbody',{role:'rowgroup'},...rows.map((row,i)=>{const key=rowKeys?.[i]??i;return h('tr',{role:'row',key,'data-row-id':rowKeys?.[i],'data-expanded':!!expanded[key]},...cells(row,false,accordions?.[i],key))})),
   footer?h('tfoot',{role:'rowgroup'},h('tr',{role:'row'},...cells(footer,true))):null));
 }
-function table(headers,rows,footer=null,rowKeys=null){return h(ResponsiveTable,{headers,rows,footer,rowKeys})}
+function table(headers,rows,footer=null,rowKeys=null,accordions=null){return h(ResponsiveTable,{headers,rows,footer,rowKeys,accordions})}
 function downloadFile(name,body,type='text/csv'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([body],{type}));a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function csvText(rows){if(!rows.length)return '';const keys=[...new Set(rows.flatMap(row=>Object.keys(row)))],cell=v=>'"'+String(typeof v==='object'&&v!==null?JSON.stringify(v):v??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';return [keys.map(cell).join(','),...rows.map(row=>keys.map(k=>cell(row[k])).join(','))].join('\r\n')}
 // The SDK clipboard is available in Desktop even when Web Clipboard is denied.
@@ -1398,7 +1419,8 @@ function RequestView({data,more,back,offset,onDrill,details}){
  const rows=(data.requests||[]).map(r=>{const u=r.usage||{};return [h('span',{title:when(r.started)},compactWhen(r.started)),r.provider,r.response_model||r.model,
   r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},r.session_id.slice(-18)):h('span',{},'Unattributed'),h('span',{title:'Parent: '+(r.parent_session_id||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},r.project_label||'—'),r.task,r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
-  table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id)),
+  table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
+   (data.requests||[]).map(r=>({identity:r.session_id||'Unattributed session',started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
  !rows.length?h('p',{className:'au-muted'},'No matching requests.'):null,
   h('div',{className:'au-toolbar'},offset>0?h('button',{onClick:back},'Previous requests'):null,data.next_offset!=null?h('button',{onClick:more},'Next requests'):null),
  h('p',{className:'au-muted'},`Showing ${data.requests.length?offset+1:0}–${offset+data.requests.length} of ${data.request_count} requests.`))
@@ -1417,7 +1439,8 @@ function CompressionView({data,mode,setMode,details}){
  return h('section',{'data-testid':'compression-events','aria-label':'Compression events'},
  h('div',{className:'au-toolbar'},h('select',{value:mode,onChange:e=>setMode(e.target.value),'aria-label':'Compression type'},...['all','compression','micro_compaction'].map(v=>h('option',{key:v,value:v},v.replaceAll('_',' ')))),
  h('button',{onClick:()=>downloadFile('compression-events.json',JSON.stringify(data.compressions,null,2),'application/json')},'Export compression JSON')),
- h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id))),
+ h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id),
+  visible.map(c=>({identity:c.session_id||c.session_after||'Unattributed session',started:c.started,value:c.next_request_prompt_tokens==null?'Next input unavailable':count(c.next_request_prompt_tokens)+' next-input tokens'})))),
  !rows.length?h('p',{className:'au-muted'},'No compression events in this window.'):null,
  data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null,
  h('div',{'data-testid':'compression-note'},notice('Before/after/threshold are Hermes context estimates. Next-call input is provider-reported when supplied and may include newly added tool or user content; it is not a pure measurement of compression savings. Auxiliary token/cost totals are already included in request totals.')))
@@ -1495,7 +1518,9 @@ function CacheView({data,profile,provider,refresh,onError}){
   h('section',{'data-testid':'published-rates','aria-label':'Applied rates and usage for the selected window',title:'Saved rates in USD per 1M tokens; usage and costs cover the full selected window'},
    applied==null?h('p',{className:'au-muted',role:'status'},'Restart the Hermes backend to load window-specific rates.'):
     table(['Provider','Exact model','Tier','Context','Requests','Uncached $ / 1M','Output $ / 1M','Read $ / 1M','Write $ / 1M','Processed tokens','Est. USD'],rows,
-     ['Total','','','',''+count(s.attempts),'','','','',viewTokens(s,'total_tokens',count),cacheAmount(s)]),
+     ['Total','','','',''+count(s.attempts),'','','','',viewTokens(s,'total_tokens',count),cacheAmount(s)],
+     (applied||[]).map(g=>JSON.stringify([g.provider,g.model,g.service_tier,g.rate])),
+     (applied||[]).map(g=>({identity:[g.provider,g.model,g.service_tier,rateContext(g.rate)].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'}))),
    applied?.length===0?h('p',{className:'au-muted'},'No recorded requests in this window.'):null),
   h('div',{className:'au-toolbar','data-testid':'price-refresh-controls',style:{justifyContent:'flex-end',marginTop:16}},
    catalogs.some(p=>p.status==='unavailable'||p.stale)?h('small',{className:'au-muted',role:'status'},'Some prices unavailable or stale'):null,
@@ -1840,7 +1865,9 @@ function UsagePage(){
    if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:()=>ledger.refetch(),onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data,mode:compMode,setMode:setCompMode,details:detailContext})
 
-   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',g.task,g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]))
+   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',g.task,g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
+    data.groups.map(g=>JSON.stringify([g.provider,g.model,g.agent_kind,g.task])),
+    data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,g.task].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
  if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
  return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,

@@ -109,6 +109,9 @@ def run():
   expect(current).to_have_attribute('open','')
   print('PASS tab/provider switching, restored inspector by ID, no stale provider rows shown')
   sub.get_by_role('tab',name='Compressions',exact=True).click()
+  disclosure=page.locator('.au-record-disclosure').first
+  page.clock.run_for(100)
+  if disclosure.is_visible():disclosure.click()
   comp=page.get_by_test_id('usage-details').first;comp.locator('summary').click();expect(comp).to_have_attribute('open','')
   comp.get_by_test_id('copy-json').click();data=json.loads(page.evaluate('window.demoClipboard'))
   assert data['kind'] in ('compression','micro_compaction')
