@@ -3,11 +3,10 @@
 Subscription quotas, request-level token accounting, cache analysis and skills/context history in Hermes Desktop.
 
 This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lvabarajithan/hermes-ai-usage-tracker). It started from the **2.0.0-test.17** ledger import and includes subsequent recording, performance and UI improvements. The original MIT licence and quota integrations are retained. This is a development fork, not an official Hermes release.
-
-<a href="docs/images/live-subscriptions.png"><img width="600" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
-
-<a href="docs/images/live-overview.png"><img width="400" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
-
+<p>
+    <a href="docs/images/live-subscriptions.png"><img width="600" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
+    <a href="docs/images/live-overview.png"><img width="400" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
+</p>
 [Features](#behaviour) · [Provider coverage](#provider-coverage) · [Installation](#installation-is-separate-from-source-changes) · [Development](#development-checks)
 
 ## Behaviour
