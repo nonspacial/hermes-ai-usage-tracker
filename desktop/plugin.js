@@ -1207,6 +1207,9 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
 const CONNECTION_QUERY_OPTIONS={retry:3,retryDelay:attempt=>Math.min(1000*2**attempt,30000),refetchInterval:15000,refetchIntervalInBackground:true,refetchOnReconnect:true};
 const pendingLedgerReads=new Map();
 function sharedLedgerRead(path,options,identity=path){
+ // Full-window analytics can exceed a minute; recorder probes stay short.
+ const route=path.split('?')[0];
+ if(route==='/ledger'||route==='/ledger/skills')options={timeoutMs:120000,...options};
  const existing=pendingLedgerReads.get(identity);if(existing)return existing;
  const pending=Promise.resolve().then(()=>scopedRead(path,options)).finally(()=>{if(pendingLedgerReads.get(identity)===pending)pendingLedgerReads.delete(identity)});
  pendingLedgerReads.set(identity,pending);return pending;
@@ -1230,7 +1233,7 @@ function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
   const epoch=control.epoch,serial=++control.serial,view=readScope;control.latest[kind]=serial;
   const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial&&(kind!=='read'||control.view===view);
   const publish=value=>{if(current())(kind==='status'?setHealth:setReading)({scope:profile,epoch,view,received:Date.now(),...value})};
-  try{const data=await sharedLedgerRead(path,{timeoutMs:kind==='status'?8000:15000},identity);publish({ok:true,data});return data}
+  try{const data=await sharedLedgerRead(path,kind==='status'?{timeoutMs:8000}:undefined,identity);publish({ok:true,data});return data}
   catch(error){publish({ok:false});throw error}
  }
  const status=()=>probe('status','/ledger/status?'+new URLSearchParams(scopeParams(profile)));
