@@ -197,7 +197,7 @@ def test_root_layout_installer_excludes_repository_and_private_files(tmp_path):
     home=tmp_path/'home';home.mkdir()
     _,entries=module.plan(home)
     source_paths={str(src.relative_to(ROOT)) for src,_ in entries}
-    assert {'plugin.yaml','__init__.py','bootstrap.py','desktop/plugin.js',
+    assert {'plugin.yaml','__init__.py','bootstrap.py','desktop/plugin.js','PROJECT_ATTRIBUTION.md',
             'dashboard/plugin_api.py','ledger_runtime/session_cache_writes.py'}<=source_paths
     assert all(not path.startswith(('.git/','.local-history/','tests/','.venv/','catalog/'))
                for path in source_paths)
