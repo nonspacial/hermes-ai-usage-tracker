@@ -174,10 +174,10 @@ class Store:
         with self.db() as c:row=c.execute('SELECT started,ended FROM tests WHERE id=?',(key,)).fetchone()
         if not row:raise ValueError('Unknown test marker.')
         return row['started'],row['ended']
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent=''):
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',*,trend_start=None):
         if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')
         if session_scope not in ('exact','family'):raise ValueError('Invalid session scope.')
-        end=end or time.time()
+        end=time.time() if end is None else end
         if start<0 or end<start: raise ValueError('Invalid time window.')
         where='started>=? AND started<?';params=[start,end]
         if provider: where+=' AND provider=?';params.append(provider)
@@ -200,13 +200,13 @@ class Store:
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)
             applied_rates=sql_applied_rate_groups(c,where,params,summary_sql)
-            rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+where+' ORDER BY started DESC LIMIT ? OFFSET ?',params+[limit,offset])]
+            rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ? OFFSET ?',params+[limit,offset])]
             from .cache_progression import query_progression
             read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
             groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
             provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
             model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model) ORDER BY MAX(started) DESC,provider,model",params)]
-            trend=sql_trend(c,where,params,start,end,summary_sql)
+            trend=sql_trend(c,where,params,start,end,summary_sql,trend_start=trend_start)
             attribution=attribution_groups(c,where,params,summary_sql)
             from .pricing import catalog_status
             catalogs=catalog_status(c,provider)
@@ -214,14 +214,14 @@ class Store:
                 if row['id'] in read_changes:row['cache_read_change']=read_changes[row['id']]
             compwhere=where.replace('requests.data','compressions.data')
             compression_count=c.execute('SELECT COUNT(*) FROM compressions WHERE '+compwhere,params).fetchone()[0]
-            comps=[json.loads(r[0]) for r in c.execute('SELECT data FROM compressions WHERE '+compwhere+' ORDER BY started DESC LIMIT 1000',params)]
+            comps=[json.loads(r[0]) for r in c.execute('SELECT data FROM compressions WHERE '+compwhere+' ORDER BY started DESC,id DESC LIMIT 1000',params)]
             # Compression bill is derived from its linked requests, never counted twice.
             for comp in comps:
                 aux=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE compression_id=?',(comp['id'],))]
                 comp['auxiliary']=summary(aux);comp['aux_request_ids']=[r['id'] for r in aux]
             health=[dict(process=r['process'],updated=r['updated'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM health ORDER BY updated DESC')]
-            rates=[dict(id=r['id'],created=r['created'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM rates ORDER BY id DESC LIMIT 500')]
-            tests=[json.loads(r[0]) for r in c.execute('SELECT data FROM tests ORDER BY started DESC LIMIT 100')]
+            rates=[dict(id=r['id'],created=r['created'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM rates ORDER BY created DESC,id DESC LIMIT 500')]
+            tests=[json.loads(r[0]) for r in c.execute('SELECT data FROM tests ORDER BY started DESC,id DESC LIMIT 100')]
             providers=[r[0] for r in c.execute('SELECT DISTINCT provider FROM requests ORDER BY provider')]
             seq=c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
             quota=[dict(ts=r['ts'],**json.loads(r['data'])) for r in c.execute('SELECT ts,data FROM quota WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 200',(start,end))]
@@ -325,13 +325,15 @@ def sql_summary(c,where,params,summary_sql=SUMMARY_SQL):
     return summary_from_sql(c.execute('SELECT '+summary_sql+' FROM requests WHERE '+where,params).fetchone())
 
 
-def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL):
+def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=None):
     """Aggregate the complete filtered ledger, not the paginated request table.
 
     UTC calendar buckets clipped to the selected bounds. A bucket with attempts
     but no measured value remains unknown in the UI, not a zero-consumption claim.
     """
-    if start==0:
+    if trend_start is not None:
+        start=trend_start
+    elif start==0:
         first=c.execute('SELECT MIN(started) FROM requests WHERE '+where,params).fetchone()[0]
         start=first if first is not None else max(0,end-86400)
     step=3600 if end-start<=172800 else 86400

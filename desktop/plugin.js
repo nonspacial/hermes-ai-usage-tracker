@@ -55,6 +55,42 @@ const $hidden = atom([])
 // "whatever this backend runs as".
 const PROFILE_KEY = 'selected-profile-v1'
 const $profile = atom('')
+// A tagged scope cannot collide with a real profile named "all" (or any name).
+const ALL_PROFILES = Object.freeze({profile_scope:'all'})
+const PROFILE_SCOPE_KEY = 'selected-profile-scope-v1'
+const isAllProfiles = value => value?.profile_scope === 'all'
+const scopeParams = value => isAllProfiles(value) ? {profile_scope:'all'} : {profile:value||''}
+const pickerValue = value => isAllProfiles(value) ? 'scope:all' : 'profile:'+value
+let discoveredProfiles = null
+async function scopedRead(path,options){
+ const aggregate=new URLSearchParams(path.split('?')[1]).get('profile_scope')==='all';
+ // Older routes can silently ignore unknown query parameters. Discover support
+ // before sending an aggregate request, especially to the quota-probing route.
+ if(aggregate){
+  const inventory=discoveredProfiles||await sharedLedgerRead('/ledger/profiles');
+  if(!inventory?.scope_options?.some(v=>v.profile_scope==='all'))throw new Error('All profiles requires a user-managed backend restart.');
+ }
+ const data=await rest(path,options);
+ if(path==='/ledger/profiles')discoveredProfiles=data;
+ if(aggregate&&(data?.profile_scope!=='all'||data?.read_only!==true))throw new Error('All profiles is not supported by this backend response. A user-managed backend restart is required.');
+ return data;
+}
+const originalId = (row,key) => row?.original_ids?.[key] ?? row?.[key]
+const provenance = row => row?.profile ? ' · '+row.profile : ''
+const readable = (row,key) => String(originalId(row,key) ?? '—')+provenance(row)
+const AGGREGATE_QUERY_OPTIONS = {retry:false,refetchInterval:60000,refetchIntervalInBackground:false,refetchOnWindowFocus:false,refetchOnReconnect:false}
+function readOptions(scope){return isAllProfiles(scope)?AGGREGATE_QUERY_OPTIONS:CONNECTION_QUERY_OPTIONS}
+function rollingPath(path,seconds){
+ if(!seconds)return path;
+ const [route,search]=path.split('?'),p=new URLSearchParams(search);
+ p.set('start',String(Math.max(0,Date.now()/1000-seconds)));return route+'?'+p;
+}
+function Coverage({data}){
+ const c=data?.coverage;if(data?.profile_scope!=='all'||!c)return null;
+ return h('div',{className:'au-muted',role:'status','data-testid':'profile-coverage',title:c.note},
+  'Profile coverage: '+c.status+' · '+count(c.read_profiles)+' / '+count(c.selected_profiles)+' readable',
+  h('details',{},h('summary',{},'Coverage details'),h('div',{},c.note),...(c.profiles||[]).map(p=>h('div',{key:p.profile_id},p.name+': '+p.status+(p.reason?' · '+p.reason:'')))));
+}
 
 // Which provider the status-bar chip watches. Empty = AUTO: the worst remaining
 // window across every visible provider (the historical default). A provider id
@@ -96,10 +132,11 @@ function unhideAll() {
 }
 
 function selectProfile(name) {
-  const value = String(name || '')
+  const value = isAllProfiles(name) ? ALL_PROFILES : String(name || '')
   $profile.set(value)
   try {
-    storage?.set(PROFILE_KEY, value)
+    storage?.set(PROFILE_SCOPE_KEY, isAllProfiles(value) ? 'all' : 'selected')
+    if (!isAllProfiles(value)) storage?.set(PROFILE_KEY, value)
   } catch {
     /* in-memory selection still works for this session */
   }
@@ -154,7 +191,7 @@ function statusOf(provider) {
 
 function profileLabel(row) {
   if (!row) return 'profile'
-  return `${row.name}${row.is_default ? ' · default' : ''}${row.gateway_running ? ' · up' : ''}`
+  return `${row.name || 'Server profile'}${row.is_default ? ' · default' : ''}${row.gateway_running ? ' · up' : ''}`
 }
 
 /** Worst (lowest) remaining percent across visible providers' windows — drives the chip. */
@@ -192,7 +229,8 @@ function worstRemaining(payload, hiddenIds) {
 
 function usagePath(profile, refresh) {
   const params = []
-  if (profile) params.push(`profile=${encodeURIComponent(profile)}`)
+  if (isAllProfiles(profile)) params.push('profile_scope=all')
+  else if (profile) params.push(`profile=${encodeURIComponent(profile)}`)
   if (refresh) params.push('refresh=1')
   return params.length ? `/usage?${params.join('&')}` : '/usage'
 }
@@ -203,15 +241,16 @@ function useUsage(profile, intervalMs) {
     queryFn: () => {
       const refresh = pendingRefresh
       pendingRefresh = false
-      return rest(usagePath(profile, refresh))
+      return scopedRead(usagePath(profile, refresh))
     },
     refetchInterval: intervalMs,
+    ...(isAllProfiles(profile) ? AGGREGATE_QUERY_OPTIONS : {}),
     refetchOnMount: 'always',
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: !isAllProfiles(profile),
     staleTime: 30_000,
-    retry: 1,
-    // Switching profile must never blank the page or drop the picker.
-    placeholderData: previous => previous
+    retry: isAllProfiles(profile) ? false : 1,
+    // Discovery owns the picker; never carry quota across profile identities.
+    placeholderData: undefined
   })
 }
 
@@ -316,10 +355,10 @@ function ProviderCard({ provider, isHidden }) {
 }
 
 function ProfilePicker({ profiles, value, onSelect }) {
-  if (!profiles.length) return null
+  if(!isAllProfiles(value)&&!profiles.some(p=>p.name===(value||'')))profiles=[...profiles,{name:value||'',is_server:true}];
   return jsxs(Select, {
-    value: value || undefined,
-    onValueChange: onSelect,
+    value: pickerValue(value || ''),
+    onValueChange: next => onSelect(next === 'scope:all' ? ALL_PROFILES : next.slice('profile:'.length)),
     children: [
       jsx(SelectTrigger, {
         className: 'h-6 w-44 text-[0.6875rem]',
@@ -327,7 +366,8 @@ function ProfilePicker({ profiles, value, onSelect }) {
         children: jsx(SelectValue, { placeholder: 'profile…' })
       }),
       jsx(SelectContent, {
-        children: profiles.map(row => jsx(SelectItem, { value: row.name, children: profileLabel(row) }, row.name))
+        children: [jsx(SelectItem, {value:'scope:all',children:'All profiles'}, 'scope:all'),
+          ...profiles.map(row => jsx(SelectItem, { value: 'profile:'+row.name, children: profileLabel(row) }, row.name))]
       })
     ]
   })
@@ -915,6 +955,7 @@ function missingFieldNote(summary,key){
 }
 function Summary({data,label,mode,agent,onSubagents}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
+ if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
  const t=key=>data?viewTokens(s,key):'—';const note=key=>missingFieldNote(s,key);
  const groups=data?.provider_groups||[];
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
@@ -952,9 +993,10 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
  function name(g){
   if(group==='model')return h('div',{},g.model,h('div',{className:'au-muted'},uiNames[g.provider]||g.provider));
   if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(timeName==='Hour'?{hour:'numeric'}:{})});
-  const label=group==='project'?(g.label||'Unattributed project'):g.key;
-  return h('button',{className:'au-drill',title:g.path||g.key,onClick:()=>onDrill(group,g)},label,
-   group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(g.parent_session_id||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('named_project')?'Named project':g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
+  const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
+  const drillable=nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
+  return h(drillable?'button':'span',{className:'au-drill',title:g.path||g.key,...(drillable?{onClick:()=>onDrill(group,g)}:{})},label,
+   group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(originalId(g,'parent_session_id')||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('named_project')?'Named project':g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
  }
  const detail=group==='project'||group==='session'||group==='subagent';
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
@@ -970,21 +1012,22 @@ const EMPTY_REQUEST_FILTERS={agent:'',project:'',session:'',sessionScope:'family
 function requestPageKey(context,filters){
  return JSON.stringify([context,filters.agent,filters.project,filters.session,filters.sessionScope,filters.subagentId]);
 }
-function nextDrillFilters(current,kind,key){
+function nextDrillFilters(current,kind,row){
+ const key=row?.key;
  if(!key||!['project','session','subagent'].includes(kind))return null;
  if(kind==='project')return {...current,project:key,session:'',subagentId:''};
- if(kind==='session')return key==='unattributed'?null:{...current,session:key,sessionScope:'family',subagentId:''};
+ if(kind==='session')return originalId(row,'key')==='unattributed'?null:{...current,session:key,sessionScope:'family',subagentId:''};
  return {...current,subagentId:key,session:'',agent:'subagent'};
 }
-function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove}){
+function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,identityLabels}){
  const {agent,project,session,sessionScope,subagentId}=filters;
  if(!history.length&&!agent&&!project&&!session&&!subagentId)return null;
  const chips=[];
  const chip=(field,label,value)=>chips.push(h('button',{key:field,type:'button',className:'au-scope-chip',title:value,'aria-label':'Remove '+field+' filter',onClick:()=>onRemove(field)},h('span',{},label),h('span',{'aria-hidden':true},'×')));
- if(project){const match=(projects||[]).find(p=>p.id===project);chip('project','Project: '+(match?.label||project),match?.path||project)}
+ if(project){const match=(projects||[]).find(p=>p.id===project);chip('project','Project: '+(match?.label||project)+provenance(match),match?.path||project)}
  if(agent)chip('agent',({primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed agents'})[agent]||agent,agent);
- if(session)chip('session','Session: '+session+(sessionScope==='family'?' + descendants':''),session);
- if(subagentId)chip('subagent','Subagent: '+subagentId,subagentId);
+ if(session)chip('session','Session: '+(identityLabels?.get(session)||session)+(sessionScope==='family'?' + descendants':''),session);
+ if(subagentId)chip('subagent','Subagent: '+(identityLabels?.get(subagentId)||subagentId),subagentId);
  const previous=history[history.length-1];
  return h('nav',{className:'au-request-navigation','aria-label':'Request list navigation','data-testid':'request-navigation'},
   chips.length?h('div',{className:'au-active-scopes',role:'group','aria-label':'Active request filters'},...chips):null,
@@ -997,10 +1040,10 @@ function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove})
 
 function RequestView({data,more,back,offset,onDrill,details}){
  const rows=(data.requests||[]).map(r=>{const u=r.usage||{};return [h('span',{title:when(r.started)},compactWhen(r.started)),r.provider,r.response_model||r.model,
-  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},r.session_id.slice(-18)):h('span',{},'Unattributed'),h('span',{title:'Parent: '+(r.parent_session_id||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},r.project_label||'—'),r.task,r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
+  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
   table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
-   (data.requests||[]).map(r=>({identity:r.session_id||'Unattributed session',started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
+   (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
  !rows.length?h('p',{className:'au-muted'},'No matching requests.'):null,
   h('div',{className:'au-toolbar'},offset>0?h('button',{onClick:back},'Previous requests'):null,data.next_offset!=null?h('button',{onClick:more},'Next requests'):null),
  h('p',{className:'au-muted'},`Showing ${data.requests.length?offset+1:0}–${offset+data.requests.length} of ${data.request_count} requests.`))
@@ -1010,17 +1053,17 @@ function CompressionView({data,mode,setMode,details}){
  const visible=(data.compressions||[]).filter(c=>mode==='all'||c.kind===mode);
  const rows=visible.map(c=>{
   const before=c.before_estimated_tokens,limit=c.context_limit,pc=limit&&before!=null?100*before/limit:null
-  return [when(c.started),c.kind,c.trigger,c.status==='pending'&&c.ended?'returned; no native outcome':c.status,
+  return [when(c.started)+provenance(c),c.kind,c.trigger,c.status==='pending'&&c.ended?'returned; no native outcome':c.status,
    h('div',{},count(before),pc!=null?h('div',{},h('div',{className:'au-meter'},h('i',{style:{width:Math.min(100,pc)+'%'}})),pc.toFixed(1)+'% of '+short(limit)):null),
    count(c.threshold_tokens),count(c.after_estimated_tokens),count(c.next_request_approx_tokens),
-   h('div',{},count(c.next_request_prompt_tokens),h('div',{className:'au-muted'},c.next_request_id==='superseded'?'Superseded by another compaction':c.next_request_id?'First subsequent attempt':'Awaiting next attempt')),
+   h('div',{},count(c.next_request_prompt_tokens),h('div',{className:'au-muted'},originalId(c,'next_request_id')==='superseded'?'Superseded by another compaction':c.next_request_id?'First subsequent attempt':'Awaiting next attempt')),
    short(c.auxiliary?.known?.total_tokens),money(c.auxiliary?.known_cost_usd),tokensDetail(c,details)]
  })
  return h('section',{'data-testid':'compression-events','aria-label':'Compression events'},
  h('div',{className:'au-toolbar'},h('select',{value:mode,onChange:e=>setMode(e.target.value),'aria-label':'Compression type'},...['all','compression','micro_compaction'].map(v=>h('option',{key:v,value:v},v.replaceAll('_',' ')))),
  h('button',{onClick:()=>downloadFile('compression-events.json',JSON.stringify(data.compressions,null,2),'application/json')},'Export compression JSON')),
  h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id),
-  visible.map(c=>({identity:c.session_id||c.session_after||'Unattributed session',started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
+  visible.map(c=>({identity:readable(c,c.session_id?'session_id':'session_after'),started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
  !rows.length?h('p',{className:'au-muted'},'No compression events in this window.'):null,
  data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null)
 }
@@ -1082,7 +1125,7 @@ function SavingsCards({summary:s}){
 }
 function CacheView({data,profile,provider,refresh,onError}){
  const [pricingBusy,setPricingBusy]=useState(false),s=data.summary,catalogs=data.price_catalogs||[];
- async function update(){setPricingBusy(true);try{await rest('/ledger/pricing/refresh?profile='+encodeURIComponent(profile),{method:'POST'});refresh()}catch(e){onError(String(e.message||e))}finally{setPricingBusy(false)}}
+ async function update(){if(isAllProfiles(profile))return;setPricingBusy(true);try{await rest('/ledger/pricing/refresh?profile='+encodeURIComponent(profile),{method:'POST'});refresh()}catch(e){onError(String(e.message||e))}finally{setPricingBusy(false)}}
  // Source is the saved rate on selected requests, NOT price_catalogs or the
  // current paginated request list. A backend mismatch is visible, not guessed.
  const applied=data.applied_rate_groups;
@@ -1101,7 +1144,7 @@ function CacheView({data,profile,provider,refresh,onError}){
      (applied||[]).map(g=>JSON.stringify([g.provider,g.model,g.service_tier,g.rate])),
      (applied||[]).map(g=>({identity:[g.provider,g.model,g.service_tier,rateContext(g.rate)].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'}))),
    applied?.length===0?h('p',{className:'au-muted'},'No recorded requests in this window.'):null),
-  h('div',{className:'au-toolbar','data-testid':'price-refresh-controls',style:{justifyContent:'flex-end',marginTop:16}},
+  !isAllProfiles(profile)&&h('div',{className:'au-toolbar','data-testid':'price-refresh-controls',style:{justifyContent:'flex-end',marginTop:16}},
    catalogs.some(p=>p.status==='unavailable'||p.stale)?h('small',{className:'au-muted',role:'status'},'Some prices unavailable or stale'):null,
    h('button',{onClick:update,disabled:pricingBusy,title:'Refresh public provider prices for future requests. This table uses the rate snapshots already saved on the selected requests.'},pricingBusy?'Refreshing…':'Refresh provider prices')))
 }
@@ -1123,6 +1166,7 @@ function QuotaHome({quota,selected,hiddenIds,showHidden}){
  const data=quota.data,error=quota.error;
  if(error&&!data)return h(ErrorState,{title:'Could not load usage',description:String(error.message||error)},h(Button,{onClick:()=>quota.refetch()},'Retry'));
  if(!data)return h('div',{},h(Skeleton,{}),h(Skeleton,{}));
+ if(isAllProfiles(selected))return h('section',{'data-testid':'quota-home'},notice('Combined subscription quota unavailable. Accounts may be shared across profiles; no quota probes are performed. Select an individual profile for its quota.'));
  const providers=data.providers||[],visible=providers.filter(p=>!hiddenIds.includes(p.id)),hidden=providers.filter(p=>hiddenIds.includes(p.id));
  const live=visible.filter(p=>p.quota?.available).length,profile=selected||data.profile||'this profile';
  return h('section',{className:'au-quota-home','data-testid':'quota-home'},
@@ -1137,6 +1181,7 @@ function QuotaHome({quota,selected,hiddenIds,showHidden}){
 // Usage time/session/agent filters apply to the ledger, not the live allowance.
 function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
  if(!providerId||providerId===QUOTA_HOME)return null;
+ if(isAllProfiles(selected))return h('section',{'data-testid':'provider-limits'},notice('Combined subscription quota unavailable · select an individual profile.'));
  const data=quota.data;
  // The shared query can retain the previous profile while the next one loads.
  const wrongProfile=!!(selected&&data?.profile&&data.profile!==selected);
@@ -1161,10 +1206,10 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
 // remotes, where the SDK socket is a no-op. This never restarts a gateway.
 const CONNECTION_QUERY_OPTIONS={retry:3,retryDelay:attempt=>Math.min(1000*2**attempt,30000),refetchInterval:15000,refetchIntervalInBackground:true,refetchOnReconnect:true};
 const pendingLedgerReads=new Map();
-function sharedLedgerRead(path,options){
- const existing=pendingLedgerReads.get(path);if(existing)return existing;
- const pending=Promise.resolve().then(()=>rest(path,options)).finally(()=>{if(pendingLedgerReads.get(path)===pending)pendingLedgerReads.delete(path)});
- pendingLedgerReads.set(path,pending);return pending;
+function sharedLedgerRead(path,options,identity=path){
+ const existing=pendingLedgerReads.get(identity);if(existing)return existing;
+ const pending=Promise.resolve().then(()=>scopedRead(path,options)).finally(()=>{if(pendingLedgerReads.get(identity)===pending)pendingLedgerReads.delete(identity)});
+ pendingLedgerReads.set(identity,pending);return pending;
 }
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
@@ -1174,31 +1219,32 @@ function RefreshMenu({refresh,reload,busy}){
    h('button',{type:'button',disabled:busy,onClick:choose(refresh)},'Refresh data'),
    h('button',{type:'button',disabled:busy,onClick:choose(reload),title:'Reload analytics readers in this backend process. Does not reload recorder hooks or restart agents.'},'Reload analytics backend')));
 }
-function useRecorderHealth({profile,readScope,readPath,enabled}){
+function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
  const [control]=useState(()=>({alive:true,scope:profile,epoch:0,serial:0,busy:false,latest:{}}));
  if(control.scope!==profile){control.scope=profile;control.epoch++;control.busy=false}
  control.view=readScope;
  const [health,setHealth]=useState(null),[reading,setReading]=useState(null),[operation,setOperation]=useState(null);
  const [transport,setTransport]=useState(null),[connectionEpoch,setConnectionEpoch]=useState(0);
  useEffect(()=>{control.alive=true;return()=>{control.alive=false;control.epoch++}},[]);
- async function probe(kind,path){
+ async function probe(kind,path,identity=path){
   const epoch=control.epoch,serial=++control.serial,view=readScope;control.latest[kind]=serial;
   const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial&&(kind!=='read'||control.view===view);
   const publish=value=>{if(current())(kind==='status'?setHealth:setReading)({scope:profile,epoch,view,received:Date.now(),...value})};
-  try{const data=await sharedLedgerRead(path,{timeoutMs:kind==='status'?8000:15000});publish({ok:true,data});return data}
+  try{const data=await sharedLedgerRead(path,{timeoutMs:kind==='status'?8000:15000},identity);publish({ok:true,data});return data}
   catch(error){publish({ok:false});throw error}
  }
- const status=()=>probe('status','/ledger/status?profile='+encodeURIComponent(profile));
- const read=async()=>({...await probe('read',readPath),_viewScope:readScope});
+ const status=()=>probe('status','/ledger/status?'+new URLSearchParams(scopeParams(profile)));
+ const read=async()=>({...await probe('read',rollingPath(readPath,windowSeconds),readPath),_viewScope:readScope});
  // An old success cannot stay green indefinitely if fresh checks stop arriving.
  useEffect(()=>{
-  if(!health?.ok||health.stale)return;
+  if(isAllProfiles(profile)||!health?.ok||health.stale)return;
   const timer=setTimeout(()=>setHealth(value=>value===health?{...value,stale:true}:value),Math.max(0,30000-(Date.now()-health.received)));
   return()=>clearTimeout(timer);
  },[health]);
  useEffect(()=>{
   let live=true,timer,mode='native-events';
   const update=(state,detail)=>{if(live)setTransport({scope:profile,enabled,state,detail})};
+  if(isAllProfiles(profile)){update('limited','All profiles uses read-only polling; recorder health is profile-specific.');return()=>{live=false}}
   if(!enabled){update('not_needed','Live analytics subscription is idle on Subscriptions.');return()=>{live=false}}
   if(!socket){update('limited','Live update subscription unavailable; REST polling remains active.');return()=>{live=false}}
   update('connecting','Waiting for the live update subscription to acknowledge.');
@@ -1224,7 +1270,8 @@ function useRecorderHealth({profile,readScope,readPath,enabled}){
   const results=await Promise.allSettled([status(),enabled?read():Promise.resolve()]);
   if(!control.alive||control.scope!==profile||control.epoch!==epoch)return false;
   control.busy=false;setOperation({scope:profile,epoch,busy:false});
-  queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
+  if(!isAllProfiles(profile))queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
+  else queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
   return results.every(result=>result.status==='fulfilled');
  }
  const checked=health?.scope===profile&&health.epoch===control.epoch?health:null,readChecked=reading?.scope===profile&&reading.epoch===control.epoch&&reading.view===readScope?reading:null;
@@ -1241,12 +1288,14 @@ function useRecorderHealth({profile,readScope,readPath,enabled}){
   }
   label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
  }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
+ if(isAllProfiles(profile)){state=checked?.ok===false||readChecked?.ok===false?'disconnected':'limited';label=pending?'Refreshing':'Polling';detail='Read-only · 60-second visible-page polling. Recorder health unavailable across profiles.'}
  return {status,read,reconnect,state,label,detail,busy:!!pending||link?.state==='connecting'};
 }
 function ConnectionBadge({connection,disabled}){
  const {state,label,detail,busy,reconnect}=connection;
- const title=detail+' Click to reconnect and refresh. Running agents are not restarted.';
- return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'aria-label':'Usage recorder: '+label+'. Click to reconnect and refresh.','aria-busy':busy},
+ const action=label==='Polling'?'Refresh read-only data.':'Click to reconnect and refresh. Running agents are not restarted.';
+ const title=detail+' '+action;
+ return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
 }
 
@@ -1265,19 +1314,19 @@ function UsagePie({items,label,onChoose,selected}){
    key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
   },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
 }
-function SkillsUsageView({params,scope,onSession}){
+function SkillsUsageView({params,scope,onSession,profile,windowSeconds}){
  const [view,setView]=useState('Frequency'),[model,setModel]=useState(''),[skill,setSkill]=useState(''),[offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
  useEffect(()=>{setModel('');setSkill('');setOffset(0);setSnapshotId('')},[scope]);
  const p=new URLSearchParams(params);p.set('model',model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
  const path='/ledger/skills?'+p,key=path;
- const query=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(path),_skillsScope:key})});
+ const query=useQuery({...readOptions(profile),queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,path),_skillsScope:key})});
  const [retained]=useState(()=>({scope:null,data:null}));
  const stableScope=JSON.stringify([scope,model,skill,offset]);
  const fresh=query.data?._skillsScope===key?query.data:null;
  if(fresh){retained.scope=stableScope;retained.data=fresh}
  // Rolling time bounds change the query key, not the user's selection. Keep
  // its keyed rows mounted while that refresh is pending; never bridge filters.
- const data=fresh||(retained.scope===stableScope?retained.data:null);
+ const data=isAllProfiles(profile)&&query.error?null:fresh||(retained.scope===stableScope?retained.data:null);
  const chooseSkill=name=>{setSkill(name===skill?'':name);setOffset(0)};
  const kinds={skill_load:'Skill load',context_snapshot:'Before request',compression_before:'Before compression',compression_after:'After compression',turn_end:'Turn completed'};
  const eventLabel=e=>e.kind==='skill_load'?(e.success===false?'Failed load':e.is_reference?'Reference read':e.repeat?'Repeat skill load':'Skill load'):(kinds[e.kind]||e.kind);
@@ -1285,17 +1334,17 @@ function SkillsUsageView({params,scope,onSession}){
  const snapshot=snapshotId?snapshots.find(s=>s.id===snapshotId):(snapshots.find(s=>s.context_used!=null)||snapshots[0]);
  const categories=(snapshot?.categories||[]).filter(c=>Number.isFinite(c.tokens)&&c.tokens>0);
  const inspected=(data?.skills||[]).find(s=>s.name===skill);
- const sessionLink=e=>e.session_id?h('button',{className:'au-drill',onClick:()=>onSession(e.session_id),title:'Filter all analytics to this session'},e.session_id):'Unattributed';
+ const sessionLink=e=>e.session_id?h('button',{className:'au-drill',onClick:()=>onSession(e.session_id),title:'Filter all analytics to this session'},readable(e,'session_id')):'Unattributed';
  const eventRows=(data?.events||[]).map(e=>[
-  when(e.ts),eventLabel(e),e.skill||'—',e.file_path||'Main file / not applicable',e.provider||'Unknown',e.model||'Unknown',
-  e.project_label||e.project_id||'Unattributed',sessionLink(e),e.agent_kind||'Unattributed',
-  e.estimated_tokens==null?'Not recorded':'~'+count(e.estimated_tokens),e.context_used==null?'—':'~'+count(e.context_used),e.source||'Not recorded',e.compression_id||'—',
+  when(e.ts),eventLabel(e),readable(e,'skill'),e.file_path||'Main file / not applicable',e.provider||'Unknown',e.model||'Unknown',
+  e.project_label||originalId(e,'project_id')||'Unattributed',sessionLink(e),e.agent_kind||'Unattributed',
+  e.estimated_tokens==null?'Not recorded':'~'+count(e.estimated_tokens),e.context_used==null?'—':'~'+count(e.context_used),e.source||'Not recorded',originalId(e,'compression_id')||'—',
   e.kind==='skill_load'?'—':h('button',{onClick:()=>{setView('Context footprint');setSnapshotId(e.id)}},'Inspect snapshot')
  ]);
  const eventHeaders=['Recorded at','Event','Skill','File','Provider','Model','Project','Session','Agent','Returned text · estimated tokens','Context footprint','Measurement source','Compression ID','Snapshot'];
  const eventList=(accordions=false)=>h('div',{'data-testid':'skill-events',key:stableScope},
   accordions?h('div',{className:'au-timeline-scroll',tabIndex:0,'aria-label':'Session timeline entries'},...(data?.events||[]).map((e,i)=>h('details',{key:e.id,'data-event-id':e.id,'data-scroll-key':'event:'+e.id,className:'au-timeline-entry'},
-   h('summary',{},h('strong',{className:'au-timeline-session'},e.session_id||'Unattributed session'),
+   h('summary',{},h('strong',{className:'au-timeline-session'},e.session_id?readable(e,'session_id'):'Unattributed session'+provenance(e)),
     h('span',{},h('span',{className:'au-muted'},'Context footprint'),h('br'),e.context_used==null?'Not recorded':'~'+count(e.context_used)+' tokens'),
     h('span',{},h('span',{className:'au-muted'},'Recorded'),h('br'),when(e.ts))),
    h('dl',{},...eventRows[i].map((value,j)=>h('div',{key:j},h('dt',{},eventHeaders[j]),h('dd',{},value))))))):
@@ -1305,24 +1354,25 @@ function SkillsUsageView({params,scope,onSession}){
    h('button',{disabled:offset===0,onClick:()=>setOffset(Math.max(0,offset-50))},'Previous events'),
    h('button',{disabled:data?.next_offset==null,onClick:()=>setOffset(data.next_offset)},'Next events')));
  return h('section',{'data-testid':'skills-usage','aria-label':'Skills usage'},
+  h(Coverage,{data}),
   h('div',{className:'au-toolbar'},h('div',{className:'au-segment',role:'group','aria-label':'Skills view'},...['Frequency','Context footprint','Session timeline'].map(v=>h('button',{key:v,'aria-pressed':view===v,onClick:()=>{setView(v);setOffset(0)}},v))),
    h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:model,onChange:e=>{setModel(e.target.value);setOffset(0);setSnapshotId('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[])])].map(m=>h('option',{key:m,value:m},m))))),
 
   query.error?h('div',{className:'au-notice',role:'alert'},'Skills history unavailable. Newly installed recorder/API code requires a backend and producer restart. ',h('button',{onClick:()=>query.refetch()},'Retry skills history')):null,
   !data?h('p',{className:'au-muted',role:'status'},query.error?'No history shown for this selection.':'Loading skills history…'):h('div',{},
-   view==='Context footprint'?h('div',{className:'au-toolbar au-snapshot-picker'},h('label',{},'Snapshot ',h('select',{'aria-label':'Context snapshot',value:snapshotId,onChange:e=>setSnapshotId(e.target.value)},h('option',{value:''},'Latest measured snapshot'),...snapshots.map(s=>h('option',{key:s.id,value:s.id},when(s.ts)+' · '+eventLabel(s)+' · '+(s.session_id||'Unattributed')))))):null,
+   view==='Context footprint'?h('div',{className:'au-toolbar au-snapshot-picker'},h('label',{},'Snapshot ',h('select',{'aria-label':'Context snapshot',value:snapshotId,onChange:e=>setSnapshotId(e.target.value)},h('option',{value:''},'Latest measured snapshot'),...snapshots.map(s=>h('option',{key:s.id,value:s.id},when(s.ts)+' · '+eventLabel(s)+' · '+(s.session_id?readable(s,'session_id'):'Unattributed'+provenance(s))))))):null,
    h('div',{className:'au-metrics'},metric('Recorded main-skill loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.loads)),metric('Reference reads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.references)),metric('Failed loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.failures))),
-   skill?h('div',{className:'au-toolbar'},h('strong',{},'Inspecting '+skill),h('button',{onClick:()=>{setSkill('');setOffset(0)}},'Clear skill selection')):null,
+   skill?h('div',{className:'au-toolbar'},h('strong',{},'Inspecting '+(inspected?readable(inspected,'name'):'selected skill')),h('button',{onClick:()=>{setSkill('');setOffset(0)}},'Clear skill selection')):null,
    view==='Frequency'?h('div',{},
     h('div',{className:'au-box','data-testid':'skill-frequency'},h('h3',{},'Most frequently loaded skills'),
-     h(UsagePie,{label:'Skill load frequency',items:(data.skills||[]).filter(s=>s.loads>0).map(s=>({id:s.name,label:s.name,value:s.loads})),selected:skill,onChoose:chooseSkill})),
-    (data.skills||[]).some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...(data.skills||[]).filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},s.name))):null,
-    skill?h('div',{className:'au-box','data-testid':'skill-drilldown'},h('h3',{},skill),h('p',{className:'au-muted'},count(inspected?.loads)+' successful loads · '+count(inspected?.sessions)+' distinct sessions · '+count(inspected?.repeat_loads)+' repeat loads · '+(inspected?.estimated_tokens==null?'Text size not recorded':'~'+count(inspected.estimated_tokens)+' returned tokens (estimate, not billing)')),eventList()):null):null,
+     h(UsagePie,{label:'Skill load frequency',items:(data.skills||[]).filter(s=>s.loads>0).map(s=>({id:s.name,label:readable(s,'name'),value:s.loads})),selected:skill,onChoose:chooseSkill})),
+    (data.skills||[]).some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...(data.skills||[]).filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},readable(s,'name')))):null,
+    skill?h('div',{className:'au-box','data-testid':'skill-drilldown'},h('h3',{},inspected?readable(inspected,'name'):'Selected skill'),h('p',{className:'au-muted'},count(inspected?.loads)+' successful loads · '+count(inspected?.sessions)+' distinct sessions · '+count(inspected?.repeat_loads)+' repeat loads · '+(inspected?.estimated_tokens==null?'Text size not recorded':'~'+count(inspected.estimated_tokens)+' returned tokens (estimate, not billing)')),eventList()):null):null,
    view==='Context footprint'?h('div',{'data-testid':'skill-context'},
 
     data.snapshots_truncated?h('p',{className:'au-muted'},'Showing the newest '+count(snapshots.length)+' of '+count(data.snapshot_count)+' snapshots. Narrow the time window or session to inspect older snapshots.'):null,
     snapshot?h('div',{className:'au-box'},h('h3',{},eventLabel(snapshot)+' · '+when(snapshot.ts)),h('p',{},sessionLink(snapshot),' · '+(snapshot.model||'Unknown model')),h('p',{},'Context: '+(snapshot.context_used==null?'Not recorded':'~'+count(snapshot.context_used))+(snapshot.context_max?' / '+count(snapshot.context_max):'')+' tokens'),
-     snapshot.compression_id?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Compression '+snapshot.compression_id),...snapshots.filter(s=>s.compression_id===snapshot.compression_id&&s.id!==snapshot.id).map(s=>h('button',{key:s.id,onClick:()=>setSnapshotId(s.id)},eventLabel(s)+' · '+(s.context_used==null?'Not recorded':count(s.context_used)+' tokens')))):null,
+     snapshot.compression_id?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Compression '+originalId(snapshot,'compression_id')),...snapshots.filter(s=>s.compression_id===snapshot.compression_id&&s.id!==snapshot.id).map(s=>h('button',{key:s.id,onClick:()=>setSnapshotId(s.id)},eventLabel(s)+' · '+(s.context_used==null?'Not recorded':count(s.context_used)+' tokens')))):null,
      h(UsagePie,{label:'Estimated context composition',items:categories.map(c=>({id:c.id,label:c.label,value:c.tokens}))})):
      h('p',{className:'au-muted'},snapshotId?'This snapshot is outside the returned window. Choose another snapshot.':'No context snapshots recorded for this selection.')):null,
    view==='Session timeline'?h('div',{'data-testid':'skill-timeline'},eventList(true)):null
@@ -1330,9 +1380,18 @@ function SkillsUsageView({params,scope,onSession}){
 }
 
 function UsagePage(){
- const [showHidden,setShowHidden]=useState(false), hiddenIds=useValue($hidden),selected=useValue($profile),chipProvider=useValue($chipProvider)
+ const selected=useValue($profile);
+ const [provider,setProvider]=useState(QUOTA_HOME),[tab,setTab]=useState('Overview');
+ // Remount profile-local filters, details and async controls synchronously, before
+ // any request for the new scope can inherit a qualified ID from the old one.
+ return h(UsagePageScope,{key:pickerValue(selected),selected,provider,setProvider,tab,setTab});
+}
+function UsagePageScope({selected,provider,setProvider,tab,setTab}){
+ const aggregate=isAllProfiles(selected);
+ const inventory=useQuery({queryKey:[ID,'profiles'],queryFn:()=>sharedLedgerRead('/ledger/profiles'),staleTime:60000,retry:false,refetchOnWindowFocus:false});
+ const [showHidden,setShowHidden]=useState(false), hiddenIds=useValue($hidden),chipProvider=useValue($chipProvider)
  const quota=useUsage(selected,REFRESH_PAGE_MS)
- const [provider,setProvider]=useState(QUOTA_HOME),[tab,setTab]=useState('Overview'),[displayMode,setDisplayMode]=useState('Tokens'),[period,setPeriod]=useState('24h'),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(''),[customEnd,setCustomEnd]=useState(''),[filterTest,setFilterTest]=useState(''),[err,setErr]=useState(''),[compMode,setCompMode]=useState('all'),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
+ const [displayMode,setDisplayMode]=useState('Tokens'),[period,setPeriod]=useState('24h'),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(''),[customEnd,setCustomEnd]=useState(''),[filterTest,setFilterTest]=useState(''),[err,setErr]=useState(''),[compMode,setCompMode]=useState('all'),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
  const [requestFilters,setRequestFilters]=useState(()=>({...EMPTY_REQUEST_FILTERS}));
  const {agent,project,session,sessionScope,subagentId}=requestFilters;
  const [breakdownGroup,setBreakdownGroup]=useState('model');
@@ -1369,17 +1428,18 @@ function UsagePage(){
  const ranges={'1h':3600,'24h':86400,'7d':604800,'30d':2592000,'90d':7776000,all:0}
  const initialStart=period==='custom'?(customStart?new Date(customStart).getTime()/1000:0):(ranges[period]?anchor-ranges[period]:0)
  const start=Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
- const params=new URLSearchParams({profile:selected,provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest)
+ const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest)
  const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
  const queryKey=[ID,'ledger',selected,provider,start,end||0,offset,session,filterTest,agent,project,sessionScope,subagentId]
- const connection=useRecorderHealth({profile:selected,readScope,readPath:'/ledger?'+params,enabled:!isQuota});
- const ledger=useQuery({...CONNECTION_QUERY_OPTIONS,queryKey,queryFn:connection.read,enabled:!isQuota})
- useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
+ const windowSeconds=aggregate&&period!=='custom'?ranges[period]:0;
+ const connection=useRecorderHealth({profile:selected,readScope,readPath:'/ledger?'+params,enabled:!isQuota,windowSeconds});
+ const ledger=useQuery({...readOptions(selected),queryKey,queryFn:connection.read,enabled:!isQuota})
+ useQuery({...readOptions(selected),queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
  const [reloadBusy,setReloadBusy]=useState(false),[reloadNotice,setReloadNotice]=useState(null);
  useEffect(()=>{reloadControl.alive=true;return()=>{reloadControl.alive=false}},[]);
  async function reloadAnalytics(){
-  if(reloadControl.busy||connection.busy)return;
+  if(aggregate||reloadControl.busy||connection.busy)return;
   reloadControl.busy=true;setReloadBusy(true);setReloadNotice({scope:selected,text:'Validating analytics code…'});
   let switched=false;
   const message=text=>{if(reloadControl.alive&&reloadControl.scope===selected)setReloadNotice({scope:selected,text})};
@@ -1396,35 +1456,62 @@ function UsagePage(){
     (error.status===404||error.status===405||/404|405/.test(String(error.message)))?'Reload support is not active yet. One backend restart is required.':String(error.message||'Analytics reload failed; previous code remains active.'));
   }finally{reloadControl.busy=false;if(reloadControl.alive)setReloadBusy(false)}
  }
- useEffect(()=>{if(period==='custom')return;const timer=setInterval(()=>setAnchor(Date.now()/1000),60000);return()=>clearInterval(timer)},[period])
+ useEffect(()=>{if(aggregate||period==='custom')return;const timer=setInterval(()=>setAnchor(Date.now()/1000),60000);return()=>clearInterval(timer)},[period,aggregate])
  const [ledgerCache]=useState(()=>({scope:'',data:null}));
  const [detailEntries]=useState(()=>new Map());
+ const [identityLabels]=useState(()=>new Map());
  const currentData=ledger.data?._viewScope===readScope?ledger.data:null;
  if(currentData){ledgerCache.scope=readScope;ledgerCache.data=currentData}
- const data=currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quota.data?.providers||[];
+ const data=aggregate&&ledger.error?null:currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quota.data?.providers||[];
+ for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
+  for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
+ }
  const detailContext={scope:selected,entries:detailEntries};
  const labels=Object.fromEntries(providers.map(p=>[p.id,p.label]));labels['openai-codex']='Codex';labels['nous']='Nous Portal'
  const names=[...new Set([...providers.map(p=>p.id),...(data?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
  const label=provider?(labels[provider]||provider):'All providers'
- const refresh=()=>{if(reloadControl.busy||connection.busy)return;pendingRefresh=true;connection.reconnect();quota.refetch()}
+ const refresh=()=>{if(reloadControl.busy||connection.busy)return;pendingRefresh=true;inventory.refetch({cancelRefetch:false});
+  if(aggregate){ledger.refetch({cancelRefetch:false});queryClient.invalidateQueries({queryKey:[ID,'connection',selected]},{cancelRefetch:false});queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false})}
+  else connection.reconnect();
+  quota.refetch({cancelRefetch:false});
+ }
  async function exportAll(){setBusy(true);setErr('');try{
-   const rows=[];let offset=0
-   for(;;){const p=new URLSearchParams(params);p.set('limit','2000');p.set('offset',String(offset));if(!end)p.set('end',String(data?.generated_at||Date.now()/1000));const d=await rest('/ledger?'+p);rows.push(...d.requests);if(d.next_offset==null)break;offset=d.next_offset}
-   downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
- }catch(e){setErr(String(e.message||e))}finally{setBusy(false)}}
- async function test(action){setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.refetch()}catch(e){setErr(String(e.message||e))}}
+   const rows=[],seen=new Set();let offset=0,signature=null,exportCoverage=null;
+   const frozen=new URLSearchParams(params);
+   frozen.set('start',String(data.window.start));frozen.set('end',String(data.window.end));
+   for(;;){
+    if(!reloadControl.alive||reloadControl.scope!==selected)throw new Error('Export cancelled: profile changed.');
+    const p=new URLSearchParams(frozen);p.set('limit','2000');p.set('offset',String(offset));
+    const d=await sharedLedgerRead('/ledger?'+p);
+    if(!reloadControl.alive||reloadControl.scope!==selected)throw new Error('Export cancelled: profile changed.');
+    if(!d.summary||d.request_count==null)throw new Error('Export unavailable: no readable recorded usage.');
+    if(aggregate){
+     exportCoverage=d.coverage;
+     const next=JSON.stringify([d.request_count,d.coverage,d.profile_sequences]);
+     if(signature!==null&&signature!==next)throw new Error('Export stopped: profile coverage or ledger sequences changed between pages. Refresh and retry; no CSV was downloaded.');
+     signature=next;
+    }
+    for(const row of d.requests){if(seen.has(row.id))throw new Error('Export stopped: page membership changed. Refresh and retry.');seen.add(row.id);rows.push(row)}
+    if(d.next_offset==null){if(rows.length!==d.request_count)throw new Error('Export stopped: returned count changed. Refresh and retry.');break}
+    if(d.next_offset<=offset||!d.requests.length)throw new Error('Export stopped: invalid pagination.');
+    offset=d.next_offset;
+   }
+   downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
+  if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
+ }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
+ async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.refetch()}catch(e){setErr(String(e.message||e))}}
  function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const local=x=>new Date(x*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19);setCustomStart(local(t.started));setCustomEnd(t.ended?local(t.ended):'')}
  function changePeriod(v){setPeriod(v);setFilterTest('');setAnchor(Date.now()/1000)}
  function drill(kind,g){
-  const next=nextDrillFilters(requestFilters,kind,g?.key);if(!next)return;
+  const next=nextDrillFilters(requestFilters,kind,g);if(!next)return;
   const nextKey=requestPageKey(navigationContext,next);
   if(tab==='Requests'&&nextKey===pageKey)return; // No duplicate self-navigation.
   const previous={filters:{...requestFilters},tab,group:breakdownGroup,offset};
   setDrillTrail({context:navigationContext,entries:[...drillHistory,previous].slice(-50)});
   setRequestFilters(next);setRequestPage({key:nextKey,offset:0});setTab('Requests');
  }
- const header=h(PageHeader,{profiles:quota.data?.profiles||[],profile:selected||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:quota.isFetching,refetch:refresh,refreshBusy:reloadBusy||connection.busy,refreshMenu:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||quota.isFetching}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection,disabled:reloadBusy})),reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:quota.isFetching||ledger.isFetching,refetch:refresh,refreshBusy:reloadBusy||connection.busy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||quota.isFetching}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · polling':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.isFetching})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
@@ -1438,17 +1525,17 @@ function UsagePage(){
  if(isQuota)return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota,selected,hiddenIds,showHidden}))))
  let body=null
- if(data){
+ if(data?.summary){
    if(tab==='Overview')body=h(Breakdown,{data,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
-   if(tab==='Requests')body=h(RequestView,{key:pageKey+':'+offset,data,offset,details:detailContext,onDrill:drill,more:()=>setOffset(offset+200),back:()=>setOffset(Math.max(0,offset-200))})
+   if(tab==='Requests')body=h(RequestView,{key:pageKey+':'+offset,data,offset,details:detailContext,onDrill:drill,more:()=>setOffset(data.next_offset),back:()=>setOffset(Math.max(0,offset-200))})
    if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:()=>ledger.refetch(),onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data,mode:compMode,setMode:setCompMode,details:detailContext})
 
-   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',g.task,g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
+   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',readable(g,'task'),g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
     data.groups.map(g=>JSON.stringify([g.provider,g.model,g.agent_kind,g.task])),
-    data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,g.task].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
+    data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,readable(g,'task')].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
- if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
+ if(tab==='Skills usage')body=h(SkillsUsageView,{profile:selected,windowSeconds,params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
  return h(AnalyticsPane,{},h('style',{},ledgerCss),
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
   h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,
@@ -1463,22 +1550,23 @@ function UsagePage(){
   period==='custom'?h('input',{type:'datetime-local',step:1,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setFilterTest('')}}):null,
   period==='custom'?h('input',{type:'datetime-local',step:1,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setFilterTest('')}}):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
-  h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(data?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+(p.basis?.includes('working_directory')?' · directory':'')))),
-  h('input',{placeholder:'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
+  h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(data?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
+  h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
   session?h('select',{'aria-label':'Session scope',value:sessionScope,onChange:e=>editRequestFilters({sessionScope:e.target.value})},h('option',{value:'family'},'Session + descendants'),h('option',{value:'exact'},'This session only')):null,
-  subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+subagentId.slice(-14)+' ×'):null,
+  subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+(identityLabels.get(subagentId)||subagentId.slice(-14))+' ×'):null,
   (project||agent||session||subagentId)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
-  h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
-  h('button',{onClick:exportAll,disabled:busy||!data},busy?'Exporting…':'Export request CSV'),
-  data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+(t.ended?' · ended':' · open')))):null),
-  h(Summary,{data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  !aggregate&&h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
+  h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
+  data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
+  h(Coverage,{data}),
+  h(Summary,{data:aggregate&&ledger.error?{summary:null}:data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
-  tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,
+  tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,
   err?notice(err):null,
-  ledger.error&&!data?h('p',{className:'au-muted'},'Usage unavailable. Reconnecting…'):null,
+  ledger.error&&!data?h('p',{className:'au-muted'},aggregate?'Usage unavailable. '+String(ledger.error.message||ledger.error):'Usage unavailable. Reconnecting…'):null,
   tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setFilterTest('')},onEnd:v=>{setCustomEnd(v);setFilterTest('')},window:data?.window}):null,
-  body||h('p',{className:'au-muted'},'Waiting for ledger…'))))
+  body||h('p',{className:'au-muted'},data?.summary===null?'Recorded usage unavailable for this selection.':'Waiting for ledger…'))))
 }
 
 
@@ -1563,6 +1651,8 @@ export default {
     } catch {
       /* fall through to the backend's own profile */
     }
+
+    try { if (storage?.get(PROFILE_SCOPE_KEY, 'selected') === 'all') $profile.set(ALL_PROFILES) } catch {}
 
     ctx.register({
       id: 'page',

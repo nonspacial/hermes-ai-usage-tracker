@@ -62,7 +62,7 @@ def run():
   page.clock.fast_forward(16000);page.wait_for_timeout(80)
   assert badge.inner_text()=='Online'
   # A profile switch rechecks the chosen profile rather than caching a previous badge.
-  page.get_by_role('combobox',name='Hermes profile').select_option('default');page.wait_for_timeout(80)
+  page.get_by_role('combobox',name='Hermes profile').select_option('profile:default');page.wait_for_timeout(80)
   assert page.evaluate('demoCalls.some(p=>p==="/ledger/status?profile=default")')
   page.set_viewport_size({'width':480,'height':1000});page.wait_for_timeout(80)
   assert badge.is_visible() and page.evaluate('document.documentElement.scrollWidth<=innerWidth')

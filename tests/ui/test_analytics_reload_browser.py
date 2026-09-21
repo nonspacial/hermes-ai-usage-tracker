@@ -132,7 +132,7 @@ def run():
         page.evaluate("demoStatusState='online';hold_status=true")
         badge.click()
         page.evaluate("hold_status=false;demoStatusState='not_recording'")
-        page.get_by_role('combobox', name='Hermes profile').select_option('default')
+        page.get_by_role('combobox', name='Hermes profile').select_option('profile:default')
         expect(badge).to_have_text('Not recording')
         page.evaluate("release('status')")
         expect(badge).to_have_text('Not recording')

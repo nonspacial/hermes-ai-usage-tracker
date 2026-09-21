@@ -11,6 +11,10 @@ This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lva
 
 ## Behaviour
 
+- **All profiles** is the first profile-picker option and combines recorded usage across discovered local Hermes profiles without changing the existing selected-profile preference. Record identities remain profile-qualified; missing, unrecorded or unreadable sources produce explicit coverage states rather than invented zeros. Subscription allowances are not combined—select an individual profile for quota cards.
+- Aggregate mode is read-only, uses visibility-aware 60-second polling, and disables test markers, pricing changes and analytics reload. Each refresh copies ledger/WAL snapshots into temporary storage, so large histories increase disk I/O. Ambiguous hardlinked databases and nonempty rollback journals are rejected. CSV includes profile provenance and detects observed changes during paging, but is not an atomic cross-profile snapshot.
+- Activating **All profiles** after installation requires a safely arranged Hermes backend restart; the analytics-only reload button cannot load its new API routes. No restart is performed by the installer.
+
 - **Subscriptions** opens first with the original quota cards, profile picker, refresh, status-bar provider selection and hide/unhide controls.
 - Provider cards with six or more quota/detail rows use two columns when the card is wide enough, reverting to one in narrow panes. Nous Portal can show a subscription gauge and renewal detail when supplied by its account response; no weekly allowance is invented.
 - All providers and individual providers have nested Overview, Requests, Cache & costs, Compressions, Models & tasks and **Skills usage** pages. Individual provider pages retain their quota card above analytics.

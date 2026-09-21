@@ -280,7 +280,7 @@ def compression_result(item, agent, result):
 
 
 def read(root, *, start: float=0, end=None, provider='', session='', session_scope='exact', agent='', project='',
-         subagent='', model='', skill='', offset=0, limit=200, test_id=''):
+         subagent='', model='', skill='', offset=0, limit=200, test_id='', _detail_limit=None):
     """A coherent, read-only report, with full-period (not page) aggregates."""
     end = time.time() if end is None else end
     if number(start) is None or number(end) is None or end < start:
@@ -364,7 +364,7 @@ def read(root, *, start: float=0, end=None, provider='', session='', session_sco
             detail_params.extend([skill, skill])
         out['event_count'] = c.execute('SELECT COUNT(*) FROM skill_events WHERE ' + detail_where, detail_params).fetchone()[0]
         order = ' ORDER BY ts DESC,id DESC'
-        out['events'] = [json.loads(row[0]) for row in c.execute('SELECT data FROM skill_events WHERE ' + detail_where + order + ' LIMIT ? OFFSET ?', detail_params + [limit, offset])]
+        out['events'] = [json.loads(row[0]) for row in c.execute('SELECT data FROM skill_events WHERE ' + detail_where + order + ' LIMIT ? OFFSET ?', detail_params + [limit if _detail_limit is None else _detail_limit, offset])]
         out['next_offset'] = offset + limit if offset + limit < out['event_count'] else None
         snap_where = detail_where + " AND kind!='skill_load'"
         out['snapshot_count'] = c.execute('SELECT COUNT(*) FROM skill_events WHERE ' + snap_where, detail_params).fetchone()[0]

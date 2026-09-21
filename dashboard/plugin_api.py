@@ -715,7 +715,14 @@ def get_profiles() -> dict[str, Any]:
 def get_usage(
     profile: Optional[str] = Query(None, description="Hermes profile name; omit for this server's own"),
     refresh: bool = Query(False),
+    profile_scope: str = "selected",
 ) -> dict[str, Any]:
+    if profile_scope not in ("selected", "all"):
+        raise HTTPException(400, "Invalid profile scope.")
+    if profile_scope == "all":
+        return {"profile_scope": "all", "read_only": True, "providers": [],
+                "quota": {"available": False, "reason": "aggregate_quota_unavailable",
+                          "note": "Shared subscription quotas cannot be summed; no probes performed."}}
     home, resolved, error = _resolve_profile(profile)
     if error:
         raise HTTPException(status_code=404, detail=error)

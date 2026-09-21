@@ -12,7 +12,11 @@ def test_original_desktop_components_unchanged():
         # existing quota controls and new actions are covered by browser suites.
         # ProviderCard now has requested responsive quota columns, covered by
         # test_quota_columns_browser; quota content and probes are unchanged.
-        if name in ('PageHeader', 'ProviderCard'):
+        # ProfilePicker and useUsage intentionally support tagged All profiles
+        # selection and scoped reads. The all-profiles browser suites cover
+        # persistence, individual profiles, stale replies and read-only polling.
+        # Keep the original-source manifest hashes as historical evidence.
+        if name in ('PageHeader', 'ProviderCard', 'ProfilePicker', 'useUsage'):
             continue
         start=source.index('function '+name+'(');body=source[start:source.index('\n}',start)+2]
         assert hashlib.sha256(body.encode()).hexdigest()==sha,name

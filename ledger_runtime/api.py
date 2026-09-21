@@ -9,6 +9,20 @@ from .pricing import start_worker
 from .analytics_reload import AnalyticsRuntime, RestartRequired
 
 def add_routes(router,resolve_profile,server_home):
+    from . import aggregate
+
+    def scope(value):
+        if value not in ('selected', 'all'):
+            raise HTTPException(400, 'Invalid profile scope.')
+        return value == 'all'
+
+    def readonly(value):
+        if scope(value):
+            raise HTTPException(409, 'All profiles is read-only; select one profile for this action.')
+
+    @router.get('/ledger/profiles')
+    def local_profiles():
+        return aggregate.public_inventory(aggregate.discover(server_home()))
     analytics = AnalyticsRuntime()
 
     def check_profile(profile):
@@ -17,12 +31,14 @@ def add_routes(router,resolve_profile,server_home):
         return root or server_home()
 
     @router.get('/ledger/analytics')
-    def analytics_info(profile:str=''):
+    def analytics_info(profile:str='',profile_scope:str='selected'):
+        if scope(profile_scope):return dict(analytics.info(), profile_scope='all', read_only=True)
         check_profile(profile)
         return analytics.info()
 
     @router.post('/ledger/analytics/reload')
-    def reload_analytics(profile:str=''):
+    def reload_analytics(profile:str='',profile_scope:str='selected'):
+        readonly(profile_scope)
         check_profile(profile)
         try:return analytics.reload()
         except RestartRequired as exc:raise HTTPException(409,str(exc)) from exc
@@ -35,7 +51,10 @@ def add_routes(router,resolve_profile,server_home):
         s=Store(root or server_home());start_worker(s);return s
 
     @router.get('/ledger/status')
-    def recorder_status(profile:str=''):
+    def recorder_status(profile:str='',profile_scope:str='selected'):
+        if scope(profile_scope):
+            return {'profile_scope':'all','read_only':True,'refresh_mode':'polling',
+                    'status':'unavailable','reason':'Recorder health is profile-specific; select a profile.'}
         # This endpoint never starts a producer, fetches prices, reads token
         # counters, redeems a reset, or restarts a running gateway.
         from .connection import summarize_health
@@ -54,9 +73,13 @@ def add_routes(router,resolve_profile,server_home):
             raise HTTPException(503,'Recorder status temporarily unavailable') from exc
 
     @router.get('/ledger')
-    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str=''):
+    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',profile_scope:str='selected'):
         if offset<0 or not 1<=limit<=2000:raise HTTPException(400,'Invalid pagination.')
         try:
+            if scope(profile_scope):
+                return aggregate.ledger(analytics, aggregate.discover(server_home()), start=start,end=end,
+                    provider=provider,session=session,offset=offset,limit=limit,test_id=test_id,agent=agent,
+                    project=project,session_scope=session_scope,subagent=subagent)
             root=check_profile(profile)
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,test_id=test_id)
         except ValueError as exc:raise HTTPException(400,str(exc))
@@ -64,10 +87,14 @@ def add_routes(router,resolve_profile,server_home):
     @router.get('/ledger/skills')
     def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',
                      session_scope:str='exact',agent:str='',project:str='',subagent:str='',test_id:str='',
-                     model:str='',skill:str='',offset:int=0,limit:int=200):
+                     model:str='',skill:str='',offset:int=0,limit:int=200,profile_scope:str='selected'):
         from .skills import read
-        root=check_profile(profile)
         try:
+            if scope(profile_scope):
+                return aggregate.skills(aggregate.discover(server_home()), start=start,end=end,provider=provider,
+                    session=session,session_scope=session_scope,agent=agent,project=project,subagent=subagent,
+                    test_id=test_id,model=model,skill=skill,offset=offset,limit=limit)
+            root=check_profile(profile)
             return read(root,start=start,end=end,provider=provider,session=session,session_scope=session_scope,
                         agent=agent,project=project,subagent=subagent,test_id=test_id,model=model,skill=skill,
                         offset=offset,limit=limit)
@@ -75,21 +102,26 @@ def add_routes(router,resolve_profile,server_home):
         except (sqlite3.Error,OSError):raise HTTPException(503,'Skills observations temporarily unavailable.')
 
     @router.post('/ledger/rates')
-    def rate(body:dict,profile:str=''):
+    def rate(body:dict,profile:str='',profile_scope:str='selected'):
+        readonly(profile_scope)
         raise HTTPException(410,'Manual rate entry retired. Prices are supplied by provider catalogs.')
 
     @router.post('/ledger/pricing/refresh')
-    def refresh_prices(profile:str=''):
+    def refresh_prices(profile:str='',profile_scope:str='selected'):
+        readonly(profile_scope)
         s=getstore(profile);start_worker(s,force=True)
         return {'status':'queued','message':'Public provider catalog refresh queued. No inference calls.'}
 
     @router.post('/ledger/tests')
-    def tests(body:dict,profile:str=''):
+    def tests(body:dict,profile:str='',profile_scope:str='selected'):
+        readonly(profile_scope)
         try:return getstore(profile).test(body.get('action'),body.get('label',''),body.get('id'))
         except ValueError as exc:raise HTTPException(400,str(exc))
 
     @router.websocket('/ledger/events')
-    async def events(ws:WebSocket,profile:str=''):
+    async def events(ws:WebSocket,profile:str='',profile_scope:str='selected'):
+        if profile_scope != 'selected':
+            await ws.close(code=1008, reason='Use polling for All profiles.');return
         # Authentication/origin policy remains the host gateway's policy. No extra
         # network listener or credentials are created by this plugin.
         try:folder=Path(check_profile(profile))/'usage-ledger'

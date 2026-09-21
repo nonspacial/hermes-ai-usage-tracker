@@ -73,7 +73,7 @@ def run():
   assert '2 reporting live quota' in home.inner_text()
   for text in ['Subscription credits: $0.10','Top-up credits: $0.00','Total usable: $0.10','Status: access depleted','No public subscription-quota API','No credentials for this provider']:
    assert text in home.inner_text(),text
-  assert page.evaluate("demoCalls.every(p=>p.startsWith('/usage')||p.startsWith('/ledger/status'))")
+  assert page.evaluate("demoCalls.every(p=>p.startsWith('/usage')||p.startsWith('/ledger/status')||p==='/ledger/profiles')")
   assert page.get_by_test_id('connection-status').inner_text()=='Online'
   page.screenshot(path=str(ART/'original-quota-home.png'),full_page=True)
   # Original hide/unhide, profile and status-chip controls remain functional.
@@ -82,8 +82,8 @@ def run():
   page.get_by_role('button',name=re.compile('Hidden 1')).click();page.wait_for_timeout(50)
   page.get_by_role('button',name='Unhide Nous Portal',exact=True).click();page.wait_for_timeout(50)
   page.get_by_role('combobox',name='Status bar chip provider').select_option('openai-codex')
-  page.get_by_role('combobox',name='Hermes profile').select_option('default');page.wait_for_timeout(50)
-  page.get_by_role('combobox',name='Hermes profile').select_option('infra');page.wait_for_timeout(50)
+  page.get_by_role('combobox',name='Hermes profile').select_option('profile:default');page.wait_for_timeout(50)
+  page.get_by_role('combobox',name='Hermes profile').select_option('profile:infra');page.wait_for_timeout(50)
   print('PASS default original quota page, full details, hide/unhide, status pin, profiles; no ledger dependency')
   page.get_by_role('tab',name='All providers',exact=True).click();page.wait_for_timeout(150)
   assert_selected(subnav,'Overview','aria-selected')

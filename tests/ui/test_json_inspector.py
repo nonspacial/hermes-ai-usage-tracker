@@ -27,6 +27,9 @@ def run():
   rid=details.get_attribute('data-record-id')
   details=page.locator('.au-json-details').filter(has=page.locator('summary')).nth(1)
   row=details.locator('xpath=ancestor::tr')
+  # Let pane-width measurement finish before choosing table vs accordion actions.
+  # is_visible() is immediate and can otherwise race the first ResizeObserver RAF.
+  page.clock.run_for(100)
   if row.locator('.au-record-disclosure').is_visible():
    row.locator('.au-record-disclosure').click()
   details.locator('summary').click()
