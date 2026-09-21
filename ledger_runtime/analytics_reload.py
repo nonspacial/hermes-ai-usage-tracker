@@ -18,7 +18,7 @@ import threading
 import types
 import uuid
 
-from . import accounting, pricing
+from . import accounting, pricing, ownership
 from .storage import SCHEMA
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
@@ -77,7 +77,7 @@ class AnalyticsRuntime:
             sys.modules[prefix] = package
             generation['modules'].append(prefix)
             # Catalogue inspection is stable; its worker and fetch code are NOT reloaded.
-            for name, stable in [('pricing', pricing), ('accounting', accounting)]:
+            for name, stable in [('pricing', pricing), ('accounting', accounting), ('ownership', ownership)]:
                 sys.modules[prefix + '.' + name] = stable
                 generation['modules'].append(prefix + '.' + name)
             for name, source in sources.items():
@@ -116,6 +116,7 @@ class AnalyticsRuntime:
             connection = sqlite3.connect(reader.path.as_uri() + '?mode=ro', uri=True, timeout=2)
             connection.row_factory = sqlite3.Row
             connection.create_aggregate('decimal_sum', 1, generation['decimal_sum'])
+            ownership.register_sql(connection)
             try:
                 yield connection
             finally:

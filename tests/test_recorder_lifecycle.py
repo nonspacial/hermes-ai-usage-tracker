@@ -119,7 +119,7 @@ def test_missing_field_reasons_are_full_window_and_preserve_totals(env):
     assert result['request_count']==4 and len(result['requests'])==1
     assert result['summary']['known']['total_tokens']==155
     reasons=result['summary']['missing_reasons']['input_tokens']
-    assert reasons==dict(awaiting_usage=1,unverified_accounting=1,ended_without_usage=1,unreported_field=1)
+    assert reasons==dict(awaiting_usage=0,unresolved_execution=1,abandoned_execution=0,unverified_accounting=1,ended_without_usage=1,unreported_field=1)
     assert result['summary']['missing_reasons']==summary(records)['missing_reasons']
     for key,reason in result['summary']['missing_reasons'].items():
         assert sum(reason.values())==result['summary']['missing_fields'][key]

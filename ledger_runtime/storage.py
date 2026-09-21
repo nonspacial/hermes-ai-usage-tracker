@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS session_context(session_id TEXT PRIMARY KEY, updated 
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, kind TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, started REAL NOT NULL, ended REAL, provider TEXT, model TEXT, session_id TEXT, task TEXT, compression_id TEXT, status TEXT, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS request_time ON requests(started);
+CREATE INDEX IF NOT EXISTS request_open_identity ON requests(id) WHERE status IN ('pending','usage_received') AND ended IS NULL;
 CREATE INDEX IF NOT EXISTS request_session_time ON requests(session_id,started);
 CREATE INDEX IF NOT EXISTS request_provider ON requests(provider,started);
 CREATE INDEX IF NOT EXISTS request_comp ON requests(compression_id);
@@ -65,6 +66,8 @@ class Store:
         c=sqlite3.connect(self.path,timeout=2)
         c.row_factory=sqlite3.Row
         c.create_aggregate('decimal_sum',1,DecimalSum)
+        from .ownership import register_sql
+        register_sql(c)
         c.execute('PRAGMA synchronous=FULL')
         try:
             yield c; c.commit()
@@ -86,8 +89,8 @@ class Store:
             # Compare-and-update inside the transaction, not against the earlier
             # cleanup SELECT. Another callback may already have completed it.
             if expected and (not old or any(data.get(k) not in values for k,values in expected.items())):return
-            old_status=data.get('status')
-            was_final=data.get('status') not in ('pending',None) and data.get('ended') is not None
+            old_status=data.get('status');old_ended=data.get('ended')
+            was_final=data.get('status') not in ('pending','usage_received',None)
             # Repeated pre/success notifications must not duplicate or downgrade a row.
             if old and kind=='request_started': return
             previous_usage=data.get('usage') or {}
@@ -98,10 +101,17 @@ class Store:
                 if weaker or empty:
                     for field in ('usage','response_model','returned_service_tier','provider_response_id'):
                         rec.pop(field,None)
+            if old and 'owner' in data:rec.pop('owner',None)
             data.update({k:v for k,v in rec.items() if v is not None})
-            if was_final and rec.get('status')=='usage_received':data['status']=old_status
+            if was_final and rec.get('status') in ('pending','usage_received'):data['status']=old_status
+            if old_status in ('abandoned_without_usage','abandoned_with_usage'):
+                # Delayed hooks remain events, not proof of the abandoned
+                # producer's actual end. They may still improve usage evidence.
+                data['status']=old_status;data['ended']=old_ended
             if data.get('status')=='ended_without_usage' and any((data.get('usage') or {}).get(k) is not None for k in METRICS):
                 data['status']='ended_with_usage'
+            if data.get('status')=='abandoned_without_usage' and any((data.get('usage') or {}).get(k) is not None for k in METRICS):
+                data['status']='abandoned_with_usage'
             data.setdefault('started',time.time());data.setdefault('status','pending')
             from .attribution import attach
             from .projects import read_projects
@@ -109,7 +119,7 @@ class Store:
             if 'usage' in data:
                 # Final records keep the price snapshot chosen at completion, even
                 # if a duplicate notification arrives after a catalog refresh.
-                rate=old_cost.get('rate') if was_final and old_cost else self.latest_rate(c,data)
+                rate=old_cost.get('rate') if (was_final or kind=='request_abandoned') and old_cost else self.latest_rate(c,data)
                 data['cost']=costs(data['usage'],rate)
             if kind=='request_started' and data.get('source')=='main_hook' and data.get('session_id'):
                 candidates=c.execute("SELECT id,data FROM compressions WHERE session_after=? AND ended IS NOT NULL AND ended<=? AND next_request_id IS NULL ORDER BY ended DESC",(data['session_id'],data['started'])).fetchall()
@@ -211,6 +221,7 @@ class Store:
             from .pricing import catalog_status
             catalogs=catalog_status(c,provider)
             for row in rows:
+                row['execution_state']=c.execute('SELECT execution_state(?)',(jd(row),)).fetchone()[0]
                 if row['id'] in read_changes:row['cache_read_change']=read_changes[row['id']]
             compwhere=where.replace('requests.data','compressions.data')
             compression_count=c.execute('SELECT COUNT(*) FROM compressions WHERE '+compwhere,params).fetchone()[0]
@@ -235,26 +246,33 @@ class Store:
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
 
 def summary(rows):
-    out={'sessions':len({r.get('session_id') for r in rows if r.get('session_id')}),'attempts':len(rows),'pending':0,'missing_usage':0,'partial_breakdown':0,'aggregate_records':0,
+    out={'sessions':len({r.get('session_id') for r in rows if r.get('session_id')}),'attempts':len(rows),'pending':0,'unresolved':0,'abandoned':0,'missing_usage':0,'partial_breakdown':0,'aggregate_records':0,
          'known':{k:0 for k in METRICS},'missing_fields':{k:0 for k in METRICS},
-         'missing_reasons':{k:{r:0 for r in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS},
+         'missing_reasons':{k:{r:0 for r in ('awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS},
          'cost_components':{k:Decimal(0) for k in BUCKETS},'cost_missing_fields':{k:0 for k in BUCKETS},'unpriced_requests':0,'priced_requests':0,'known_cost_usd':Decimal(0)}
     savings_keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:Decimal(0) for k in savings_keys};out['savings_missing']={k:0 for k in savings_keys}
     from .session_cache_writes import blank_summary, add_summary
     out['session_cache_writes']=blank_summary()
+    from .ownership import execution_state
+    owner_cache={}
     for r in rows:
         r=effective_record(r)
+        state=execution_state(r,owner_cache)
+        if state=='unresolved':out['unresolved']+=1
+        if state=='abandoned':out['abandoned']+=1
         add_summary(out['session_cache_writes'],r)
         u=r.get('usage') or {}
-        if r.get('status')=='pending':out['pending']+=1
+        if state=='owner_live':out['pending']+=1
         if u.get('total_tokens') is None:out['missing_usage']+=1
         if any(u.get(k) is None for k in BUCKETS):out['partial_breakdown']+=1
         if u.get('request_count',1)>1:out['aggregate_records']+=1
         for k in METRICS:
             if u.get(k) is None:
                 out['missing_fields'][k]+=1
-                reason=('awaiting_usage' if r.get('status') in ('pending','usage_received') and r.get('ended') is None else
+                reason=('awaiting_usage' if state=='owner_live' else
+                        'unresolved_execution' if state=='unresolved' else
+                        'abandoned_execution' if state=='abandoned' else
                         'unverified_accounting' if (u.get('field_provenance') or {}).get(k) in ('unverified_normalized_zero','unverified_cache_decomposition') else
                         'ended_without_usage' if r.get('ended') is not None and all(u.get(m) is None for m in METRICS) else 'unreported_field')
                 out['missing_reasons'][k][reason]+=1
@@ -285,7 +303,9 @@ class DecimalSum:
     def finalize(self):return str(self.total)
 
 def _exprs():
-    cols=["COUNT(DISTINCT NULLIF(session_id,'')) AS sessions", "COUNT(*) AS attempts", "COALESCE(SUM(status='pending'),0) AS pending",
+    cols=["COUNT(DISTINCT NULLIF(session_id,'')) AS sessions", "COUNT(*) AS attempts", "COALESCE(SUM(execution_state(data)='owner_live'),0) AS pending",
+      "COALESCE(SUM(execution_state(data)='unresolved'),0) AS unresolved",
+      "COALESCE(SUM(execution_state(data)='abandoned'),0) AS abandoned",
       "COALESCE(SUM(json_extract(data,'$.usage.total_tokens') IS NULL),0) AS missing_usage",
       "COALESCE(SUM(json_extract(data,'$.usage.request_count')>1),0) AS aggregate_records",
       "COALESCE(SUM("+' OR '.join("json_extract(data,'$.usage."+k+"') IS NULL" for k in BUCKETS)+"),0) AS partial_breakdown",
@@ -297,26 +317,30 @@ def _exprs():
       "COALESCE(SUM(json_extract(data,'$.calculated_cache_writes.tokens') IS NULL),0) AS cw_missing"]
     for k in METRICS:
         cols += ["COALESCE(SUM(json_extract(data,'$.usage."+k+"')),0) AS k_"+k,"COALESCE(SUM(json_extract(data,'$.usage."+k+"') IS NULL),0) AS m_"+k]
-        reason=("CASE WHEN status IN ('pending','usage_received') AND ended IS NULL THEN 'awaiting_usage' "
+        reason=("CASE WHEN execution_state(data)='owner_live' THEN 'awaiting_usage' "
+                "WHEN execution_state(data)='unresolved' THEN 'unresolved_execution' "
+                "WHEN execution_state(data)='abandoned' THEN 'abandoned_execution' "
                 "WHEN json_extract(data,'$.usage.field_provenance."+k+"') IN ('unverified_normalized_zero','unverified_cache_decomposition') THEN 'unverified_accounting' "
                 "WHEN ended IS NOT NULL AND COALESCE("+','.join("json_extract(data,'$.usage."+m+"')" for m in METRICS)+") IS NULL THEN 'ended_without_usage' ELSE 'unreported_field' END")
-        for name in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field'):
+        for name in ('awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'):
             cols.append("COALESCE(SUM(json_extract(data,'$.usage."+k+"') IS NULL AND ("+reason+")='"+name+"'),0) AS mr_"+k+'_'+name)
     for k in BUCKETS:
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost.components."+k+"')),'0') AS c_"+k,"COALESCE(SUM(json_extract(data,'$.cost.components."+k+"') IS NULL),0) AS cm_"+k]
     for k in ('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd'):
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost."+k+"')),'0') AS s_"+k,"COALESCE(SUM(json_extract(data,'$.cost."+k+"') IS NULL),0) AS sm_"+k]
-    return ','.join(cols)
+    # Avoid Python/JSON calls for terminal history; inspect only open owners.
+    state="(CASE WHEN status IN ('abandoned_without_usage','abandoned_with_usage') THEN 'abandoned' WHEN status IN ('pending','usage_received') AND ended IS NULL THEN execution_state(data) ELSE 'closed' END)"
+    return ','.join(cols).replace('execution_state(data)',state)
 SUMMARY_SQL=_exprs()
 
 def summary_from_sql(row):
-    out={k:row[k] for k in ('sessions','attempts','pending','missing_usage','aggregate_records','partial_breakdown','priced_requests','known_cost_usd')}
+    out={k:row[k] for k in ('sessions','attempts','pending','unresolved','abandoned','missing_usage','aggregate_records','partial_breakdown','priced_requests','known_cost_usd')}
     from .session_cache_writes import blank_summary
     out['session_cache_writes']=dict(blank_summary(),tokens=row['cw_tokens'],compared_requests=row['cw_compared'],baseline_requests=row['cw_baselines'],missing_requests=row['cw_missing'])
     out['unpriced_requests']=out['attempts']-out['priced_requests']
     keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:row['s_'+k] for k in keys};out['savings_missing']={k:row['sm_'+k] for k in keys}
-    out['missing_reasons']={k:{name:row['mr_'+k+'_'+name] for name in ('awaiting_usage','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS}
+    out['missing_reasons']={k:{name:row['mr_'+k+'_'+name] for name in ('awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS}
     for group,prefix,fields in [('known','k_',METRICS),('missing_fields','m_',METRICS),('cost_components','c_',BUCKETS),('cost_missing_fields','cm_',BUCKETS)]:
         out[group]={k:row[prefix+k] for k in fields}
     out['cache_hit_rate']=out['known']['cache_read_tokens']/out['known']['prompt_tokens'] if out['known']['prompt_tokens'] and not out['missing_fields']['cache_read_tokens'] and not out['missing_fields']['prompt_tokens'] else None

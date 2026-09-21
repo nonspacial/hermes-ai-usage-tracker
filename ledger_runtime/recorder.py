@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit, contextvars, functools, logging, os, threading, time, uuid
 from datetime import datetime
 from .storage import Store,home
+from .ownership import identity, reconcile
 from .accounting import mapping,normalize,num,safe_usage,usage_priority
 
 log=logging.getLogger('hermes.ai_usage_ledger')
@@ -55,7 +56,7 @@ def health(root=None):
 
 
 def start_heartbeat(root=None):
-    """One lightweight lease writer per loaded producer/profile; never scans usage.
+    """One heartbeat writer and bounded open-request batch per producer/profile.
 
     Call only AFTER request hooks register successfully. The target is captured
     here rather than resolved in the daemon, so profile ContextVars cannot drift.
@@ -72,9 +73,11 @@ def start_heartbeat(root=None):
         def run():
             while not stop.wait(HEARTBEAT_SECONDS):
                 if os.getpid()!=key[0]:break
+                safe(reconcile)(store(target))
                 health(target)
         thread=threading.Thread(target=run,name='usage-recorder-heartbeat',daemon=True)
         _HEARTBEATS[key]=(stop,thread)
+        safe(reconcile)(store(target))
         health(target)
         thread.start()
         return thread
@@ -115,7 +118,7 @@ def pre(**kw):
     aid=text(kw.get('api_request_id')) or uuid.uuid4().hex
     key=f'{PROCESS}:{aid}:{started:.6f}'
     rec={'id':key,**meta(kw),'started':started,'provider':text(kw.get('provider')) or 'unknown',
-         'task':text(kw.get('task_id')) or 'main','source':'main_hook','status':'pending','process':PROCESS,
+         'task':text(kw.get('task_id')) or 'main','source':'main_hook','status':'pending','process':PROCESS,'owner':identity(),
          'api_request_id':aid,'approx_input_tokens':num(kw.get('approx_input_tokens')),
          'retry_count':num(kw.get('retry_count')),**body_settings(kw)}
     root=str(home()); CURRENT.set({'id':key,'root':root,'session_id':rec['session_id'],'provider':rec['provider'],'api_mode':rec['api_mode'],'api_request_id':aid})
@@ -206,7 +209,7 @@ def post(**kw):
     rec={'id':cur['id'],**meta(kw),'started':old.get('started',timestamp(kw.get('started_at'))),
          'ended':timestamp(kw.get('ended_at')),'status':'completed','source':'main_hook',
          'response_model':text(kw.get('response_model')) or old.get('response_model',''),'usage':usage,
-         'orphan_success':not bool(row),'process':PROCESS}
+         'orphan_success':not bool(row),'process':PROCESS,'owner':old.get('owner') or identity()}
     s.request(rec,'request_completed');health()
     if CURRENT.get() and CURRENT.get()['id']==cur['id']:CURRENT.set(None)
 
@@ -244,19 +247,22 @@ def session_end(**kw):
              'context_compression_timeout','ollama_runtime_context_too_small'}
     if isinstance(reason,str):outcome['exit_reason']=reason if reason in allowed else 'other'
     s=store(root)
+    owner=identity()
     with s.db() as c:
-        rows=c.execute("SELECT id FROM requests WHERE session_id=? AND status IN ('pending','usage_received') AND json_extract(data,'$.turn_id')=? AND json_extract(data,'$.process')=?",(sid,turn,PROCESS)).fetchall()
+        rows=c.execute("SELECT id FROM requests WHERE session_id=? AND status IN ('pending','usage_received') AND ended IS NULL AND json_extract(data,'$.turn_id')=? AND json_extract(data,'$.process')=? AND json_extract(data,'$.owner.generation')=?",(sid,turn,PROCESS,owner['generation'])).fetchall()
     for r in rows:
         s.request({'id':r['id'],'ended':time.time(),'status':'ended_without_usage','turn_outcome':outcome},
-                  'request_ended_without_usage',expected={'status':('pending','usage_received'),'turn_id':(turn,), 'process':(PROCESS,)})
+                  'request_ended_without_usage',expected={'status':('pending','usage_received'),'turn_id':(turn,), 'process':(PROCESS,), 'owner':(owner,), 'ended':(None,)})
     from .skills import turn_end as skills_turn_end
     skills_turn_end(s,kw)
+    reconcile(s)
     health(root)
 
 
 @safe
 def session_start(**kw):
     from .attribution import capture
+    reconcile(store())
     capture(store(),text(kw.get('session_id')),text(kw.get('platform')))
 
 @safe

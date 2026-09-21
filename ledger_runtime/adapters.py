@@ -65,7 +65,7 @@ def aux_metadata(module,kwargs,options):
     comp=r.COMPRESSION.get()
     cur=r.CURRENT.get() or {}
     return {'id':f'{r.PROCESS}:aux:{uuid.uuid4().hex}','started':time.time(),'status':'pending','source':'auxiliary_adapter',
-      'process':r.PROCESS,'provider':r.text(options.get('provider') or context.get('provider') or 'unknown'),
+      'process':r.PROCESS,'owner':r.identity(),'provider':r.text(options.get('provider') or context.get('provider') or 'unknown'),
       'api_mode':r.text(options.get('api_mode') or context.get('api_mode')),
       'model':r.text(kwargs.get('model') or context.get('model')),
       'session_id':r.text((comp or {}).get('session_id') or runtime.get('session_id') or cur.get('session_id')),

@@ -1475,7 +1475,7 @@ function UsageChart({data,mode}){
 }
 function missingFieldNote(summary,key){
  const n=summary?.missing_fields?.[key]||0;if(!n)return 'Reported tokens';
- const labels={awaiting_usage:'awaiting usage',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
+ const labels={awaiting_usage:'awaiting usage (owner process observed live)',unresolved_execution:'unresolved execution; usage unknown',abandoned_execution:'abandoned execution; field not reported',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
  const reasons=summary?.missing_reasons?.[key];
  const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>count(reasons[name])+' '+label):[];
  return (parts.length?parts.join(' · '):count(n)+' requests without this value')+' · subtotal';
@@ -1506,7 +1506,7 @@ function Summary({data,label,mode,agent,onSubagents}){
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
  h('div',{className:'au-provider-totals'},...providerRows)),
  h(UsageChart,{data,mode})):null,
- h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' active · '+count(data?.compression_count||0)+' compressions'),
+ h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open (owner observed live) · '+count(s?.unresolved||0)+' unresolved · '+count(s?.abandoned||0)+' abandoned · '+count(data?.compression_count||0)+' compressions'),
  (s?.missing_usage||s?.unpriced_requests)?h('span',{className:'au-muted'},count(s?.missing_usage||0)+' missing usage · '+count(s?.unpriced_requests||0)+' partially/unpriced'):null))
 }
 
@@ -1567,7 +1567,7 @@ function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,i
 
 function RequestView({data,more,back,offset,onDrill,details}){
  const rows=(data.requests||[]).map(r=>{const u=r.usage||{};return [h('span',{title:when(r.started)},compactWhen(r.started)),r.provider,r.response_model||r.model,
-  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
+  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
   table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
    (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
