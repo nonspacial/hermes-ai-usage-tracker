@@ -446,7 +446,7 @@ const ledgerCss = `
 .au-ledger button,.au-ledger select,.au-ledger input{font:inherit;color:var(--ui-text-primary);background:var(--au-control-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:7px 10px;max-width:100%}
 .au-ledger button{cursor:pointer}.au-ledger button:disabled{opacity:.5;cursor:default}
 .au-ledger .au-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0;padding-bottom:12px;border-bottom:1px solid var(--ui-stroke-secondary)}
-.au-ledger .au-table{background:var(--au-table-bg);overflow:auto;width:100%;max-height:620px}
+.au-ledger .au-table{background:var(--au-table-bg);width:100%}
 .au-ledger table{border-collapse:collapse;font-size:12px;width:100%;text-align:left;white-space:nowrap}
 .au-ledger th,.au-ledger td{padding:10px 12px;border-bottom:1px solid var(--ui-stroke-secondary);vertical-align:top}
 .au-ledger th{background:var(--au-table-head-bg);color:var(--ui-text-secondary);font-weight:600}
@@ -487,6 +487,7 @@ const ledgerCss = `
 }
 @container(max-width:400px){
  .au-header-title{font-size:11px}.au-page-header>.au-connection span:last-child{display:none}
+ .au-header-chip,.au-header-profile{min-width:0}
  .au-ledger .au-page-header>.au-connection{padding:7px}
  .au-ledger .au-header-picker>:is(button,select){padding-left:5px;padding-right:5px}
 }
@@ -509,7 +510,6 @@ const ledgerCss = `
 .au-ledger [data-testid="cache-costs"] tfoot th,.au-ledger [data-testid="cache-costs"] tfoot td{font-weight:650;border-top:2px solid var(--ui-stroke-secondary);background:var(--au-table-head-bg)}
 .au-ledger .au-cache-window{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:12px 0}
 .au-ledger .au-cache-window .au-segment{margin:0}
-.au-ledger [data-testid="cache-costs"] .au-table{max-height:480px}
 
 .au-ledger .au-component-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0}
 .au-ledger .au-cost-card{background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:12px;min-width:0}
@@ -533,7 +533,7 @@ const ledgerCss = `
 .au-ledger .au-provider-row small{font-size:11px;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
 .au-ledger .au-provider-cost{font-weight:700;color:var(--ui-text-primary)}
 .au-ledger .au-timeline-entry{background:var(--au-table-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:8px 0;overflow-wrap:anywhere}
-.au-ledger .au-timeline-scroll{max-height:min(52vh,560px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:4px}
+.au-ledger .au-timeline-scroll{padding-right:4px}
 .au-ledger .au-snapshot-picker{justify-content:flex-end}
 .au-ledger .au-snapshot-picker label{min-width:0;max-width:100%}
 .au-ledger .au-timeline-entry>summary{cursor:pointer;padding:12px;display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.7fr) minmax(160px,1fr);gap:12px;align-items:center}
@@ -643,7 +643,6 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"] .au-json-panel{width:100%;max-width:100%;min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-drill{max-width:100%}
 .au-ledger .au-record-disclosure{display:none}
-.au-ledger .au-table[data-layout="records"][data-accordions="true"]{max-height:65vh;overflow:auto;overflow-anchor:none}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] .au-record-disclosure{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;width:100%;border:0;background:transparent;text-align:left;padding:0;color:var(--ui-text-primary)}
 .au-record-identity{flex:1;min-width:100px;overflow-wrap:anywhere}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody .au-record-heading>.au-field-label,
@@ -652,6 +651,22 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody tr[data-expanded="false"] .au-record-heading{padding-bottom:0;border-bottom:0}
 @container(min-width:760px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container(max-width:400px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:minmax(0,1fr)}}
+/* The route tile already supplies a definite height. Do not put this flex
+   allocation inside Radix's intrinsic-height scroll content wrapper. */
+.au-ledger.au-pane{height:100%;min-height:0;box-sizing:border-box;overflow:hidden;container-type:size}
+.au-provider-pane{height:100%;min-height:0;display:flex;flex-direction:column}
+.au-upper{flex:0 1 auto;min-height:0;max-height:var(--au-upper-cap,50%);overflow:auto;scrollbar-gutter:stable;overflow-anchor:none}
+.au-ledger .au-provider-pane>.au-subpage-tabs{flex:none;flex-wrap:nowrap;overflow:auto;margin:0;min-height:0;max-height:25%;padding:8px 0}
+.au-provider-pane>.au-subpage-tabs button{flex-shrink:0}
+.au-reader{flex:1;min-height:0;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;position:relative}
+.au-ledger .au-reader .au-table,.au-ledger .au-reader .au-table[data-layout="records"][data-accordions="true"],.au-ledger .au-reader .au-timeline-scroll{max-height:none;overflow:visible}
+.au-ledger .au-reader thead{position:sticky;top:0;z-index:2;background:var(--au-table-bg)}
+.au-reader-content{display:flow-root;min-width:0}
+/* Synchronous normal-line measurement; never close live details or clone IDs. */
+.au-reader.au-measure-lines .au-json-panel{display:none}
+.au-pane .au-chart svg{height:clamp(160px,24cqh,320px)}
+@container(max-height:700px){.au-pane .au-hero{margin:12px 0;gap:20px}.au-pane .au-provider-totals{margin-top:12px}.au-pane .au-provider-row{margin:9px 0}.au-pane .au-totals{margin-bottom:12px;gap:8px}}
+.au-reader:focus-visible,.au-upper:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
 const count = n => n == null ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
@@ -661,6 +676,82 @@ const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
 function notice(t){return h('div',{className:'au-notice'},t)}
 function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted'},note))}
+// A bounded reader keeps a keyed visible entry, not a pixel count. Prepending
+// records (or changing their heights) must not move the entry being read.
+function readerSnapshot(root){
+ const top=root.getBoundingClientRect().top;
+ return {top:root.scrollTop,items:[...root.querySelectorAll('[data-scroll-key]')]
+  .filter(node=>node.getBoundingClientRect().bottom>top&&node.getBoundingClientRect().top<top+root.clientHeight)
+  .map(node=>({key:node.dataset.scrollKey,offset:node.getBoundingClientRect().top-top}))};
+}
+function restoreReader(root,snapshot){
+ if(!snapshot)return;
+ if(snapshot.top===0){root.scrollTop=0;return}
+ const nodes=[...root.querySelectorAll('[data-scroll-key]')];
+ for(const item of snapshot.items){const node=nodes.find(node=>node.dataset.scrollKey===item.key);
+  if(node){root.scrollTop+=node.getBoundingClientRect().top-root.getBoundingClientRect().top-item.offset;return}}
+ root.scrollTop=snapshot.top;
+}
+function Reader({children,className='',label,id,resetKey,...props}){
+ const [state]=useState(()=>({root:null,snapshot:null}));
+ if(!state.attach)state.attach=node=>{state.root=node};
+ useEffect(()=>{
+  const root=state.root;if(!root)return;
+  const remember=()=>{state.snapshot=readerSnapshot(root)};
+  const reconcile=()=>{restoreReader(root,state.snapshot);remember()};
+  const observer=new MutationObserver(reconcile),resize=new ResizeObserver(reconcile);
+  remember();root.addEventListener('scroll',remember,{passive:true});
+  observer.observe(root,{childList:true,subtree:true,characterData:true});resize.observe(root.firstElementChild);
+  return()=>{observer.disconnect();resize.disconnect();root.removeEventListener('scroll',remember)};
+ },[]);
+ useEffect(()=>{if(state.root){state.root.scrollTop=0;state.snapshot=readerSnapshot(state.root)}},[resetKey]);
+ return h('div',{...props,id,ref:state.attach,className:'au-reader '+className,tabIndex:0,'aria-label':label},h('div',{className:'au-reader-content'},children));
+}
+function AnalyticsPane({children}){
+ const [state]=useState(()=>({root:null}));
+ if(!state.attach)state.attach=node=>{state.root=node};
+ useEffect(()=>{
+  const root=state.root;let frame=0,disposed=false;
+  function measure(){
+   frame=0;if(disposed)return;
+   const pane=root.querySelector('.au-provider-pane'),reader=root.querySelector('.au-reader'),nav=root.querySelector('.au-subpage-tabs');
+   if(!pane||!reader||!nav)return;
+   // Intrinsic lower chrome + ten normal lines, independent of the allocation
+   // being computed. Expanded bodies never redefine a normal collapsed line.
+   const rows=[...reader.querySelectorAll(reader.querySelector('tbody')?'tbody tr':reader.querySelector('.au-timeline-entry')?'.au-timeline-entry':'.au-skill-legend-row')];
+   const scrollTop=reader.scrollTop;
+   let heights;
+   // Measure even an initially open, sole record without its inspector body.
+   // Restore in the same frame: no toggle events, lost state or scroll clamping.
+   reader.classList.add('au-measure-lines');
+   try{heights=rows.map(row=>{
+    const style=getComputedStyle(row),disclosure=row.querySelector('.au-record-disclosure');
+    const padding=parseFloat(style.paddingTop)+parseFloat(style.paddingBottom)+parseFloat(style.borderTopWidth)+parseFloat(style.borderBottomWidth);
+    const margin=parseFloat(style.marginBottom)||0;
+    if(row.matches('.au-timeline-entry'))return row.querySelector('summary').getBoundingClientRect().height+padding+margin;
+    if(disclosure&&getComputedStyle(disclosure).display!=='none')return disclosure.getBoundingClientRect().height+padding+margin;
+    return row.getBoundingClientRect().height+margin;
+   }).filter(n=>n>0)}finally{
+    reader.classList.remove('au-measure-lines');reader.scrollTop=scrollTop;
+   }
+   const line=heights.length?Math.max(...heights):0;
+   const first=rows[0],last=rows[rows.length-1];
+   const span=first&&last?last.getBoundingClientRect().bottom-first.getBoundingClientRect().top:0;
+   const chrome=Math.max(0,reader.firstElementChild.getBoundingClientRect().height-span)+nav.getBoundingClientRect().height;
+   const height=pane.clientHeight;
+   const cap=line?Math.max(height/2,Math.min(height*2/3,height-chrome-10*line)):height/2;
+   const value=Math.floor(cap)+'px';
+   if(pane.style.getPropertyValue('--au-upper-cap')!==value)pane.style.setProperty('--au-upper-cap',value);
+  }
+  const schedule=()=>{if(!frame)frame=requestAnimationFrame(measure)};
+  const resize=new ResizeObserver(schedule);resize.observe(root);
+  const content=root.querySelector('.au-reader-content');if(content)resize.observe(content);
+  const mutations=new MutationObserver(schedule);mutations.observe(root,{subtree:true,childList:true,characterData:true});
+  root.addEventListener('toggle',schedule,true);root.addEventListener('au-reflow',schedule);schedule();
+  return()=>{disposed=true;resize.disconnect();mutations.disconnect();root.removeEventListener('toggle',schedule,true);root.removeEventListener('au-reflow',schedule);cancelAnimationFrame(frame)};
+ },[]);
+ return h('div',{ref:state.attach,className:'au-ledger au-pane p-4'},children);
+}
 function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
  const [expanded,setExpanded]=useState({});
  const [nodes]=useState(()=>({root:null}));
@@ -669,6 +760,7 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
   let frame=0,lastWidth=-1,disposed=false;
   function measure(){
    frame=0;if(disposed)return;
+   const reader=root.closest('.au-reader'),snapshot=reader?readerSnapshot(reader):null;
    const top=root.scrollTop,focused=document.activeElement;
    const focusedRow=focused?.closest('tbody tr');
    if(focusedRow&&root.contains(focusedRow)&&!focused.classList.contains('au-record-disclosure')){
@@ -683,7 +775,8 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
     focusedRow.tabIndex=-1;focusedRow.focus({preventScroll:true});
     focusedRow.addEventListener('blur',()=>focusedRow.removeAttribute('tabindex'),{once:true});
    }
-   root.scrollTop=top;
+   root.scrollTop=top;if(reader)restoreReader(reader,snapshot);
+   root.dispatchEvent(new Event('au-reflow',{bubbles:true}));
   }
   function schedule(){if(!frame)frame=requestAnimationFrame(measure)}
   const observer=new ResizeObserver(entries=>{
@@ -703,7 +796,7 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
  h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
  return h('div',{className:'au-table','data-accordions':!!accordions,tabIndex:accordions?0:undefined,'aria-label':accordions?'Expandable records':undefined,ref:node=>{nodes.root=node}},h('table',{role:'table'},
   h('thead',{role:'rowgroup'},h('tr',{role:'row'},...headers.map((v,i)=>h('th',{key:i,scope:'col',role:'columnheader'},v)))),
-  h('tbody',{role:'rowgroup'},...rows.map((row,i)=>{const key=rowKeys?.[i]??i;return h('tr',{role:'row',key,'data-row-id':rowKeys?.[i],'data-expanded':!!expanded[key]},...cells(row,false,accordions?.[i],key))})),
+  h('tbody',{role:'rowgroup'},...rows.map((row,i)=>{const key=rowKeys?.[i]??i;return h('tr',{role:'row',key,'data-row-id':rowKeys?.[i],'data-scroll-key':'row:'+key,'data-expanded':!!expanded[key]},...cells(row,false,accordions?.[i],key))})),
   footer?h('tfoot',{role:'rowgroup'},h('tr',{role:'row'},...cells(footer,true))):null));
 }
 function table(headers,rows,footer=null,rowKeys=null,accordions=null){return h(ResponsiveTable,{headers,rows,footer,rowKeys,accordions})}
@@ -858,7 +951,7 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
  rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
   return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
- })):h('p',{className:'au-muted'},'No recorded activity in this window.'))
+ }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start]))):h('p',{className:'au-muted'},'No recorded activity in this window.'))
 }
 
 // Request drill-downs are reversible local navigation. These fields narrow the
@@ -1159,7 +1252,7 @@ function UsagePie({items,label,onChoose,selected}){
    return item.value===total?h('circle',{...props,cx:100,cy:100,r:96},title):h('path',{...props,d:`M100 100 L${100+96*Math.cos(start)} ${100+96*Math.sin(start)} A96 96 0 ${angle-start>Math.PI?1:0} 1 ${100+96*Math.cos(angle)} ${100+96*Math.sin(angle)} Z`},title);
   })):h('p',{className:'au-muted'},'No recorded values in this selection.'),
   h('div',{className:'au-skill-legend'},...items.map((item,i)=>h(onChoose?'button':'div',{
-   key:item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
+   key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
   },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
 }
 function SkillsUsageView({params,scope,onSession}){
@@ -1191,7 +1284,7 @@ function SkillsUsageView({params,scope,onSession}){
  ]);
  const eventHeaders=['Recorded at','Event','Skill','File','Provider','Model','Project','Session','Agent','Returned text · estimated tokens','Context footprint','Measurement source','Compression ID','Snapshot'];
  const eventList=(accordions=false)=>h('div',{'data-testid':'skill-events',key:stableScope},
-  accordions?h('div',{className:'au-timeline-scroll',tabIndex:0,'aria-label':'Session timeline entries'},...(data?.events||[]).map((e,i)=>h('details',{key:e.id,'data-event-id':e.id,className:'au-timeline-entry'},
+  accordions?h('div',{className:'au-timeline-scroll',tabIndex:0,'aria-label':'Session timeline entries'},...(data?.events||[]).map((e,i)=>h('details',{key:e.id,'data-event-id':e.id,'data-scroll-key':'event:'+e.id,className:'au-timeline-entry'},
    h('summary',{},h('strong',{className:'au-timeline-session'},e.session_id||'Unattributed session'),
     h('span',{},h('span',{className:'au-muted'},'Context footprint'),h('br'),e.context_used==null?'Not recorded':'~'+count(e.context_used)+' tokens'),
     h('span',{},h('span',{className:'au-muted'},'Recorded'),h('br'),when(e.ts))),
@@ -1346,8 +1439,9 @@ function UsagePage(){
     data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,g.task].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
  if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
- return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
-  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all'},
+ return h(AnalyticsPane,{},h('style',{},ledgerCss),
+  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
+  h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,
   provider?h(ProviderLimits,{quota,providerId:provider,label,selected,hiddenIds}):null,
   h('div',{className:'au-view-controls'},
    h('div',{className:'au-segment au-mode-buttons',role:'group','aria-label':'Usage display'},...['Cost','Tokens'].map(v=>h('button',{key:v,'aria-pressed':displayMode===v,onClick:()=>{setDisplayMode(v);}},v))),
@@ -1367,14 +1461,14 @@ function UsagePage(){
   h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
   h('button',{onClick:exportAll,disabled:busy||!data},busy?'Exporting…':'Export request CSV'),
   data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+(t.ended?' · ended':' · open')))):null),
-  h(Summary,{data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})}),
+  h(Summary,{data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
-  h('section',{id:'au-subpage-panel',role:'tabpanel','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
+  h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,
   err?notice(err):null,
   ledger.error&&!data?h('p',{className:'au-muted'},'Usage unavailable. Reconnecting…'):null,
   tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setFilterTest('')},onEnd:v=>{setCustomEnd(v);setFilterTest('')},window:data?.window}):null,
-  body||h('p',{className:'au-muted'},'Waiting for ledger…')))))
+  body||h('p',{className:'au-muted'},'Waiting for ledger…'))))
 }
 
 

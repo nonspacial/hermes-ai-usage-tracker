@@ -13,7 +13,8 @@ def order(page,mobile=False):
  summary=page.get_by_test_id('recorded-summary').bounding_box()
  nested=page.get_by_role('navigation',name='Provider subpages',exact=True).bounding_box()
  assert primary['y']+primary['height']<=filters['y'] and filters['y']+filters['height']<=summary['y']
- assert summary['y']+summary['height']<=nested['y'], 'Subpages belong below the shared provider summary'
+ upper=page.locator('.au-upper').bounding_box()
+ assert upper['y']+upper['height']<=nested['y'], 'Subpages belong below the bounded shared summary region'
  assert page.get_by_test_id('provider-page').get_by_role('navigation',name='Provider subpages',exact=True).count()==1
  assert page.get_by_test_id('main-navigation').get_by_role('tab',name='Overview',exact=True).count()==0
  totals=page.get_by_test_id('usage-totals').bounding_box();hero=page.get_by_test_id('usage-hero')

@@ -25,6 +25,11 @@ def run():
   show_all=page.get_by_test_id('request-show-all')
   listing=page.get_by_test_id('request-list')
   def rows():return listing.locator('tbody tr')
+  def session_link(name):
+   link=listing.get_by_role('button',name=name,exact=True,include_hidden=True).first
+   disclosure=link.locator('xpath=ancestor::tr').locator('.au-record-disclosure')
+   if disclosure.is_visible() and disclosure.get_attribute('aria-expanded')=='false':disclosure.click()
+   return link
   def last_query():
    return page.evaluate("() => Object.fromEntries(new URL(demoCalls.filter(p=>p.startsWith('/ledger?')).at(-1),'https://offline.test').searchParams)")
   def settled():page.wait_for_timeout(90)
@@ -36,7 +41,7 @@ def run():
   expect(rows()).to_have_count(7)
   assert nav.count()==0
   # Session drill reproduced from the reported single-row case.
-  listing.get_by_role('button',name='demo-session-2',exact=True).click()
+  session_link('demo-session-2').click()
   expect(rows()).to_have_count(1)
   expect(back).to_be_visible();expect(show_all).to_be_visible()
   expect(nav.get_by_role('button',name='Remove session filter',exact=True)).to_be_visible()
@@ -44,13 +49,15 @@ def run():
   expect(page.get_by_role('textbox',name='Session ID',exact=True)).to_have_value('demo-session-2')
   # Inline record details remain available; reset must not leave an expanded
   # details row accidentally attached to a different request after list reorder.
+  disclosure=rows().first.locator('.au-record-disclosure')
+  if disclosure.is_visible() and disclosure.get_attribute('aria-expanded')=='false':disclosure.click()
   listing.locator('summary').first.click();assert listing.locator('details[open]').count()==1
   page.get_by_test_id('provider-subpage').screenshot(path=str(ART/'request-drill-return.png'))
   show_all.click();expect(rows()).to_have_count(7)
   expect(page.get_by_role('textbox',name='Session ID',exact=True)).to_have_value('')
   assert listing.locator('details[open]').count()==0 and nav.count()==0
   scope_is()
-  listing.get_by_role('button',name='demo-session-2',exact=True).click();expect(rows()).to_have_count(1)
+  session_link('demo-session-2').click();expect(rows()).to_have_count(1)
   back.focus();back.press('Enter');expect(rows()).to_have_count(7)
   scope_is()
   print('PASS exact reported session drill: visible Back/Show all beside table, keyboard Back, no stale row details')
@@ -60,7 +67,7 @@ def run():
   page.locator('.au-breakdown tbody button').filter(has_text='hermes-agent').click()
   expect(page.get_by_role('combobox',name='Project',exact=True)).to_have_value('repo-hermes')
   expect(rows()).to_have_count(5)
-  listing.get_by_role('button',name='demo-session-2',exact=True).click();expect(rows()).to_have_count(1)
+  session_link('demo-session-2').click();expect(rows()).to_have_count(1)
   back.click();expect(rows()).to_have_count(5)
   expect(page.get_by_role('combobox',name='Project',exact=True)).to_have_value('repo-hermes')
   back.click()
@@ -88,7 +95,7 @@ def run():
   page.get_by_role('combobox',name='Saved tests',exact=True).select_option('navigation-test');settled()
   start=page.get_by_role('textbox',name='Window start',exact=True).input_value()
   end=page.get_by_role('textbox',name='Window end',exact=True).input_value()
-  listing.get_by_role('button',name='demo-session-2',exact=True).click();expect(rows()).to_have_count(1)
+  session_link('demo-session-2').click();expect(rows()).to_have_count(1)
   show_all.click();expect(rows()).to_have_count(7)
   scope_is(period='Custom')
   assert page.get_by_role('textbox',name='Window start',exact=True).input_value()==start
@@ -106,16 +113,16 @@ def run():
   page.get_by_role('button',name='Next requests',exact=True).click();settled()
   expect(listing).to_contain_text('Showing 201–400 of 437 requests.')
   before=rows().first.inner_text()
-  listing.get_by_role('button',name='demo-session-2',exact=True).first.click();settled()
+  session_link('demo-session-2').click();settled()
   assert rows().count()<200
   # Same narrowed scope is a no-op, not an extra Back history entry.
-  listing.get_by_role('button',name='demo-session-2',exact=True).first.click();settled()
+  session_link('demo-session-2').click();settled()
   back.click();settled()
   expect(listing).to_contain_text('Showing 201–400 of 437 requests.')
   assert rows().first.inner_text()==before and nav.count()==0
   page.get_by_test_id('provider-subpage').screenshot(path=str(ART/'request-list-restored.png'))
   # Scope stays reversible across background refreshes, but not stale providers.
-  listing.get_by_role('button',name='demo-session-2',exact=True).first.click();settled()
+  session_link('demo-session-2').click();settled()
   page.get_by_test_id('connection-status').click();settled();expect(back).to_be_visible()
   main.get_by_role('tab',name='Nous Portal',exact=True).click();settled()
   assert back.count()==0;expect(show_all).to_be_visible()
@@ -126,12 +133,12 @@ def run():
   print('PASS paginated Back restores page/rows; duplicate drill is a no-op; refresh preserves history; provider switch cannot revive stale history')
   # Manual time changes also keep the selected timeframe rather than restoring
   # an old one through Back. The local Show all remains available.
-  listing.get_by_role('button',name='demo-session-2',exact=True).first.click();settled()
+  session_link('demo-session-2').click();settled()
   page.get_by_role('button',name='7 days',exact=True).click();settled()
   assert back.count()==0;show_all.click();settled();scope_is(period='7 days')
   # Mobile navigation remains local to the table and wraps without page overflow.
   page.get_by_role('button',name='Past 24h',exact=True).click();settled()
-  listing.get_by_role('button',name='demo-session-2',exact=True).first.click();settled()
+  session_link('demo-session-2').click();settled()
   page.set_viewport_size({'width':480,'height':1000});settled()
   expect(back).to_be_visible();expect(show_all).to_be_visible()
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')

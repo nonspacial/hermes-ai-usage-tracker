@@ -26,7 +26,12 @@ def run():
         page.get_by_role('navigation', name='Provider subpages', exact=True).get_by_role('tab', name='Requests', exact=True).click()
         listing = page.get_by_test_id('request-list')
         expect(listing.locator('tbody tr')).to_have_count(7)
-        listing.get_by_role('button', name='demo-session-0', exact=True).first.click()
+        def session_link(name):
+            link=listing.get_by_role('button',name=name,exact=True,include_hidden=True).first
+            disclosure=link.locator('xpath=ancestor::tr').locator('.au-record-disclosure')
+            if disclosure.is_visible() and disclosure.get_attribute('aria-expanded')=='false':disclosure.click()
+            return link
+        session_link('demo-session-0').click()
         expect(listing.locator('tbody tr')).to_have_count(5)
         nav = page.get_by_test_id('request-navigation')
         show_all = page.get_by_test_id('request-show-all')
@@ -79,7 +84,7 @@ def run():
         assert back.evaluate('e => getComputedStyle(e).outlineStyle') != 'none'
         back.press('Enter')
         expect(listing.locator('tbody tr')).to_have_count(7)
-        listing.get_by_role('button', name='demo-session-2', exact=True).first.click()
+        session_link('demo-session-2').click()
         expect(listing.locator('tbody tr')).to_have_count(1)
         show_all.click()
         expect(listing.locator('tbody tr')).to_have_count(7)

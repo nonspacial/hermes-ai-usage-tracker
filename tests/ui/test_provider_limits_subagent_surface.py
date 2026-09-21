@@ -24,7 +24,7 @@ def alpha(locator):
 def card_first(page,provider):
     panel=page.get_by_test_id('provider-page');card=panel.get_by_test_id('provider-limits')
     expect(card).to_be_visible();expect(card).to_have_attribute('data-provider',provider)
-    assert panel.evaluate('e=>e.firstElementChild.dataset.testid')=='provider-limits'
+    assert card.evaluate('e=>e.parentElement.classList.contains("au-upper")')
     a=card.bounding_box();b=panel.locator('.au-view-controls').bounding_box()
     assert a['y']+a['height']<=b['y']
     assert card.locator('details').count()==0

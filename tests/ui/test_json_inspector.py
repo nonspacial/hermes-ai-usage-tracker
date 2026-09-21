@@ -26,6 +26,9 @@ def run():
   details=page.get_by_test_id('usage-details').nth(1)
   rid=details.get_attribute('data-record-id')
   details=page.locator('.au-json-details').filter(has=page.locator('summary')).nth(1)
+  row=details.locator('xpath=ancestor::tr')
+  if row.locator('.au-record-disclosure').is_visible():
+   row.locator('.au-record-disclosure').click()
   details.locator('summary').click()
   expect(details).to_have_attribute('open','')
   code=details.locator('.au-json-text');frozen=code.inner_text();original=json.loads(frozen)

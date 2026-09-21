@@ -109,7 +109,7 @@ def run():
             expect(page.get_by_test_id('skill-frequency').locator('svg')).to_be_visible()
             values['pie']=page.get_by_test_id('skill-frequency').locator('svg path,svg circle').evaluate_all('(els)=>els.map(e=>getComputedStyle(e).fill)')
             page.get_by_role('tab',name='Requests',exact=True).click()
-            values['table']=rgba(page.locator('.au-table').first)
+            values['table']=rgba(page.locator('.au-table tbody tr').first)
             audit.append(values)
         for key in ('card','amount','line','table'):
             assert audit[0][key]!=audit[1][key],(key,audit)
