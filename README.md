@@ -8,19 +8,86 @@ This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lva
 
 ## A look inside
 
-**All screenshots use the offline preview with synthetic records and prices—not real accounts or measured savings.** The preview renders the packaged Desktop component through an isolated SDK harness; it is not a live Hermes session.
+Captured from the **running Hermes Desktop app**, not the synthetic preview. Unrelated panes are cropped out; account links and session/project/task identifiers are redacted. Values are live snapshots taken at different moments. Dollar figures are API-equivalent estimates, not subscription charges. Click an image for full resolution.
 
-### Usage at a glance
+<table>
+<tr>
+<td valign="top" width="50%">
+<strong>1. Subscriptions — the original starting point</strong><br>
+Provider allowances, resets and compact Nous Portal details.<br><br>
+<a href="docs/images/live-subscriptions.png"><img width="350" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
+</td>
+<td valign="top" width="50%">
+<strong>2. All providers — Overview</strong><br>
+Token totals, cache summaries, subagent usage and trends.<br><br>
+<a href="docs/images/live-overview.png"><img width="217" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+<strong>3. Requests — wide table layout</strong><br>
+Individual attempts, provider/model attribution, token counts and expandable usage details.<br><br>
+<a href="docs/images/live-requests-table.png"><img width="720" src="docs/images/live-requests-table.png" alt="Live Requests tab as a wide table; private identifier columns redacted"></a>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<strong>4. Cache &amp; costs</strong><br>
+Component costs, calculated cache writes, savings and saved rates.<br><br>
+<a href="docs/images/live-cache-wide.png"><img width="350" src="docs/images/live-cache-wide.png" alt="Live Cache and costs tab with component cards and saved-rate table"></a>
+</td>
+<td valign="top">
+<strong>5. Compressions</strong><br>
+Expandable events with Start/End headers, outcomes and linked helper usage.<br><br>
+<a href="docs/images/live-compressions.png"><img width="252" src="docs/images/live-compressions.png" alt="Live Compressions tab showing a committed compression record"></a>
+</td>
+</tr>
+<tr>
+<td valign="top">
+<strong>Responsive Requests</strong><br>
+The same request view becomes collapsed accordions; expand a record for its fields and JSON.<br><br>
+<a href="docs/images/live-requests-cards.png"><img width="350" src="docs/images/live-requests-cards.png" alt="Live Requests tab with collapsed session headers and an expanded request"></a>
+</td>
+<td valign="top">
+<strong>Responsive Cache &amp; costs</strong><br>
+Metric cards wrap and saved-rate groups become accordions as space shrinks.<br><br>
+<a href="docs/images/live-cache-cards.png"><img width="170" src="docs/images/live-cache-cards.png" alt="Live Cache and costs in a narrower pane with wrapped metrics and record-style rates"></a>
+</td>
+</tr>
+</table>
 
-Provider quotas, token and cache summaries, time filters, trends and drill-downs in one view.
+### More detail, without losing the overview
 
-![Synthetic Codex overview with quota bar, token summaries, usage trend and model breakdown](docs/images/usage-overview.png)
-
-### See which skills were loaded
-
-An interactive frequency pie links to timestamped skill-load and reference-read records. Context estimates remain separate from billable usage.
-
-![Synthetic skills frequency chart with counts and percentages](docs/images/skills-frequency.png)
+<table>
+<tr><td colspan="2" valign="top">
+<strong>Subscription line and wide token overview</strong><br>
+The provider allowance stays above the main token counter, cache metrics and usage trend.<br><br>
+<a href="docs/images/live-wide-summary.png"><img width="546" src="docs/images/live-wide-summary.png" alt="Wide Codex view with subscription allowance, main token counter and hourly usage chart"></a>
+</td></tr>
+<tr><td valign="top" width="50%">
+<strong>Models &amp; tasks</strong><br>
+Provider/model/task groups with known totals and expandable accounting details.<br><br>
+<a href="docs/images/live-models-tasks.png"><img width="247" src="docs/images/live-models-tasks.png" alt="Models and tasks accordions with one group expanded and private task IDs redacted"></a>
+</td><td valign="top" width="50%">
+<strong>Skills frequency — narrow pane</strong><br>
+A bounded pie above a two-column skills legend.<br><br>
+<a href="docs/images/live-skills-thin.png"><img width="160" src="docs/images/live-skills-thin.png" alt="Skills frequency in a narrow pane with the pie above two legend columns"></a>
+</td></tr>
+<tr><td colspan="2" valign="top">
+<strong>Skills frequency — wide pane</strong><br>
+The pie stays capped while the legend uses three columns. Very narrow panes use one.<br><br>
+<a href="docs/images/live-skills-wide.png"><img width="451" src="docs/images/live-skills-wide.png" alt="Wide Skills frequency view with a capped pie and three-column legend"></a>
+</td></tr>
+<tr><td valign="top">
+<strong>Context footprint</strong><br>
+Select a recorded snapshot to inspect its estimated context composition.<br><br>
+<a href="docs/images/live-context-footprint.png"><img width="350" src="docs/images/live-context-footprint.png" alt="Context footprint snapshot with estimated system, skill and conversation token composition"></a>
+</td><td valign="top">
+<strong>Session timeline</strong><br>
+Expand a timestamped observation for its context, source and linked snapshot.<br><br>
+<a href="docs/images/live-timeline.png"><img width="350" src="docs/images/live-timeline.png" alt="Session timeline with an expanded observation and redacted session and project identifiers"></a>
+</td></tr>
+</table>
 
 ## Behaviour
 
@@ -33,7 +100,9 @@ An interactive frequency pie links to timestamped skill-load and reference-read 
 - Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.
 - New attribution uses same-profile active named projects and explicit folder ownership. Historical changes are operator-only: see [PROJECT_ATTRIBUTION.md](PROJECT_ATTRIBUTION.md) for the dry-run/apply reconciliation CLI and preservation guarantees.
 - Live refreshes coalesce identical in-flight reads instead of piling up abandoned backend work. Larger-window summaries materialise their inputs once per read without caching stale results across reads.
-- Dense tables reflow into labelled records as the pane narrows. Skills timeline accordions retain open state and reading position, with bounded internal scrolling.
+- Requests, saved-rate groups, Compressions and Models & tasks retain tables where they fit and become initially collapsed accordions in narrower panes. Headers expose identity and known token values; expanded records retain their labelled fields and JSON controls. Responsive changes preserve keyed records and keyboard focus.
+- Compression headers use **Start** for the configured threshold and **End** for the first subsequent reported input. These are not exact before/after measurements: the threshold is not measured starting usage, and the next request may include new content. Missing values remain **—**.
+- Skills pies sit above their legends, capped at 320px. Legends use one, two or three columns according to pane width. Session timeline accordions retain open state and reading position, with bounded internal scrolling.
 
 Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract, [ANALYTICS_RELOAD.md](ANALYTICS_RELOAD.md) for the Refresh menu and real connection indicator, and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
 
@@ -63,7 +132,7 @@ desktop/plugin.js           Desktop quota and analytics UI
 dashboard/plugin_api.py     Original quota routes plus ledger API
 ledger_runtime/             Capture, accounting, attribution, storage and pricing
 tests/                      Offline Python and browser checks
-docs/images/                Curated synthetic README screenshots
+docs/images/                Cropped, redacted real-app README screenshots
 install.py                  Explicit-home installer with receipts and rollback
 doctor.py                   Offline Hermes source-signature inspection
 cache_write_report.py       Explicit-home cache-evidence report
