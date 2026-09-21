@@ -615,9 +615,11 @@ const ledgerCss = `
 @container (max-width:620px){.au-ledger .au-main-tabs{flex-wrap:nowrap;overflow-x:auto}.au-ledger .au-main-tabs button{flex-shrink:0}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .au-ledger .au-field-label{display:none}
-.au-ledger .au-skill-chart{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}
-.au-ledger .au-skill-pie{display:block;width:100%;height:auto}
+.au-ledger .au-skill-chart{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
+.au-ledger .au-skill-pie{display:block;width:100%;max-width:320px;height:auto;justify-self:center}
 .au-ledger .au-skill-legend{display:grid;gap:6px;min-width:0}
+@container(min-width:620px){.au-ledger .au-skill-legend{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container(min-width:1000px){.au-ledger .au-skill-legend{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .au-ledger .au-skill-legend-row{display:flex;align-items:center;gap:9px;padding:8px;text-align:left;min-width:0;flex-wrap:wrap}
 .au-ledger .au-skill-legend-row>span:not(.au-skill-swatch){flex:1;min-width:0;overflow-wrap:anywhere}
 .au-ledger .au-skill-legend-row>strong{font-size:12px;font-variant-numeric:tabular-nums}

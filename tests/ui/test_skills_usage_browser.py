@@ -106,7 +106,7 @@ def run():
         detail.get_by_role('button', name='Next events', exact=True).click()
         expect(detail.locator('tbody tr')).to_have_count(63 + 4 + 2 - 50)
         expect(chart.get_by_role('button', name='frontend-ui-iteration · 65 loads · inspect', exact=True)).to_be_visible()
-        for width in (1200, 850, 390, 320):
+        for width in (1900, 1200, 850, 390, 320):
             page.set_viewport_size({'width': width, 'height': 1000})
             expect(detail).to_be_visible()
             page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
@@ -114,10 +114,13 @@ def run():
             assert detail.locator('.au-table').evaluate('(e)=>e.scrollWidth<=e.clientWidth+1')
             sizes = chart.locator('.au-skill-chart').evaluate('''e => {
                 const pie=e.querySelector('svg').getBoundingClientRect();
-                const columns=getComputedStyle(e).gridTemplateColumns.split(' ').length;
-                return {pie:pie.width,height:pie.height,chart:e.clientWidth,columns};
+                const legend=e.querySelector('.au-skill-legend');
+                const columns=getComputedStyle(legend).gridTemplateColumns.split(' ').length;
+                return {pie:pie.width,height:pie.height,chart:e.clientWidth,columns,below:legend.getBoundingClientRect().top>=pie.bottom};
             }''')
-            expected = (sizes['chart'] - 24) / 2 if sizes['columns'] == 2 else sizes['chart']
+            expected = min(320, sizes['chart'])
+            assert sizes['columns'] == (3 if width >= 1200 else 2 if width == 850 else 1), sizes
+            assert sizes['below'], sizes
             assert abs(sizes['pie'] - expected) < 2, sizes
             assert abs(sizes['pie'] - sizes['height']) < 2, sizes
             assert sizes['pie'] > 180, sizes
