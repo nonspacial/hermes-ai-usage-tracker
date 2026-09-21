@@ -24,7 +24,7 @@ from .storage import SCHEMA
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
 READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
                     'sql_summary', 'sql_trend', 'attribution_groups',
-                    'sql_applied_rate_groups', 'legacy_read_view'}
+                    'sql_applied_rate_groups', 'legacy_read_view', 'request_predicate'}
 
 
 class RestartRequired(Exception):

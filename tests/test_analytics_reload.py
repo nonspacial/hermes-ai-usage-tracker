@@ -133,6 +133,15 @@ def test_storage_read_only_change_is_reloadable(runtime, tmp_path):
     assert runtime.read(store.root, 0, 3)['reader_change'] is True
 
 
+def test_new_key_method_stays_inside_protected_store_contract(runtime):
+    path = runtime.folder / 'storage.py'
+    source = path.read_text()
+    path.write_text(source.replace('SELECT started,id FROM requests WHERE ', 'SELECT started,id FROM main.requests WHERE '))
+    assert runtime.info()['restart_required']
+    with pytest.raises(RestartRequired):
+        runtime.reload()
+
+
 def test_reader_cannot_write_main_database(runtime, tmp_path):
     store = fixture_store(tmp_path)
     with runtime.lease() as generation:

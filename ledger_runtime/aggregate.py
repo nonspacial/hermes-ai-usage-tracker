@@ -269,20 +269,47 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
                     status['reason'] = exc.reason
         if anchor is None:
             anchor = max(0, end - 86400)
+        candidates = []
         for profile, status, reader in ready:
             try:
                 lo, hi = start, end
                 if local.get('test_id'):
                     lo, test_end = reader.test_window(local['test_id'])
                     hi = end if test_end is None else test_end
-                report = reader.read(lo, hi, local.get('provider', ''), 0, offset + limit,
-                    local.get('session', ''), local.get('agent', ''), local.get('project', ''),
-                    local.get('session_scope', 'exact'), local.get('subagent', ''),
-                    trend_start=lo if local.get('test_id') else anchor)
-                status['status'] = 'read'
-                reports.append((profile, report))
+                scope = (lo, hi, local.get('provider', ''), local.get('session', ''),
+                         local.get('agent', ''), local.get('project', ''),
+                         local.get('session_scope', 'exact'), local.get('subagent', ''))
+                keys = reader._request_keys(*scope, limit=offset + limit)
+                candidates.append((profile, status, reader, scope, keys))
             except (sqlite3.Error, OSError, json.JSONDecodeError):
                 status['status'] = 'unreadable'
+        # Merge scalar keys only. Never retain/qualify per-profile JSON prefixes.
+        # A late read failure changes both totals and winners: retry survivors on
+        # these same copied roots and generation, not newly sampled live sources.
+        while candidates:
+            winners = sorted(((stamp or 0, str(key), p['profile_id'])
+                              for p, _, _, _, keys in candidates for stamp, key in keys),
+                             reverse=True)[offset:offset + limit]
+            selected = {}
+            for _, key, pid in winners:
+                selected.setdefault(pid, []).append(key)
+            reports = []
+            failed = set()
+            for profile, status, reader, scope, _ in candidates:
+                try:
+                    lo, hi, provider, session, agent, project, session_scope, subagent = scope
+                    report = reader.read(lo, hi, provider, 0, limit, session, agent, project,
+                        session_scope, subagent, trend_start=lo if local.get('test_id') else anchor,
+                        _detail_ids=selected.get(profile['profile_id'], ()))
+                    status['status'] = 'read'
+                    reports.append((profile, report))
+                except (sqlite3.Error, OSError, json.JSONDecodeError):
+                    status['status'] = 'unreadable'
+                    failed.add(profile['profile_id'])
+            if not failed:
+                break
+            reports = []
+            candidates = [entry for entry in candidates if entry[0]['profile_id'] not in failed]
         revision = generation['revision']
     data = [r for _, r in reports]
     out = {'profile_scope': 'all', 'read_only': True, 'refresh_mode': 'polling',
@@ -294,12 +321,11 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
     for field in ('request_count', 'compression_count', 'crossing_start', 'crossing_end'):
         out[field] = sum(r[field] for r in data) if data else None
     out['next_offset'] = offset + limit if out['request_count'] is not None and offset + limit < out['request_count'] else None
-    for field, kind, stamp, cap in [('requests', 'request', 'started', offset + limit),
+    for field, kind, stamp, cap in [('requests', 'request', 'started', limit),
             ('compressions', 'compression', 'started', 1000), ('tests', 'test', 'started', 100),
             ('rates', 'rate', 'created', 500), ('health', None, 'updated', None)]:
         rows = [qualify(v, p, kind) for p, r in reports for v in r[field]]
         out[field] = ordered(rows, stamp, cap, numeric_id=field == 'rates')
-    out['requests'] = out['requests'][offset:offset + limit]
     out['compression_truncated'] = out['compression_count'] is not None and out['compression_count'] > len(out['compressions'])
     for field, kind, key in [('project_groups', 'project', 'key'), ('session_groups', 'session', 'key'),
             ('subagent_groups', 'subagent', 'key'), ('project_options', 'project', 'id')]:

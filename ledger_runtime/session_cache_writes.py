@@ -141,7 +141,7 @@ def project(c, where, params, end):
     adjacent session observations irrespective of project/agent/page filters.
     SQL summary/grouping functions then consume the same projected values.
     """
-    selected = c.execute('SELECT id,session_id,data FROM requests WHERE '+where, params).fetchall()
+    selected = c.execute('SELECT id,session_id FROM requests WHERE '+where, params).fetchall()
     if not selected:
         return
     selected_by_session = defaultdict(set)
@@ -160,7 +160,7 @@ def project(c, where, params, end):
                 if result['status'] != 'pending':
                     previous[key] = r
     c.execute('CREATE TEMP TABLE session_write_projection(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
-    for r in selected:
+    for r in c.execute('SELECT id,data FROM requests WHERE '+where, params):
         data = json.loads(r['data'])
         data['calculated_cache_writes'] = changes.get(r['id']) or observation(data)
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',

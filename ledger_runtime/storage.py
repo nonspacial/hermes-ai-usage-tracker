@@ -184,22 +184,14 @@ class Store:
         with self.db() as c:row=c.execute('SELECT started,ended FROM tests WHERE id=?',(key,)).fetchone()
         if not row:raise ValueError('Unknown test marker.')
         return row['started'],row['ended']
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',*,trend_start=None):
-        if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')
-        if session_scope not in ('exact','family'):raise ValueError('Invalid session scope.')
-        end=time.time() if end is None else end
-        if start<0 or end<start: raise ValueError('Invalid time window.')
-        where='started>=? AND started<?';params=[start,end]
-        if provider: where+=' AND provider=?';params.append(provider)
-        if session:
-            if session_scope=='family':
-                where+=" AND (session_id=? OR EXISTS (SELECT 1 FROM json_each(requests.data,'$.session_lineage') WHERE value=?))";params.extend([session,session])
-            else:where+=' AND session_id=?';params.append(session)
-        if agent:where+=" AND COALESCE(json_extract(data,'$.agent_kind'),'unknown')=?";params.append(agent)
-        if subagent:
-            where+=" AND COALESCE(NULLIF(json_extract(data,'$.subagent_id'),''),session_id)=?";params.append(subagent)
-        if project:
-            where+=" AND COALESCE(json_extract(data,'$.project_id'),'unattributed')=?";params.append(project)
+    def _request_keys(self,start,end,provider='',session='',agent='',project='',session_scope='exact',subagent='',*,limit):
+        """Payload-free prefix from the same immutable snapshot used by read."""
+        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent)
+        with self.db() as c:
+            return [tuple(r) for r in c.execute('SELECT started,id FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ?',params+[limit])]
+
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',*,trend_start=None,_detail_ids=None):
+        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent)
         with self.db() as c:
             # Keep totals, applied rates and request rows on one read snapshot.
             c.execute('BEGIN')
@@ -210,7 +202,17 @@ class Store:
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)
             applied_rates=sql_applied_rate_groups(c,where,params,summary_sql)
-            rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ? OFFSET ?',params+[limit,offset])]
+            if _detail_ids is None:
+                detail_where,detail_params=where,params+[limit,offset]
+                paging=' LIMIT ? OFFSET ?'
+            else:
+                # TEMP membership avoids SQLite variable limits at the 2000-row API cap.
+                c.execute('CREATE TEMP TABLE read_detail_ids(id TEXT PRIMARY KEY)')
+                c.executemany('INSERT OR IGNORE INTO read_detail_ids VALUES(?)',((key,) for key in _detail_ids))
+                detail_where=where+' AND id IN (SELECT id FROM read_detail_ids)'
+                detail_params=params
+                paging=''
+            rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+detail_where+' ORDER BY started DESC,id DESC'+paging,detail_params)]
             from .cache_progression import query_progression
             read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
             groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
@@ -244,6 +246,25 @@ class Store:
           'groups':groups,'provider_groups':provider_groups,'model_groups':model_groups,'trend':trend,'price_catalogs':catalogs,
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
+
+def request_predicate(start,end,provider,session,agent,project,session_scope,subagent):
+    if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')
+    if session_scope not in ('exact','family'):raise ValueError('Invalid session scope.')
+    end=time.time() if end is None else end
+    if start<0 or end<start: raise ValueError('Invalid time window.')
+    where='started>=? AND started<?';params=[start,end]
+    if provider: where+=' AND provider=?';params.append(provider)
+    if session:
+        if session_scope=='family':
+            where+=" AND (session_id=? OR EXISTS (SELECT 1 FROM json_each(requests.data,'$.session_lineage') WHERE value=?))";params.extend([session,session])
+        else:where+=' AND session_id=?';params.append(session)
+    if agent:where+=" AND COALESCE(json_extract(data,'$.agent_kind'),'unknown')=?";params.append(agent)
+    if subagent:
+        where+=" AND COALESCE(NULLIF(json_extract(data,'$.subagent_id'),''),session_id)=?";params.append(subagent)
+    if project:
+        where+=" AND COALESCE(json_extract(data,'$.project_id'),'unattributed')=?";params.append(project)
+    return where,params,end
+
 
 def summary(rows):
     out={'sessions':len({r.get('session_id') for r in rows if r.get('session_id')}),'attempts':len(rows),'pending':0,'unresolved':0,'abandoned':0,'missing_usage':0,'partial_breakdown':0,'aggregate_records':0,
@@ -424,10 +445,12 @@ def legacy_read_view(c,where,params):
       "AND json_extract(data,'$.usage.raw_usage') IS NULL "
       "AND COALESCE(json_extract(data,'$.usage.normalization_version'),0)<>2 "
       "AND (json_extract(data,'$.usage.cache_read_tokens')=0 OR json_extract(data,'$.usage.cache_write_tokens')=0)")
-    rows=c.execute('SELECT id,data FROM main.requests WHERE ('+where+') AND '+condition,params).fetchall()
-    if not rows:return
+    rows=c.execute('SELECT id,data FROM main.requests WHERE ('+where+') AND '+condition,params)
+    first=rows.fetchone()
+    if first is None:return
     c.execute('CREATE TEMP TABLE usage_legacy_projection(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
-    c.executemany('INSERT INTO usage_legacy_projection VALUES(?,?)',[(r['id'],jd(effective_record(json.loads(r['data'])))) for r in rows])
+    from itertools import chain
+    c.executemany('INSERT INTO usage_legacy_projection VALUES(?,?)',((r['id'],jd(effective_record(json.loads(r['data'])))) for r in chain((first,),rows)))
     c.execute("""CREATE TEMP VIEW requests AS
       SELECT r.id,r.started,r.ended,r.provider,r.model,r.session_id,r.task,r.compression_id,r.status,
       COALESCE(p.data,r.data) AS data FROM main.requests r
