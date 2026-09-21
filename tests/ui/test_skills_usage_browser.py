@@ -106,12 +106,21 @@ def run():
         detail.get_by_role('button', name='Next events', exact=True).click()
         expect(detail.locator('tbody tr')).to_have_count(63 + 4 + 2 - 50)
         expect(chart.get_by_role('button', name='frontend-ui-iteration · 65 loads · inspect', exact=True)).to_be_visible()
-        for width in (850, 390, 320):
+        for width in (1200, 850, 390, 320):
             page.set_viewport_size({'width': width, 'height': 1000})
             expect(detail).to_be_visible()
             page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             assert detail.locator('.au-table').evaluate('(e)=>e.scrollWidth<=e.clientWidth+1')
+            sizes = chart.locator('.au-skill-chart').evaluate('''e => {
+                const pie=e.querySelector('svg').getBoundingClientRect();
+                const columns=getComputedStyle(e).gridTemplateColumns.split(' ').length;
+                return {pie:pie.width,height:pie.height,chart:e.clientWidth,columns};
+            }''')
+            expected = (sizes['chart'] - 24) / 2 if sizes['columns'] == 2 else sizes['chart']
+            assert abs(sizes['pie'] - expected) < 2, sizes
+            assert abs(sizes['pie'] - sizes['height']) < 2, sizes
+            assert sizes['pie'] > 180, sizes
         page.set_viewport_size({'width': 850, 'height': 1000})
         chart.screenshot(path=str(ART / 'skills-frequency-850.png'))
         # Missing history is not a zero-use assertion.
