@@ -696,6 +696,7 @@ const ledgerCss = `
 .au-ledger.au-pane{height:100%;min-height:0;box-sizing:border-box;overflow:hidden;container-type:size}
 .au-provider-pane{height:100%;min-height:0;display:flex;flex-direction:column}
 .au-upper{flex:0 1 auto;min-height:0;max-height:var(--au-upper-cap,50%);overflow:auto;scrollbar-gutter:stable;overflow-anchor:none}
+.au-totals .au-metric>.au-muted:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.5em;line-height:1.5}
 .au-ledger .au-provider-pane>.au-subpage-tabs{flex:none;flex-wrap:nowrap;overflow:auto;margin:0;min-height:0;max-height:25%;padding:8px 0}
 .au-provider-pane>.au-subpage-tabs button{flex-shrink:0}
 .au-reader{flex:1;min-height:0;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;position:relative}
@@ -956,7 +957,9 @@ function missingFieldNote(summary,key){
 function Summary({data,label,mode,agent,onSubagents}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
- const t=key=>data?viewTokens(s,key):'—';const note=key=>missingFieldNote(s,key);
+ const t=key=>data?viewTokens(s,key):'—';
+ const note=key=>{const awaiting=s.missing_reasons?.[key]?.awaiting_usage||0;
+  return h('span',{title:missingFieldNote(s,key)},awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
  const groups=data?.provider_groups||[];
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
    h('span',{},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
@@ -979,8 +982,10 @@ function Summary({data,label,mode,agent,onSubagents}){
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
  h('div',{className:'au-provider-totals'},...providerRows)),
  h(UsageChart,{data,mode})):null,
- h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open (owner observed live) · '+count(s?.unresolved||0)+' unresolved · '+count(s?.abandoned||0)+' abandoned · '+count(data?.compression_count||0)+' compressions'),
- (s?.missing_usage||s?.unpriced_requests)?h('span',{className:'au-muted'},count(s?.missing_usage||0)+' missing usage · '+count(s?.unpriced_requests||0)+' partially/unpriced'):null))
+ h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open · '+count(data?.compression_count||0)+' compressions'),
+ h('details',{'data-testid':'usage-diagnostics'},h('summary',{},'Usage diagnostics'),
+ h('div',{className:'au-muted'},count(s?.pending||0)+' open (owner observed live) · '+count(s?.unresolved||0)+' unresolved · '+count(s?.abandoned||0)+' abandoned'),
+ h('div',{className:'au-muted'},count(s?.missing_usage||0)+' missing usage · '+count(s?.unpriced_requests||0)+' partially/unpriced'))))
 }
 
 function Breakdown({data,mode,onDrill,group,setGroup}){

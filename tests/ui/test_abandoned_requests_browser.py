@@ -34,8 +34,10 @@ def run():
         for scope in ('profile:infra','scope:all'):
             page.get_by_role('combobox',name='Hermes profile',exact=True).select_option(scope)
             expect(page.locator('.au-quality-line')).to_contain_text('1 open (owner observed live) · 2 unresolved · 3 abandoned')
-            expect(page.get_by_test_id('usage-totals')).to_contain_text('2 unresolved execution; usage unknown')
-            expect(page.get_by_test_id('usage-totals')).to_contain_text('3 abandoned execution; field not reported')
+            expect(page.get_by_test_id('usage-totals')).not_to_contain_text('unresolved execution')
+            expect(page.get_by_test_id('usage-totals')).not_to_contain_text('abandoned execution')
+            expect(page.get_by_test_id('usage-totals')).to_contain_text('1 awaiting usage · subtotal')
+            assert not page.get_by_test_id('usage-diagnostics').evaluate('e=>e.open')
             expect(page.get_by_test_id('request-list')).to_contain_text('unresolved (execution unknown)')
             expect(page.get_by_test_id('request-list')).to_contain_text('open (owner observed live)')
             expect(page.get_by_test_id('request-list')).to_contain_text('abandoned_without_usage')
