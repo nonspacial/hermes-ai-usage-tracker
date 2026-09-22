@@ -10,11 +10,10 @@ from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from .accounting import BUCKETS
 
-VERSION='provider-catalog-v1'
-REFRESH_SECONDS=6*3600
+VERSION='provider-catalog-v2'
 RETRY_SECONDS=15*60
 MAX_BYTES=16*1024*1024
 SOURCES={
@@ -25,11 +24,13 @@ SOURCES={
 }
 PROVIDERS={'openai-codex':'openai','openai-api':'openai','openai':'openai',
            'openrouter':'openrouter','nous':'nous','ollama-cloud':'ollama','ollama':'ollama'}
-# Thresholds are model-specific, not inferred from a suffix or context window setting.
-# Primary sources: OpenAI model pages for these four models (reviewed 2026-09-20).
-LONG_CONTEXT={'gpt-6-astra':272000,'gpt-5.6-sol':272000,
-              'gpt-5.6-terra':272000,'gpt-5.6-luna':272000}
+# OpenAI publishes all tier rows in its pricing.md representation. The pricing
+# page's short/long column tooltips publish the boundary, not the model name.
+OPENAI_TABLE_URL=SOURCES['openai']['url']+'.md'
 _WORKERS={};_LOCK=threading.Lock()
+
+def utc_day(stamp):
+    return time.strftime('%Y-%m-%d',time.gmtime(stamp))
 
 def price(value,per_token=False):
     if value is None or value in ('','-','—','N/A'):return None
@@ -69,41 +70,70 @@ class Tables(HTMLParser):
         self.text.append(data+' ')
         if self.cell is not None:self.cell.append(data)
 
-def parse_openai(body):
-    """Parse the documented Standard/Batch/Flex/Fast flagship table group.
+_OPENAI_COLUMNS=['Model']+[f'{band} context {field}' for band in ('Short','Long')
+                  for field in ('input','cached input','cache writes','output')]
 
-    Reject incomplete/ambiguous groups rather than assign a hidden tab the wrong tier.
-    Other model families need their own validated semantics; they are not guessed.
+
+def _openai_boundary(page):
+    """Read the pricing page's *published* column tooltips, not model capacity."""
+    from html import unescape
+    text=unescape(page)
+    boundaries=[]
+    for label,comparison in (('Short','≤'),('Long','>')):
+        matches=re.findall(r'"label":\[0,"'+label+r' context"\],"tooltip":\[0,"'+comparison+r'([\d,]+)K input tokens"',text)
+        if not matches or len(set(matches))!=1:raise ValueError('OpenAI context boundary unavailable')
+        boundaries.append(int(matches[0].replace(',',''))*1000)
+    if boundaries[0]!=boundaries[1] or boundaries[0]<=0:
+        raise ValueError('OpenAI context boundary inconsistent')
+    return boundaries[0]
+
+
+def parse_openai(body,metadata=None):
+    """Parse provider pricing.md flagship tiers and same-provider pricing-page boundary.
+
+    Only exact published IDs and explicitly priced bands are selected. Other
+    modalities and sections have different units/semantics and are excluded.
     """
-    p=Tables();p.feed(body);tables=p.tables;text=' '.join(p.text)
-    if not tables: # Markdown representation, when supplied by the provider.
-        tables=[];block=[]
-        for line in body.splitlines()+['']:
-            if '|' in line:
-                cells=[x.strip().strip('`') for x in line.strip().strip('|').split('|')]
-                if not all(re.fullmatch(r'[-: ]*',x) for x in cells):block.append(cells)
-            elif block:tables.append(block);block=[]
-        text=body
-    if not re.search(r'Standard\s+Batch\s+Flex\s+Fast\s+mode',text,re.I):
-        raise ValueError('OpenAI tier ordering/schema changed; retained last good catalog')
-    groups=[]
-    for table in tables:
-        rows=[r for r in table if len(r)==9 and r[0] in LONG_CONTEXT]
-        if rows:groups.append(rows)
-    if len(groups)<4:raise ValueError('OpenAI pricing tables incomplete')
-    groups=groups[:4]
-    models={r[0] for r in groups[0]}
-    if len(models)<4 or any({r[0] for r in g}!=models for g in groups):
-        raise ValueError('OpenAI service tier tables do not match')
-    out=[]
-    for tier,rows in zip(('standard','batch','flex','fast'),groups):
-        for row in rows:
-            v=[price(x) for x in row[1:]]
-            for band,index in (('short',0),('long',4)):
-                # HTML order: input, cached input, cache writes, output.
-                x=v[index:index+4]
-                out.append(rate(row[0],tier,[x[0],x[3],x[1],x[2]],context_band=band,
-                     threshold_tokens=LONG_CONTEXT[row[0]],threshold_source='https://developers.openai.com/api/docs/models/'+row[0]))
+    if metadata is None:raise ValueError('OpenAI pricing boundary evidence unavailable')
+    boundary=_openai_boundary(metadata)
+    section=re.search(r'(?m)^Flagship models\s*$(.*?)(?=^Cyber models\s*$)',body,re.S|re.M)
+    if not section or not re.search(r'Prices per 1M tokens\.',section.group(1)):
+        raise ValueError('OpenAI flagship pricing schema unavailable')
+    blocks=re.findall(r'(?m)^### (Standard|Batch|Flex|Fast) pricing data\s*$(.*?)(?=^### |^Cyber models\s*$|\Z)',section.group(1),re.S|re.M)
+    if [name.lower() for name,_ in blocks]!=['standard','batch','flex','fast']:
+        raise ValueError('OpenAI service tier tables incomplete or reordered')
+    out=[];seen=set()
+    for tier,block in blocks:
+        lines=[line.strip() for line in block.splitlines() if line.strip().startswith('|')]
+        if len(lines)<3 or [x.strip() for x in lines[0].strip('|').split('|')]!=_OPENAI_COLUMNS:
+            raise ValueError('OpenAI price column schema changed')
+        if [x.strip() for x in lines[1].strip('|').split('|')]!=['---']*9:
+            raise ValueError('OpenAI price table delimiter changed')
+        for line in lines[2:]:
+            fields=[x.strip() for x in line.strip('|').split('|')]
+            if len(fields)!=9:raise ValueError('OpenAI price table row changed')
+            model=fields[0]
+            # A display annotation is not an exact routable ID. Never silently
+            # strip it and accidentally price a distinct alias or modality.
+            if not re.fullmatch(r'[\w.:/@+~\-]{1,240}',model):continue
+            if (tier,model) in seen:raise ValueError('Duplicate OpenAI model price')
+            seen.add((tier,model))
+            values=[price(x) for x in fields[1:]]
+            if values[0] is None or values[3] is None:continue
+            if all(x is None for x in values[4:]):
+                # These columns are explicitly the short-context band. An
+                # absent long price does not authorise this rate above the
+                # published boundary (including for Batch/Flex/Fast).
+                out.append(rate(model,tier.lower(),[values[0],values[3],values[1],values[2]],
+                     context_band='short',threshold_tokens=boundary,
+                     threshold_source=SOURCES['openai']['url']))
+            elif values[4] is not None and values[7] is not None:
+                for band,index in (('short',0),('long',4)):
+                    v=values[index:index+4]
+                    out.append(rate(model,tier.lower(),[v[0],v[3],v[1],v[2]],context_band=band,
+                         threshold_tokens=boundary,threshold_source=SOURCES['openai']['url']))
+            else:raise ValueError('Partial OpenAI long-context band')
+    if not out:raise ValueError('OpenAI price table has no supported models')
     return out
 
 def parse_catalog(body):
@@ -155,14 +185,19 @@ def parse_ollama(body):
 
 class SafeRedirect(HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
-        old=urlsplit(req.full_url);new=urlsplit(newurl)
-        if new.scheme!='https' or new.hostname!=old.hostname:raise ValueError('Cross-origin price redirect refused')
-        return super().redirect_request(req,fp,code,msg,headers,newurl)
+        target=urljoin(req.full_url,newurl)
+        old=urlsplit(req.full_url);new=urlsplit(target)
+        if (old.scheme!='https' or new.scheme!='https' or not old.hostname or
+                (old.hostname,443 if old.port is None else old.port)!=
+                (new.hostname,443 if new.port is None else new.port)):
+            raise ValueError('Cross-origin price redirect refused')
+        return super().redirect_request(req,fp,code,msg,headers,target)
 
 def fetch(url):
     # No browser cookies, no credentials, no environment proxy credentials.
-    if url not in {s['url'] for s in SOURCES.values()}:raise ValueError('Unapproved public source')
-    request=Request(url,headers={'User-Agent':'Hermes-AI-Usage-Ledger/2.0','Accept':'application/json,text/html,text/markdown'})
+    if url not in {s['url'] for s in SOURCES.values()}|{OPENAI_TABLE_URL}:raise ValueError('Unapproved public source')
+    accept='text/html' if url==SOURCES['openai']['url'] else 'text/markdown' if url==OPENAI_TABLE_URL else 'application/json,text/html'
+    request=Request(url,headers={'User-Agent':'Hermes-AI-Usage-Ledger/2.0','Accept':accept})
     with build_opener(ProxyHandler({}),SafeRedirect()).open(request,timeout=12) as response:
         payload=response.read(MAX_BYTES+1)
         if len(payload)>MAX_BYTES:raise ValueError('Price catalog too large')
@@ -196,12 +231,19 @@ def refresh(store,force=False,fetcher=fetch):
             with store.db() as c:
                 old=c.execute('SELECT data FROM pricing_status WHERE source_id=?',(sid,)).fetchone()
             previous=json.loads(old[0]) if old else {}
-            due=REFRESH_SECONDS if previous.get('status')=='ok' else RETRY_SECONDS
-            if now-previous.get('attempted_at',0)<(60 if force else due):continue
+            # Success is scoped to a UTC calendar day, not a rolling timer.
+            # A failed attempt cannot suppress a new day's refresh; retries
+            # within the day are bounded even if the last good catalog is older.
+            if not force and previous.get('last_success') and utc_day(previous['last_success'])==utc_day(now):continue
+            minimum_interval = 60 if force else RETRY_SECONDS if previous.get('status')!='ok' else 0
+            if now-previous.get('attempted_at',0)<minimum_interval:continue
             state={**previous,'source_id':sid,'label':source['label'],'source_url':source['url'],'attempted_at':now}
             try:
                 text=fetcher(source['url'])
-                entries={'openai':parse_openai,'catalog':parse_catalog,'ollama':parse_ollama}[source['format']](text)
+                if sid=='openai':
+                    entries=parse_openai(fetcher(OPENAI_TABLE_URL),text)
+                else:
+                    entries={'catalog':parse_catalog,'ollama':parse_ollama}[source['format']](text)
                 s=_snapshot(sid,entries,time.time())
                 with store.db() as c:
                     c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',(sid,s['observed_at'],json.dumps(s)))
@@ -218,16 +260,20 @@ def start_worker(store,force=False):
     if os.environ.get('HERMES_USAGE_PRICING_OFFLINE')=='1':return
     key=str(store.path.resolve())
     with _LOCK:
-        thread=_WORKERS.get(key)
+        entry=_WORKERS.get(key)
+        if entry and entry[0].is_alive():
+            if force:entry[1].set()
+            return
+        wake=threading.Event()
         if force:
-            threading.Thread(target=refresh,args=(store,True),daemon=True,name='usage-price-refresh').start();return
-        if thread and thread.is_alive():return
+            wake.set()
         def loop():
             while True:
-                try:refresh(store)
+                manual=wake.is_set();wake.clear()
+                try:refresh(store,force=manual)
                 except Exception:pass # stored refresh status still reports each source failure
-                time.sleep(RETRY_SECONDS)
-        thread=threading.Thread(target=loop,daemon=True,name='usage-provider-prices');_WORKERS[key]=thread;thread.start()
+                wake.wait(RETRY_SECONDS)
+        thread=threading.Thread(target=loop,daemon=True,name='usage-provider-prices');_WORKERS[key]=(thread,wake);thread.start()
 
 def catalog_status(c,provider=''):
     wanted=PROVIDERS.get(provider) if provider else None
@@ -239,20 +285,30 @@ def catalog_status(c,provider=''):
         s=json.loads(row[0]) if row else {}
         out.append({**definition,'source_id':sid,**(json.loads(state[0]) if state else {'status':'not_refreshed'}),
              'snapshot_at':s.get('observed_at'),'origin':s.get('origin'),'snapshot_sha256':s.get('content_sha256'),
-             'stale':not s or time.time()-s.get('observed_at',0)>REFRESH_SECONDS,'rates':s.get('rates',[])})
+             'stale':not s or utc_day(s.get('observed_at',0))!=utc_day(time.time()),'rates':s.get('rates',[])})
     return out
 
 def lookup(c,rec):
     sid=PROVIDERS.get(rec.get('provider'));model=rec.get('response_model') or rec.get('model')
     if not sid or not model:return None
+    stamp=rec.get('ended') or time.time()
+    row=c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? AND observed<=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,stamp)).fetchone()
+    if not row:return None
+    return select_rate(json.loads(row['data']),rec,row['id'],stamp)
+
+def select_rate(s,rec,revision,stamp,*,retrospective=False):
+    """Exact serving-provider model/tier/band match against one catalog snapshot.
+
+    Retrospective reads may use the latest observed catalog; they never claim it
+    was available at request time. No I/O or network work takes place here.
+    """
+    sid=PROVIDERS.get(rec.get('provider'));model=rec.get('response_model') or rec.get('model')
+    if not sid or s.get('source_id')!=sid or not model:return None
     t=rec.get('returned_service_tier') or rec.get('service_tier') or 'unspecified'
     tier={'priority':'fast','default':'standard','unspecified':'standard','auto':'standard','':'standard'}.get(t,t)
     # Catalogs from routed providers are standard list prices; no multiplier guessed.
     if sid!='openai' and tier!='standard':return None
-    stamp=rec.get('ended') or time.time()
-    row=c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? AND observed<=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,stamp)).fetchone()
-    if not row:return None
-    s=json.loads(row['data']);prompt=(rec.get('usage') or {}).get('prompt_tokens')
+    prompt=(rec.get('usage') or {}).get('prompt_tokens')
     candidates=[r for r in s['rates'] if r['model']==model and r['service_tier']==tier]
     if any(r.get('context_band') for r in candidates):
         if prompt is None:return None
@@ -263,8 +319,11 @@ def lookup(c,rec):
     if len(candidates)!=1:return None
     r=copy.deepcopy(candidates[0])
     return {**r,'provider':rec['provider'],'source':s['source']+' public pricing','source_url':s['source_url'],
-       'catalog_revision':row['id'],'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
-       'origin':s['origin'],'stale_at_request':stamp-s['observed_at']>REFRESH_SECONDS,
+       'catalog_revision':revision,'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
+       'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
+       'retrospective':retrospective,
        'requested_service_tier':t,'tier_assumption':t in ('unspecified','auto',''),
-       'basis':'published API-equivalent token estimate; not subscription debit',
+       'basis':('subscription API-equivalent estimate; not a subscription debit' if rec['provider']=='openai-codex'
+                else 'serving-provider public catalog estimate; not a provider-reported charge'),
+       'pricing_basis':('subscription_api_equivalent' if rec['provider']=='openai-codex' else 'provider_catalog_estimate'),
        'scope':'text tokens; excludes tools, media, tax, regional uplifts and provider-specific charges'}

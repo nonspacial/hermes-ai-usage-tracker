@@ -6,10 +6,10 @@
       "source_id": "openai",
       "source": "OpenAI",
       "source_url": "https://developers.openai.com/api/docs/pricing",
-      "observed_at": 1789862400.0,
-      "parser_version": "provider-catalog-v1",
-      "content_sha256": "d16417e9d4d30ef3fc70bc3e98a0950f0c3abe44e1608b3040aee6cc0b022366",
-      "origin": "bundled_provider_snapshot_reviewed_2026-09-20",
+      "observed_at": 1790113690.0,
+      "parser_version": "provider-catalog-v2",
+      "content_sha256": "80ddb9487c781856db8de2a3c901cb5affcc5772cccce16e6f5d5d633b1efd9e",
+      "origin": "bundled_provider_snapshot_reviewed_2026-09-22",
       "rates": [
         {
           "model": "gpt-6-astra",
@@ -362,7 +362,15 @@
           "context_band": "long",
           "threshold_tokens": 272000,
           "threshold_source": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
-        }
+        },
+        {"model":"gpt-6-sol","service_tier":"standard","input_tokens":"2.00","output_tokens":"10.00","cache_read_tokens":"0.20","cache_write_tokens":"2.50","context_band":"short","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"standard","input_tokens":"4.00","output_tokens":"15.00","cache_read_tokens":"0.40","cache_write_tokens":"5.00","context_band":"long","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"batch","input_tokens":"1.00","output_tokens":"5.00","cache_read_tokens":"0.10","cache_write_tokens":"1.25","context_band":"short","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"batch","input_tokens":"2.00","output_tokens":"7.50","cache_read_tokens":"0.20","cache_write_tokens":"2.50","context_band":"long","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"flex","input_tokens":"1.00","output_tokens":"5.00","cache_read_tokens":"0.10","cache_write_tokens":"1.25","context_band":"short","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"flex","input_tokens":"2.00","output_tokens":"7.50","cache_read_tokens":"0.20","cache_write_tokens":"2.50","context_band":"long","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"fast","input_tokens":"4.00","output_tokens":"20.00","cache_read_tokens":"0.40","cache_write_tokens":"5.00","context_band":"short","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"},
+        {"model":"gpt-6-sol","service_tier":"fast","input_tokens":"8.00","output_tokens":"30.00","cache_read_tokens":"0.80","cache_write_tokens":"10.00","context_band":"long","threshold_tokens":272000,"threshold_source":"https://developers.openai.com/api/docs/pricing"}
       ]
     },
     {

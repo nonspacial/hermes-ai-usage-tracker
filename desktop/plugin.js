@@ -1014,6 +1014,7 @@ function Summary({data,label,mode,agent,onSubagents}){
  mode!=='Limits'?h('div',{className:'au-hero','data-testid':'usage-hero'},h('div',{className:'au-hero-total'},
  h('div',{className:'au-big'},mode==='Cost'?selectedCost(s):t('total_tokens')),
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
+ mode==='Cost'&&s?.supplemental_requests?h('div',{className:'au-muted','data-testid':'retrospective-overview-note'},count(s.supplemental_requests)+' past request(s) valued at currently published provider rates, not historical charges'):null,
  h('div',{className:'au-provider-totals'},...providerRows)),
  h(UsageChart,{data,mode})):null,
  h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open · '+count(data?.compression_count||0)+' compressions'),
@@ -1079,7 +1080,7 @@ function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,i
 
 function RequestView({data,more,back,offset,onDrill,details}){
  const rows=(data.requests||[]).map(r=>{const u=r.usage||{};return [h('span',{title:when(r.started)},compactWhen(r.started)),r.provider,r.response_model||r.model,
-  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),money(r.cost?.total_usd),tokensDetail(r,details)]})
+  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),h('span',{title:r.supplemental_valuation?'Retrospective API-equivalent estimate using rates observed '+when(r.supplemental_valuation.observed_at)+'; original saved cost is in Details. Not a historical charge.':'Saved request cost estimate'},money(r.cost?.total_usd),r.supplemental_valuation?' †':''),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
   table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
    (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
@@ -1165,18 +1166,19 @@ function SavingsCards({summary:s}){
 function CacheView({data,profile,provider,refresh,onError}){
  const [pricingBusy,setPricingBusy]=useState(false),s=data.summary,catalogs=data.price_catalogs||[];
  async function update(){if(isAllProfiles(profile))return;setPricingBusy(true);try{await rest('/ledger/pricing/refresh?profile='+encodeURIComponent(profile),{method:'POST'});refresh()}catch(e){onError(String(e.message||e))}finally{setPricingBusy(false)}}
- // Source is the saved rate on selected requests, NOT price_catalogs or the
- // current paginated request list. A backend mismatch is visible, not guessed.
+ // Source is the applied saved rate or explicit retrospective read projection,
+ // never a price inferred from the paginated request list.
  const applied=data.applied_rate_groups;
  const rows=(applied||[]).map(g=>{
-  const r=g.rate,source=r?[r.source,r.source_url,r.observed_at?when(r.observed_at):r.pricing_version].filter(Boolean).join(' · '):'No saved rate: pending or unpriced request';
+  const r=g.rate,source=r?[r.retrospective?'Retrospective current-published-rate estimate; not a historical charge': 'Saved rate at request',r.source,r.source_url,r.observed_at?when(r.observed_at):r.pricing_version].filter(Boolean).join(' · '):'No rate: pending or unpriced request';
   return [uiNames[g.provider]||g.provider,h('span',{title:source},g.model),g.service_tier||'unspecified',rateContext(r),count(g.attempts),
    money(r?.input_tokens),money(r?.output_tokens),money(r?.cache_read_tokens),money(r?.cache_write_tokens),viewTokens(g,'total_tokens',count),cacheAmount(g)];
  });
  return h('section',{'data-testid':'cache-costs','aria-label':'Cache costs'},
+  s.supplemental_requests?h('p',{className:'au-muted','data-testid':'retrospective-cost-note'},count(s.supplemental_requests)+' request(s) include retrospective API-equivalent estimates at currently observed provider rates, not historical charges. Original costs remain in request Details.'):null,
   h(ComponentCostCards,{summary:s}),
   h(SavingsCards,{summary:s}),
-  h('section',{'data-testid':'published-rates','aria-label':'Applied rates and usage for the selected window',title:'Saved rates in USD per 1M tokens; usage and costs cover the full selected window'},
+  h('section',{'data-testid':'published-rates','aria-label':'Applied rates and usage for the selected window',title:'Applied saved rates and labelled retrospective rates in USD per 1M tokens; usage and costs cover the full selected window'},
    applied==null?h('p',{className:'au-muted',role:'status'},'Restart the Hermes backend to load window-specific rates.'):
     table(['Provider','Exact model','Tier','Context','Requests','Uncached $ / 1M','Output $ / 1M','Read $ / 1M','Write $ / 1M','Processed tokens','Est. USD'],rows,
      ['Total','','','',''+count(s.attempts),'','','','',viewTokens(s,'total_tokens',count),cacheAmount(s)],
@@ -1185,7 +1187,7 @@ function CacheView({data,profile,provider,refresh,onError}){
    applied?.length===0?h('p',{className:'au-muted'},'No recorded requests in this window.'):null),
   !isAllProfiles(profile)&&h('div',{className:'au-toolbar','data-testid':'price-refresh-controls',style:{justifyContent:'flex-end',marginTop:16}},
    catalogs.some(p=>p.status==='unavailable'||p.stale)?h('small',{className:'au-muted',role:'status'},'Some prices unavailable or stale'):null,
-   h('button',{onClick:update,disabled:pricingBusy,title:'Refresh public provider prices for future requests. This table uses the rate snapshots already saved on the selected requests.'},pricingBusy?'Refreshing…':'Refresh provider prices')))
+   h('button',{onClick:update,disabled:pricingBusy,title:'Queue a public provider catalog refresh (at most once per minute per source). Existing saved costs remain fixed; previously unpriced requests can gain read-only retrospective estimates.'},pricingBusy?'Refreshing…':'Refresh provider prices')))
 }
 
 
@@ -1527,18 +1529,16 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
     const d=await sharedLedgerRead('/ledger?'+p);
     if(!reloadControl.alive||reloadControl.scope!==selected)throw new Error('Export cancelled: profile changed.');
     if(!d.summary||d.request_count==null)throw new Error('Export unavailable: no readable recorded usage.');
-    if(aggregate){
-     exportCoverage=d.coverage;
-     const next=JSON.stringify([d.request_count,d.coverage,d.profile_sequences]);
-     if(signature!==null&&signature!==next)throw new Error('Export stopped: profile coverage or ledger sequences changed between pages. Refresh and retry; no CSV was downloaded.');
-     signature=next;
-    }
+    if(aggregate)exportCoverage=d.coverage;
+    const next=JSON.stringify([d.request_count,aggregate?d.coverage:null,aggregate?d.profile_sequences:d.seq,(d.price_catalogs||[]).map(c=>[c.profile_id,c.source_id,c.snapshot_sha256,c.snapshot_at])]);
+    if(signature!==null&&signature!==next)throw new Error('Export stopped: profile coverage or ledger sequences changed between pages (including provider catalog). Refresh and retry; no CSV was downloaded.');
+    signature=next;
     for(const row of d.requests){if(seen.has(row.id))throw new Error('Export stopped: page membership changed. Refresh and retry.');seen.add(row.id);rows.push(row)}
     if(d.next_offset==null){if(rows.length!==d.request_count)throw new Error('Export stopped: returned count changed. Refresh and retry.');break}
     if(d.next_offset<=offset||!d.requests.length)throw new Error('Export stopped: invalid pagination.');
     offset=d.next_offset;
    }
-   downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
+   downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,stored_accounting:r.stored_accounting||null,supplemental_valuation:r.supplemental_valuation||null,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
  async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.refetch()}catch(e){setErr(String(e.message||e))}}

@@ -270,7 +270,7 @@ def summary(rows):
     out={'sessions':len({r.get('session_id') for r in rows if r.get('session_id')}),'attempts':len(rows),'pending':0,'unresolved':0,'abandoned':0,'missing_usage':0,'partial_breakdown':0,'aggregate_records':0,
          'known':{k:0 for k in METRICS},'missing_fields':{k:0 for k in METRICS},
          'missing_reasons':{k:{r:0 for r in ('awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS},
-         'cost_components':{k:Decimal(0) for k in BUCKETS},'cost_missing_fields':{k:0 for k in BUCKETS},'unpriced_requests':0,'priced_requests':0,'known_cost_usd':Decimal(0)}
+         'cost_components':{k:Decimal(0) for k in BUCKETS},'cost_missing_fields':{k:0 for k in BUCKETS},'unpriced_requests':0,'priced_requests':0,'supplemental_requests':0,'known_cost_usd':Decimal(0)}
     savings_keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:Decimal(0) for k in savings_keys};out['savings_missing']={k:0 for k in savings_keys}
     from .session_cache_writes import blank_summary, add_summary
@@ -299,6 +299,7 @@ def summary(rows):
                 out['missing_reasons'][k][reason]+=1
             else:out['known'][k]+=u[k]
         cost=r.get('cost') or {}
+        if r.get('supplemental_valuation'):out['supplemental_requests']+=1
         if cost.get('complete'):out['priced_requests']+=1
         else:out['unpriced_requests']+=1
         for k in BUCKETS:
@@ -331,6 +332,7 @@ def _exprs():
       "COALESCE(SUM(json_extract(data,'$.usage.request_count')>1),0) AS aggregate_records",
       "COALESCE(SUM("+' OR '.join("json_extract(data,'$.usage."+k+"') IS NULL" for k in BUCKETS)+"),0) AS partial_breakdown",
       "COALESCE(SUM(json_extract(data,'$.cost.complete')=1),0) AS priced_requests",
+      "COALESCE(SUM(json_extract(data,'$.supplemental_valuation.basis')='current_published_rate_for_past_usage'),0) AS supplemental_requests",
       "COALESCE(decimal_sum(json_extract(data,'$.cost.known_components_usd')),'0') AS known_cost_usd"]
     cols += ["COALESCE(SUM(json_extract(data,'$.calculated_cache_writes.tokens')),0) AS cw_tokens",
       "COUNT(json_extract(data,'$.calculated_cache_writes.tokens')) AS cw_compared",
@@ -355,7 +357,7 @@ def _exprs():
 SUMMARY_SQL=_exprs()
 
 def summary_from_sql(row):
-    out={k:row[k] for k in ('sessions','attempts','pending','unresolved','abandoned','missing_usage','aggregate_records','partial_breakdown','priced_requests','known_cost_usd')}
+    out={k:row[k] for k in ('sessions','attempts','pending','unresolved','abandoned','missing_usage','aggregate_records','partial_breakdown','priced_requests','supplemental_requests','known_cost_usd')}
     from .session_cache_writes import blank_summary
     out['session_cache_writes']=dict(blank_summary(),tokens=row['cw_tokens'],compared_requests=row['cw_compared'],baseline_requests=row['cw_baselines'],missing_requests=row['cw_missing'])
     out['unpriced_requests']=out['attempts']-out['priced_requests']

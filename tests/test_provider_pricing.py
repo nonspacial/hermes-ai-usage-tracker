@@ -4,6 +4,7 @@ They do not establish live HTTP compatibility or connect to user accounts.
 import json,time
 from decimal import Decimal
 from pathlib import Path
+from urllib.request import Request
 import pytest
 from _hermes_ai_usage_ledger_v2 import pricing as p,accounting as a
 from _hermes_ai_usage_ledger_v2.storage import Store,summary
@@ -23,20 +24,25 @@ def sample_rate(model='test-model',tier='standard',**kwargs):
 def req(key='r',**kw):
     return {'id':key,'provider':'openai-codex','model':'test-model','session_id':'s','started':time.time()-1,'ended':time.time(),'status':'completed','usage':dict(BASE),**kw}
 
-def openai_fixture():
-    # Minimal semantic HTML representation of the reviewed official table values.
+def openai_fixture(models=None,threshold=272):
+    # Same schema/units as the official provider pricing.md, not an allowlist.
+    models=models or ['gpt-6-astra','gpt-6-sol','gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna']
     seed=json.loads(Path(p.__file__).with_name('provider_rates_seed.json').read_text())['snapshots'][0]['rates']
-    head='<div>Standard Batch Flex Fast mode</div>'
+    table='Flagship models\nPrices per 1M tokens.\n'
     for tier in ('standard','batch','flex','fast'):
-        head+='<table><tr><th>Model</th><th>Input</th><th>Cached input</th><th>Cache writes</th><th>Output</th><th>Input</th><th>Cached input</th><th>Cache writes</th><th>Output</th></tr>'
-        for model in p.LONG_CONTEXT:
+        table+=f'\n### {tier.title()} pricing data\n'
+        table+='| '+' | '.join(p._OPENAI_COLUMNS)+' |\n| '+' | '.join(['---']*9)+' |\n'
+        for model in models:
             vals=[]
             for band in ('short','long'):
-                r=next(r for r in seed if r['model']==model and r['service_tier']==tier and r['context_band']==band)
-                vals += [r[k] for k in ('input_tokens','cache_read_tokens','cache_write_tokens','output_tokens')]
-            head+='<tr>'+''.join('<td>'+str(x)+'</td>' for x in [model]+vals)+'</tr>'
-        head+='</table>'
-    return head
+                match=next((r for r in seed if r['model']==model and r['service_tier']==tier and r['context_band']==band),None)
+                vals += [match[k] if match else (['2','.2','2.5','10'] if band=='short' else ['4','.4','5','15'])[i]
+                         for i,k in enumerate(('input_tokens','cache_read_tokens','cache_write_tokens','output_tokens'))]
+            table+='| '+' | '.join([model]+vals)+' |\n'
+    return table+'\nCyber models\n'
+
+def openai_metadata(threshold=272):
+    return ''.join(f'"label":[0,"{label} context"],"tooltip":[0,"{symbol}{threshold}K input tokens"' for label,symbol in [('Short','≤'),('Long','>')])
 
 def test_seed_from_provider_no_manual_setup(tmp_path):
     s=Store(tmp_path);r=req(model='gpt-6-astra');s.request(r,'request_completed');d=s.read()['requests'][0]
@@ -44,14 +50,105 @@ def test_seed_from_provider_no_manual_setup(tmp_path):
     assert d['cost']['rate']['origin'].startswith('bundled_provider_snapshot')
     assert d['cost']['rate']['source_url']=='https://developers.openai.com/api/docs/pricing'
 
+def test_seed_sol_provider_price_for_new_install(tmp_path):
+    s=Store(tmp_path)
+    for key,tokens,tier in [('short',272000,'default'),('long',272001,'priority')]:
+        r=req(key,model='gpt-6-sol',service_tier=tier);r['usage']['prompt_tokens']=tokens
+        s.request(r,'request_completed')
+    rates={r['id']:r['cost']['rate'] for r in s.read()['requests']}
+    assert Decimal(rates['short']['input_tokens'])==2
+    assert Decimal(rates['long']['input_tokens'])==8
+    assert rates['short']['pricing_basis']=='subscription_api_equivalent'
+    assert 'not a subscription debit' in rates['long']['basis']
+
+
 def test_parse_four_tiers_and_context_bands():
-    rows=p.parse_openai(openai_fixture());assert len(rows)==32
+    rows=p.parse_openai(openai_fixture(),openai_metadata());assert len(rows)==40
     r=next(r for r in rows if r['model']=='gpt-6-astra' and r['service_tier']=='fast' and r['context_band']=='long')
     assert Decimal(r['input_tokens'])==40 and Decimal(r['output_tokens'])==150
+    sol=next(r for r in rows if r['model']=='gpt-6-sol' and r['service_tier']=='standard' and r['context_band']=='short')
+    assert tuple(Decimal(sol[k]) for k in ('input_tokens','cache_read_tokens','cache_write_tokens','output_tokens'))==(2,Decimal('.2'),Decimal('2.5'),10)
 
-@pytest.mark.parametrize('html',['<html>login required</html>',openai_fixture().replace('Fast mode','Other')])
-def test_openai_schema_change_fails_closed(html):
-    with pytest.raises(ValueError):p.parse_openai(html)
+@pytest.mark.parametrize('body,metadata',[
+    ('<html>login required</html>',openai_metadata()),
+    (openai_fixture().replace('### Fast pricing data','### Turbo pricing data'),openai_metadata()),
+    (openai_fixture().replace('Short context input','Input',1),openai_metadata()),
+    (openai_fixture(),openai_metadata().replace('>272K','>128K')),
+    (openai_fixture(),''),
+])
+def test_openai_schema_change_fails_closed(body,metadata):
+    with pytest.raises(ValueError):p.parse_openai(body,metadata)
+
+def test_unlisted_published_model_and_variable_threshold(tmp_path):
+    models=['gpt-6-astra','brand-new-model']
+    rows=p.parse_openai(openai_fixture(models),openai_metadata(128))
+    assert {r['model'] for r in rows}==set(models)
+    s=Store(tmp_path);make_catalog(s,'openai',rows)
+    for key,model,tokens in [('short','brand-new-model',128000),('long','brand-new-model',128001),('unknown','not-published',128001)]:
+        r=req(key,model=model);r['usage']['prompt_tokens']=tokens;s.request(r,'request_completed')
+    rates={r['id']:r['cost']['rate'] for r in s.read()['requests']}
+    assert rates['short']['context_band']=='short' and rates['long']['context_band']=='long'
+    assert rates['short']['threshold_tokens']==128000 and rates['unknown'] is None
+
+@pytest.mark.parametrize('tier', ['standard','batch','flex','fast'])
+@pytest.mark.parametrize('provider', ['openai-codex','openai-api'])
+def test_short_only_openai_band_does_not_price_long_prompt(tier,provider):
+    model='newly-published-model'
+    table=openai_fixture([model])
+    # A dynamic model can publish short-context prices for every tier while
+    # leaving the corresponding long-context columns explicitly unpriced.
+    table=table.replace(' | '.join([model,'2','.2','2.5','10','4','.4','5','15']),
+                        ' | '.join([model,'2','.2','2.5','10','—','—','—','—']))
+    rows=p.parse_openai(table,openai_metadata(128))
+    selected=[r for r in rows if r['service_tier']==tier]
+    assert len(selected)==1
+    assert selected[0]['context_band']=='short'
+    assert selected[0]['threshold_tokens']==128000
+    assert selected[0]['threshold_source']==p.SOURCES['openai']['url']
+    snapshot=p._snapshot('openai',rows,100,'fixture_provider_catalog')
+    for tokens,expected in [(127999,'short'),(128000,'short'),(128001,None),(500000,None)]:
+        request={'provider':provider,'model':model,'service_tier':tier,
+                 'usage':{'prompt_tokens':tokens}}
+        matched=p.select_rate(snapshot,request,1,100,retrospective=True)
+        assert (matched or {}).get('context_band')==expected
+    # Truly unbanded catalogue entries remain selectable independently.
+    unbanded=p._snapshot('openrouter',[sample_rate(model)],100,'fixture_provider_catalog')
+    assert p.select_rate(unbanded,{'provider':'openrouter','model':model,
+                                 'usage':{'prompt_tokens':500000}},1,100)['input_tokens']=='5'
+
+def test_asymmetric_openai_tiers_keep_independent_long_prices():
+    model='another-new-model'
+    table=openai_fixture([model])
+    full=' | '.join([model,'2','.2','2.5','10','4','.4','5','15'])
+    short=' | '.join([model,'2','.2','2.5','10','—','—','—','—'])
+    before,batch_and_later=table.split('### Batch pricing data',1)
+    table=before+'### Batch pricing data'+batch_and_later.replace(full,short,1)
+    rows=p.parse_openai(table,openai_metadata(128))
+    snapshot=p._snapshot('openai',rows,100,'fixture_provider_catalog')
+    def chosen(tier,prompt):
+        return p.select_rate(snapshot,{'provider':'openai-api','model':model,
+                                      'service_tier':tier,'usage':{'prompt_tokens':prompt}},1,100)
+    assert chosen('batch',128000)['context_band']=='short'
+    assert chosen('batch',500000) is None
+    assert chosen('standard',500000)['context_band']=='long'
+    assert chosen('flex',500000)['context_band']=='long'
+
+def test_redirect_requires_same_effective_https_origin_across_hops():
+    redirect=p.SafeRedirect()
+    source=Request('https://developers.openai.com/api/docs/pricing')
+    def follow(previous,target):
+        return redirect.redirect_request(previous,None,302,'Found',{},target)
+    explicit=follow(source,'https://developers.openai.com:443/next')
+    assert explicit.full_url=='https://developers.openai.com:443/next'
+    relative=follow(explicit,'../pricing.md')
+    assert relative.full_url=='https://developers.openai.com:443/pricing.md'
+    for previous,target in [(source,'https://developers.openai.com:8443/internal'),
+                            (source,'https://developers.openai.com:0/internal'),
+                            (relative,'https://developers.openai.com:8443/internal'),
+                            (source,'http://developers.openai.com/next'),
+                            (source,'https://other.example/next')]:
+        with pytest.raises(ValueError,match='Cross-origin'):
+            follow(previous,target)
 
 def test_catalog_per_token_conversion_optional_writes_and_long_override():
     body=json.dumps({'data':[{'id':'org/model','pricing':{'prompt':'0.000002','completion':'0.00001','input_cache_read':'0.0000002','overrides':[{'min_prompt_tokens':32000,'prompt':'0.000004'}]}}]})
@@ -121,14 +218,15 @@ def test_refresh_uses_only_public_urls_keeps_last_good(tmp_path):
     s=Store(tmp_path);calls=[]
     def fetch(url):
         calls.append(url)
-        if url==p.SOURCES['openai']['url']:return openai_fixture()
+        if url==p.SOURCES['openai']['url']:return openai_metadata()
+        if url==p.OPENAI_TABLE_URL:return openai_fixture()
         raise ConnectionError('fake secret error must not be saved')
     assert p.refresh(s,force=True,fetcher=fetch)
     d=s.read();status={c['source_id']:c for c in d['price_catalogs']}
     assert status['openai']['status']=='ok' and status['openai']['origin']=='live_public_provider'
     assert status['ollama']['status']=='unavailable' and status['ollama']['rates']
-    assert 'fake secret' not in json.dumps(d) and len(calls)==4
-    assert set(calls)=={r['url'] for r in p.SOURCES.values()}
+    assert 'fake secret' not in json.dumps(d) and len(calls)==5
+    assert set(calls)=={r['url'] for r in p.SOURCES.values()}|{p.OPENAI_TABLE_URL}
     n=len(calls);p.refresh(s,force=True,fetcher=fetch);assert len(calls)==n # button rate limiting
 
 def test_trend_includes_all_pages_and_zero_buckets(tmp_path):

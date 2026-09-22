@@ -73,11 +73,13 @@ def test_unknown_pending_and_missing_usage_not_dropped(store,monkeypatch):
     store.request({'id':'pending','started':103,'provider':'openai-codex','model':'pending-model','session_id':'s','status':'pending'},'request_started')
     d=store.read(start=90,end=110)
     assert d['summary']['attempts']==2
-    assert len(d['applied_rate_groups'])==2 and all(g['rate'] is None for g in d['applied_rate_groups'])
+    assert len(d['applied_rate_groups'])==2
     pending=next(g for g in d['applied_rate_groups'] if g['model']=='pending-model')
+    assert pending['rate'] is None
     assert pending['missing_usage']==pending['attempts']==1
     priced=next(g for g in d['applied_rate_groups'] if g['model']=='gpt-5.6-luna')
-    assert priced['cost_missing_fields']['input_tokens']==1
+    assert priced['rate']['retrospective'] is True
+    assert priced['cost_missing_fields']['input_tokens']==0
 
 def test_empty_window_has_no_catalog_rows(store):
     store.request(request(),'request_completed')
