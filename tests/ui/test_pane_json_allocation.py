@@ -48,6 +48,13 @@ def run():
             reserve = g['rows'] * baseline['line'] if g['rows'] < 10 else 10 * baseline['line']
             expected = math.floor(max(g['height']/2, min(g['height'] if g['rows'] < 10 else 2*g['height']/3,
                                       g['height']-g['chrome']-reserve)))
+            if 500 < g['height'] < 1400:
+                nav_height = page.locator('.au-subpage-tabs').evaluate('e=>e.getBoundingClientRect().height')
+                short_reserve = max(nav_height + 120, min(g['height']*.45, g['chrome'] + 2*baseline['line']))
+                base_cap = max(g['height']/2, min(g['height'] if g['rows'] < 10 else 2*g['height']/3,
+                                                  g['height']-g['chrome']-reserve))
+                weight = min(1, (g['height']-500)/100, (1400-g['height'])/300)
+                expected = math.floor(base_cap + weight*(max(base_cap,g['height']-short_reserve)-base_cap))
             assert g['cap'] == expected, (label, g, baseline, expected)
             assert not page.locator('.au-measure-lines').count()
             checks.append((label, g['height'], g['cap']))

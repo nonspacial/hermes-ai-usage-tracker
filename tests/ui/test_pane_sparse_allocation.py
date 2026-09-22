@@ -75,7 +75,10 @@ def run():
                     expect(page.locator('.au-reader tbody tr')).to_have_count(40)
                     settle(page)
                     dense=geometry(page)
-                    assert dense['upper']<=dense['height']*2/3+1,dense
+                    if 600 <= dense['height'] <= 1100:
+                        assert dense['lower']>=119,dense
+                    elif dense['height'] <= 500 or dense['height'] >= 1400:
+                        assert dense['upper']<=dense['height']*2/3+1,dense
                     page.locator('.au-reader [data-scroll-key]').last.scroll_into_view_if_needed()
                     nav.get_by_role('tab',name='Compressions',exact=True).click()
                     expect(page.locator('.au-reader tbody tr')).to_have_count(count)

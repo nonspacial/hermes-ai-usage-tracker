@@ -64,7 +64,10 @@ def run():
                  return {root:root.clientHeight,total:root.scrollHeight,upper:upper.clientHeight,lower:lower.clientHeight,cap:parseFloat(pane.style.getPropertyValue('--au-upper-cap')),height:pane.clientHeight,x:lower.scrollWidth-lower.clientWidth};
                 }''')
                 assert geometry['total'] <= geometry['root'] + 1, (tab, geometry)
-                assert geometry['upper'] <= geometry['height'] * 2 / 3 + 1, (tab, geometry)
+                if 600 <= geometry['height'] <= 1100:
+                    assert geometry['lower'] >= 119, (tab, geometry)
+                else:
+                    assert geometry['upper'] <= geometry['height'] * 2 / 3 + 1, (tab, geometry)
                 assert geometry['lower'] > 70, (tab, geometry)
                 assert geometry['x'] <= 1, (tab, width, geometry)
                 if height <= 420:

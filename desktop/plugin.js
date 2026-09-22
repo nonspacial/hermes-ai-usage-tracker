@@ -709,7 +709,32 @@ const ledgerCss = `
 .au-reader.au-measure-sparse .au-timeline-entry>:not(summary){display:none}
 .au-reader.au-measure-sparse .au-table[data-layout="records"][data-accordions="true"] .au-record-heading{padding-bottom:0;border-bottom:0}
 .au-pane .au-chart svg{height:clamp(160px,24cqh,320px)}
-@container(max-height:700px){.au-pane .au-hero{margin:12px 0;gap:20px}.au-pane .au-provider-totals{margin-top:12px}.au-pane .au-provider-row{margin:9px 0}.au-pane .au-totals{margin-bottom:12px;gap:8px}}
+/* Interpolate compact spacing into the original tall layout (1400px).
+   Container units track the pane, not the browser window or monitor. */
+.au-pane .au-hero{margin:clamp(6px,calc(-26.667px + 3.333cqh),20px) 0 clamp(8px,calc(-35.667px + 4.333cqh),25px);gap:clamp(24px,calc(-64px + 8cqh),48px)}
+.au-pane .au-big{font-size:clamp(36px,calc(17.455px + 2.182cqh),48px);margin:clamp(2px,calc(-2px + .4cqh),4px) 0 clamp(4px,calc(-4px + .8cqh),8px)}
+.au-pane .au-provider-totals{margin-top:clamp(10px,calc(-56px + 6cqh),28px)}
+.au-pane .au-provider-row{margin:clamp(8px,calc(-25px + 3cqh),17px) 0;gap:clamp(4px,calc(-10.667px + 1.333cqh),8px)}
+.au-pane .au-totals{gap:clamp(8px,calc(-6.667px + 1.333cqh),12px);margin:clamp(8px,calc(.667px + .667cqh),10px) 0 clamp(10px,calc(-26.667px + 3.333cqh),20px)}
+.au-pane .au-totals .au-metric{padding:clamp(8px,calc(.667px + .667cqh),10px) clamp(8px,calc(-6.667px + 1.333cqh),12px)}
+.au-pane .au-totals .au-number{margin:clamp(4px,calc(-7px + 1cqh),7px) 0}
+.au-pane .au-view-controls{margin:clamp(8px,calc(-21.333px + 2.667cqh),16px) 0 clamp(8px,calc(4.333px + .333cqh),9px);gap:clamp(8px,calc(-6.667px + 1.333cqh),12px)}
+.au-pane .au-chart svg{height:clamp(180px,calc(-333.333px + 46.667cqh),320px)}
+.au-pane .au-chart-title{margin:clamp(2px,calc(-9px + 1cqh),5px) 0 clamp(6px,calc(-8.667px + 1.333cqh),10px)}
+.au-pane .au-usage-summary{padding-bottom:clamp(8px,calc(-14px + 2cqh),14px)}
+@container(max-height:1100px){.au-pane .au-chart svg{height:clamp(160px,calc(92px + 8cqh),180px)}}
+/* The wide two-column summary is structural: toggling it at a height
+   breakpoint made the summary grow as the pane gained a single pixel. */
+@container(min-width:1100px){
+ .au-pane .au-hero{grid-template-columns:minmax(0,1fr) minmax(360px,1.4fr)}
+ .au-pane .au-provider-totals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}
+ .au-pane .au-provider-row{margin:2px 0;overflow-wrap:anywhere}
+}
+@container(max-width:980px){.au-pane .au-hero{gap:clamp(24px,calc(20.333px + .333cqh),25px)}}
+@container(max-width:620px){
+ .au-pane .au-big{font-size:clamp(36px,calc(31.364px + .545cqh),39px)}
+ .au-pane .au-provider-totals{margin-top:clamp(10px,calc(-19.333px + 2.667cqh),18px)}
+}
 .au-reader:focus-visible,.au-upper:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
@@ -789,8 +814,17 @@ function AnalyticsPane({children}){
    const span=first&&last?last.getBoundingClientRect().bottom-first.getBoundingClientRect().top:0;
    const chrome=Math.max(0,reader.firstElementChild.getBoundingClientRect().height-span)+nav.getBoundingClientRect().height;
    const height=pane.clientHeight;
-   const cap=sparseNeed!==undefined?Math.max(height/2,height-sparseNeed)
+   let cap=sparseNeed!==undefined?Math.max(height/2,height-sparseNeed)
     :Math.max(height/2,Math.min(height*2/3,height-chrome-10*line));
+   // Prioritise the chart on short panes, then taper back to the original
+   // ten-row allocation as height grows. Do not jump at 600 or 1100px.
+   // This remains a maximum: sparse upper content never gains blank filler.
+   if(height>500&&height<1400){
+    const reserve=Math.max(nav.getBoundingClientRect().height+120,Math.min(height*.45,chrome+2*line));
+    const shortCap=Math.max(cap,height-reserve);
+    const weight=Math.min(1,(height-500)/100,(1400-height)/300);
+    cap+=weight*(shortCap-cap);
+   }
    const value=Math.floor(cap)+'px';
    if(pane.style.getPropertyValue('--au-upper-cap')!==value)pane.style.setProperty('--au-upper-cap',value);
   }
