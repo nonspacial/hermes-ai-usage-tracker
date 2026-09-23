@@ -1,6 +1,6 @@
 {
   "name": "ai-usage-tracker",
-  "label": "AI Usage Tracker",
+  "label": "AI usage +",
   "description": "Original provider quotas plus request, subagent, project and compression usage",
   "icon": "Graph",
   "version": "2.0.0-test.17",

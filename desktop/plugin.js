@@ -406,7 +406,7 @@ function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider
   return jsxs('div', {
     className: 'au-header-main',
     children: [
-      jsx('span', { className: 'au-header-title text-sm font-medium', title: meta || '', children: 'AI usage' }),
+      jsx('span', { className: 'au-header-title text-sm font-medium', title: meta || '', children: 'AI usage +' }),
       jsx('span', {
         className: 'au-header-meta text-[0.6875rem] text-(--ui-text-quaternary)',
         title: meta || '',
@@ -1781,12 +1781,12 @@ function UsageChip() {
     ? [worst.provider, worst.window ? `${worst.window} window` : null, resetLabel(worst.reset_at)]
         .filter(Boolean)
         .join(' · ')
-    : 'AI usage'
+    : 'AI usage +'
 
   return jsx('button', {
     type: 'button',
-    title: `${detail}${pinned ? ' (pinned on the AI usage page)' : ''}`,
-    'aria-label': `AI usage: ${detail}`,
+    title: `${detail}${pinned ? ' (pinned on the AI usage + page)' : ''}`,
+    'aria-label': `AI usage +: ${detail}`,
     className: 'px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) hover:text-(--ui-text-secondary)',
     onClick: () => {
       haptic('tap')
@@ -1807,7 +1807,7 @@ function UsageChip() {
                   : 'var(--ui-text-quaternary)'
           }
         }),
-        jsx('span', { children: worst ? `${pct(worst.remaining)} · ${worst.provider}` : data ? 'AI usage' : 'AI usage…' })
+        jsx('span', { children: worst ? `${pct(worst.remaining)} · ${worst.provider}` : data ? 'AI usage +' : 'AI usage +…' })
       ]
     })
   })
@@ -1815,7 +1815,7 @@ function UsageChip() {
 
 export default {
   id: ID,
-  name: 'AI Usage Tracker',
+  name: 'AI usage +',
   register(ctx) {
     rest = ctx.rest
     socket = ctx.socket
@@ -1858,7 +1858,7 @@ export default {
     ctx.register({
       id: 'nav',
       area: SIDEBAR_NAV_AREA,
-      data: { path: ROUTE, label: 'AI usage', codicon: 'graph' }
+      data: { path: ROUTE, label: 'AI usage +', codicon: 'graph' }
     })
 
     ctx.register({
