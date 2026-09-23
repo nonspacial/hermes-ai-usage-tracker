@@ -48,23 +48,26 @@ def run():
             }return d;};window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'});
         }''')
         nav=page.get_by_role('navigation',name='Provider subpages')
-        # Overview groups never collapse: all stacked fields count towards
-        # their normal height, even when fewer than ten groups are present.
+        # Overview groups now reserve their collapsed headings, not the full
+        # expanded fields, without losing any field when opened.
         page.locator('#root').evaluate('(e)=>{e.style.width="460px";e.style.height="1400px"}')
         nav.get_by_role('tab',name='Overview',exact=True).click()
         expect(page.locator('.au-reader tbody tr')).to_have_count(4)
         expect(page.locator('.au-reader .au-table')).to_have_attribute('data-layout','records')
-        expect(page.locator('.au-reader .au-table')).to_have_attribute('data-accordions','false')
+        expect(page.locator('.au-reader .au-table')).to_have_attribute('data-accordions','true')
         settle(page)
         overview=geometry(page)
-        assert overview['need']+overview['nav']>overview['height']/2,overview
-        assert abs(overview['upper']-overview['height']/2)<=1,overview
+        assert overview['upper']<=overview['natural']+1,overview
+        assert overview['lower']>0,overview
         assert page.locator('.au-reader tbody tr>td:not(:first-child)').evaluate_all(
-            'cells=>cells.every(cell=>getComputedStyle(cell).display!=="none")')
+            'cells=>cells.every(cell=>getComputedStyle(cell).display==="none")')
+        page.locator('.au-reader .au-record-disclosure').first.click()
+        settle(page)
+        assert page.locator('.au-reader tbody tr').first.locator('td').nth(1).is_visible()
         page.locator('.au-reader tbody tr').last.scroll_into_view_if_needed()
         assert page.locator('.au-reader tbody tr').last.evaluate(
             'e=>e.getBoundingClientRect().bottom<=e.closest(".au-reader").getBoundingClientRect().bottom+1')
-        print('PASS narrow non-collapsible Overview:',overview)
+        print('PASS narrow collapsible Overview:',overview)
         results=[]
         for width in [982,980,740,600,460,982]:
             for height in [420,900,1400,2100]:

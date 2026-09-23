@@ -699,6 +699,8 @@ const ledgerCss = `
 .au-ledger .au-record-disclosure{display:none}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] .au-record-disclosure{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;width:100%;border:0;background:transparent;text-align:left;padding:0;color:var(--ui-text-primary)}
 .au-record-identity{flex:1;min-width:100px;overflow-wrap:anywhere}
+.au-ledger .au-record-summary{display:inline-flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
+.au-ledger .au-record-summary-label{color:var(--ui-text-tertiary);font-size:.6875rem;font-weight:400}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody .au-record-heading>.au-field-label,
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody .au-record-heading>.au-field-value{display:none}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody tr[data-expanded="false"]>td:not(:first-child){display:none}
@@ -876,6 +878,11 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
    // so resizing cannot discard an open JSON snapshot or keyboard focus.
    root.dataset.layout='table';
    root.dataset.layout=root.querySelector('table').scrollWidth>root.clientWidth+1?'records':'table';
+   if(root.dataset.layout==='records'&&focusedRow&&root.contains(focused)&&
+      (focused===focusedRow||focused.closest('td')===focusedRow.querySelector('td:first-child'))&&
+      !focused.classList.contains('au-record-disclosure')){
+    focusedRow.querySelector('.au-record-disclosure')?.focus({preventScroll:true});
+   }
    if(root.dataset.layout==='table'&&root.contains(focused)&&focused.classList.contains('au-record-disclosure')){
     focusedRow.tabIndex=-1;focusedRow.focus({preventScroll:true});
     focusedRow.addEventListener('blur',()=>focusedRow.removeAttribute('tabindex'),{once:true});
@@ -897,7 +904,10 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
   className:(i===0?'au-record-heading ':headers[i]==='Details'?'au-record-details ':'')+(value===''?'au-record-empty':'')
  },i===0&&entry?h('button',{type:'button',className:'au-record-disclosure','aria-expanded':!!expanded[key],onClick:()=>setExpanded(old=>({...old,[key]:!old[key]}))},
   h('span',{'aria-hidden':true},expanded[key]?'▾':'▸'),h('span',{className:'au-record-identity'},entry.identity),
-  entry.started?h('span',{className:'au-muted'},when(entry.started)):null,h('strong',{},entry.value)):null,
+  entry.started?h('span',{className:'au-muted'},when(entry.started)):null,
+  ...(entry.summary||[]).map((item,j)=>h('span',{key:j,className:'au-record-summary',title:item.title},
+   h('span',{className:'au-record-summary-label'},item.label),h('strong',{},item.value))),
+  entry.value!=null?h('strong',{},entry.value):null):null,
  h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
  return h('div',{className:'au-table','data-accordions':!!accordions,tabIndex:accordions?0:undefined,'aria-label':accordions?'Expandable records':undefined,ref:node=>{nodes.root=node}},h('table',{role:'table'},
   h('thead',{role:'rowgroup'},h('tr',{role:'row'},...headers.map((v,i)=>h('th',{key:i,scope:'col',role:'columnheader'},v)))),
@@ -1050,12 +1060,13 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
  const rows=group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
  const total=mode==='Cost'?Number(data.summary.known_cost_usd):data.summary.known.total_tokens;
  const grouping={model:'Model',time:timeName,project:'Project',session:'Session',subagent:'Subagents'};
- function name(g){
-  if(group==='model')return h('div',{},g.model,h('div',{className:'au-muted'},uiNames[g.provider]||g.provider));
+ function name(g,drill=true){
+  if(group==='model')return h(drill?'div':'span',{},g.model,
+   h(drill?'div':'span',{className:'au-muted',...(!drill?{style:{display:'block'}}:{})},uiNames[g.provider]||g.provider));
   if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(timeName==='Hour'?{hour:'numeric'}:{})});
   const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
   const drillable=nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
-  return h(drillable?'button':'span',{className:'au-drill',title:g.path||g.key,...(drillable?{onClick:()=>onDrill(group,g)}:{})},label,
+  return h(drill&&drillable?'button':'span',{className:'au-drill',title:g.path||g.key,...(drill&&drillable?{onClick:()=>onDrill(group,g)}:{})},label,
    group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(originalId(g,'parent_session_id')||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('named_project')?'Named project':g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
  }
  const detail=group==='project'||group==='session'||group==='subagent';
@@ -1063,7 +1074,12 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
  rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
   return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
- }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start]))):h('p',{className:'au-muted'},'No recorded activity in this window.'))
+ }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
+  identity:name(g,false),summary:[
+   {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
+   {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
+  ]
+ }))):h('p',{className:'au-muted'},'No recorded activity in this window.'))
 }
 
 // Request drill-downs are reversible local navigation. These fields narrow the
