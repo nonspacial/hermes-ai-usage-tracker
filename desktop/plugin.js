@@ -571,7 +571,7 @@ const ledgerCss = `
 .au-ledger .au-big{font-size:3rem;letter-spacing:-1.8px;font-weight:650;line-height:1.2;margin:4px 0 8px}
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
-.au-ledger .au-provider-cost{font-size:1.875rem;line-height:1.1;font-weight:700;color:var(--ui-text-primary)}
+.au-ledger .au-provider-cost{font-size:1.5rem;line-height:1.1;font-weight:700;color:var(--ui-text-primary)}
 .au-ledger .au-timeline-entry{background:var(--au-table-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:8px 0;overflow-wrap:anywhere}
 .au-ledger .au-timeline-scroll{padding-right:4px}
 .au-ledger .au-snapshot-picker{justify-content:flex-end}
@@ -825,7 +825,13 @@ function AnalyticsPane({children}){
     const weight=Math.min(1,(height-500)/100,(1400-height)/300);
     cap+=weight*(shortCap-cap);
    }
-   const value=Math.floor(cap)+'px';
+   const rounded=Math.floor(cap);
+   // Flooring a fractional cap can leave only the summary's bottom border
+   // outside the scrollport. Fit that measured final pixel, but do not
+   // enlarge genuinely scrolling content or take the reader's last row.
+   const upper=pane.querySelector('.au-upper');
+   const bottom=upper.lastElementChild?.getBoundingClientRect().bottom-upper.getBoundingClientRect().top+upper.scrollTop;
+   const value=(bottom>rounded&&bottom<=rounded+1&&reader.clientHeight>120?Math.ceil(bottom):rounded)+'px';
    if(pane.style.getPropertyValue('--au-upper-cap')!==value)pane.style.setProperty('--au-upper-cap',value);
   }
   const schedule=()=>{if(!frame)frame=requestAnimationFrame(measure)};

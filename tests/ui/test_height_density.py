@@ -63,8 +63,25 @@ def run():
                     assert row['navTop']>=before['navTop']-2,(before,row)
                     assert row['cap']>=before['cap']-2,(before,row)
                 previous[height]=row
+        # A one-pixel thicker divider exposes the fractional fit lost when
+        # the allocated cap is rounded down: the border must remain visible.
+        page.locator('#root').evaluate('(e)=>{e.style.width="1500px"}')
+        page.add_style_tag(content='.au-usage-summary{border-bottom-width:2px!important}')
+        for height in (849, 849.25, 850):
+            page.locator('#root').evaluate('(e,h)=>e.style.height=h+"px"',height)
+            page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+            fit=page.evaluate('''()=>{
+                const upper=document.querySelector('.au-upper'),summary=upper.querySelector('.au-usage-summary'),
+                  reader=document.querySelector('.au-reader');
+                return {border:getComputedStyle(summary).borderBottomWidth,
+                  upperBottom:upper.getBoundingClientRect().bottom,
+                  summaryBottom:summary.getBoundingClientRect().bottom,
+                  overflow:upper.scrollHeight-upper.clientHeight,lower:reader.clientHeight};
+            }''')
+            assert fit['border']=='2px' and fit['summaryBottom']<=fit['upperBottom']+0.02, (height,fit)
+            assert fit['overflow']==0 and fit['lower']>=119, (height,fit)
         browser.close()
     (out/'height-density.json').write_text(json.dumps(results,indent=2))
-    print(f'PASS {len(results)} actual-pane geometry samples across 3 widths; adjacent heights, chart, navigation, containment')
+    print(f'PASS {len(results)} actual-pane geometry samples across 3 widths plus 3 fractional divider fits; adjacent heights, chart, navigation, containment')
 
 if __name__=='__main__':run()

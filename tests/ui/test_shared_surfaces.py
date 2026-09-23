@@ -157,10 +157,10 @@ def run():
                         upper:upper.clientHeight,natural:upper.scrollHeight,
                         lower:lower.clientHeight,document:document.documentElement.scrollWidth-innerWidth,
                         pane:pane.scrollHeight-pane.clientHeight};}''')
-                    assert abs(size['amount']-30*root_size/16)<.1,(root_size,width,height,one,size)
+                    assert abs(size['amount']-24*root_size/16)<.1,(root_size,width,height,one,size)
                     assert abs(size['percent']-12*root_size/16)<.1,(root_size,width,height,one,size)
                     assert abs(size['axis']-11*root_size/16)<.1,(root_size,width,height,one,size)
-                    assert abs(size['amount']/size['percent']-2.5)<.01,size
+                    assert abs(size['amount']/size['percent']-2)<.01,size
                     assert size['weight']=='700' and size['partial'],size
                     assert size['pane']<=1 and size['document']<=1 and size['lower']>=70,size
                     if root_size==16 and width==1500 and height==850 and one:
@@ -184,7 +184,7 @@ def run():
         assert abs(quota.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')-15)<.1
         assert abs(type_page.locator('.au-ledger').evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')-16.25)<.1
         assert not errors,errors
-        print('PASS 20 typography cases: 16/20px root, one/multiple partial providers, amount 2.5x subdued percentage, SVG labels, containment, chart keyboard and upper scroll',samples)
+        print('PASS 20 typography cases: 16/20px root, one/multiple partial providers, amount 2x subdued percentage, SVG labels, containment, chart keyboard and upper scroll',samples)
         type_page.close()
         browser.close()
 
