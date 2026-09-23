@@ -383,14 +383,15 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
     elif start==0:
         first=c.execute('SELECT MIN(started) FROM requests WHERE '+where,params).fetchone()[0]
         start=first if first is not None else max(0,end-86400)
-    step=3600 if end-start<=172800 else 86400
+    # Allow short windows above one hour: rolling start and server end are sampled separately.
+    step=120 if end-start<=7200 else (3600 if end-start<=172800 else 86400)
     if (end-start)/step>400:step=86400*max(1,int((end-start)/86400/400)+1)
     lo=int(start//step)*step
     rows={int(row['bucket']):summary_from_sql(row) for row in c.execute(
       'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
     blank=summary([])
     buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank)) for t in range(lo,int(end)+1,step) if t<end]
-    return {'unit':'hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'),'timezone':'UTC','seconds':step,'buckets':buckets}
+    return {'unit':'2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days')),'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
 def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL):

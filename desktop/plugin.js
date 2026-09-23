@@ -682,6 +682,11 @@ const ledgerCss = `
 @container(max-width:400px){.au-ledger .au-timeline-entry dl{grid-template-columns:minmax(0,1fr)}}
 .au-ledger .au-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ui-accent);margin:0 8px 1px 0}
 .au-ledger .au-chart{min-width:0}.au-ledger .au-chart svg{display:block;width:100%;min-height:160px;outline-offset:4px}
+.au-ledger .au-chart:focus{outline:none}
+.au-ledger .au-plot-hit{fill:transparent;stroke:transparent;stroke-width:1.5;vector-effect:non-scaling-stroke;cursor:crosshair;touch-action:none}
+.au-ledger .au-plot-hit:hover{stroke:rgba(255,255,255,.5)}
+.au-ledger .au-chart:focus .au-plot-hit{stroke:#fff}
+.au-ledger .au-plot-selection{fill:#a799ef;fill-opacity:.3;pointer-events:none}
 .au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;margin:5px 0 10px}
 .au-ledger .au-axis{font-size:.6875rem;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
 .au-ledger .au-line{fill:none;stroke:var(--ui-accent);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.au-ledger .au-area{fill:var(--ui-accent);opacity:.10}
@@ -1108,20 +1113,43 @@ function selectedCost(s){return !s?.attempts?'$0.00':Object.keys(bucketNames).so
 function savingsValue(s,key='cache_savings_usd'){return !s?.attempts?'$0.00':s.attempts>(s.savings_missing?.[key]??s.attempts)?dollars(s.savings?.[key]):'—'}
 function viewTokens(s,key,format=short){return !s?.attempts?'0':knownTokens(s,key,format)}
 function valueFor(s,mode){if(!s?.attempts)return 0;if(mode==='Cost')return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]||0)<s.attempts)?Number(s.known_cost_usd):null;return s.attempts>(s.missing_fields?.total_tokens||0)?Number(s.known?.total_tokens):null}
-function UsageChart({data,mode}){
+function UsageChart({data,mode,onSelectRange}){
+ const drag=useRef(null),chartRef=useRef(null),[selection,setSelection]=useState(null);
+ useEffect(()=>{
+  const blurOutside=e=>{const chart=chartRef.current;if(chart&&e.target.closest?.('.au-plot-hit')!==chart.querySelector('.au-plot-hit')){if(chart.contains(e.target))e.preventDefault();if(document.activeElement===chart)chart.blur()}};
+  document.addEventListener('pointerdown',blurOutside,true);
+  return()=>document.removeEventListener('pointerdown',blurOutside,true);
+ },[]);
+ useEffect(()=>{drag.current=null;setSelection(null);setHover(null)},[data?.window?.start,data?.window?.end,mode]);
  const [hover,setHover]=useState(null),points=data?.trend?.buckets||[],unit=data?.trend?.unit||'day',cost=mode==='Cost',vals=points.map(p=>valueFor(p,mode)),max=Math.max(1,...vals.filter(v=>v!=null)),top=max*1.15;
- const W=760,H=258,L=65,R=18,T=14,B=39,w=W-L-R,hg=H-T-B,xx=i=>L+(i/Math.max(1,points.length-1))*w,yy=v=>H-B-(v/top)*hg;
+ const W=760,H=258,L=65,R=18,T=14,B=39,w=W-L-R,hg=H-T-B,plotStart=points[0]?.start||0,plotEnd=points[points.length-1]?.end||plotStart+1;
+ const xx=i=>L+((points[i]?.start??plotStart)-plotStart)/Math.max(1,plotEnd-plotStart)*w,yy=v=>H-B-(v/top)*hg;
+ const plotTime=x=>plotStart+(x-L)/w*(plotEnd-plotStart);
  let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
  vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
- const stamp=t=>new Date(t*1000).toLocaleString(undefined,unit==='hour'?{hour:'numeric',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
- return h('div',{className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
+ const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
+ // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
+ const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
+ const move=e=>{const x=plotX(e),time=plotTime(x),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.x=x;d.moved=Math.abs(e.clientX-d.clientX)>=5;setSelection(d.moved?[d.start,x]:null)}};
+ const cancel=()=>{drag.current=null;setSelection(null)};
+ const release=e=>{const d=drag.current;if(!d||d.id!==e.pointerId)return;move(e);cancel();if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
+  if(!d.moved||!onSelectRange||!points.length)return;
+  const lo=Math.floor(plotTime(Math.min(d.start,d.x))),hi=Math.ceil(plotTime(Math.max(d.start,d.x)));
+  if(hi>lo)onSelectRange(lo,hi);
+ };
+ return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
- h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets',onMouseLeave:()=>setHover(null),onMouseMove:e=>{const rect=e.currentTarget.getBoundingClientRect(),x=(e.clientX-rect.left)*W/rect.width;setHover(Math.max(0,Math.min(points.length-1,Math.round((x-L)/w*(points.length-1)))))}},
+ h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
  h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'}),
  ...[0,Math.floor((points.length-1)/2),points.length-1].filter((n,i,a)=>n>=0&&n<points.length&&a.indexOf(n)===i).map(i=>h('text',{key:i,x:xx(i),y:H-10,textAnchor:i===0?'start':i===points.length-1?'end':'middle',className:'au-axis'},stamp(points[i].start))),
  active?h('line',{x1:xx(hover),x2:xx(hover),y1:T,y2:H-B,className:'au-crosshair'}):null,
- active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null),
+ active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null,
+ selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
+ h('rect',{key:'hit',className:'au-plot-hit',x:L,y:T,width:w,height:hg,
+  onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});const x=plotX(e);drag.current={id:e.pointerId,start:x,x,clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
+  onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
+  h('title',{},'Click to interact with Left/Right arrow keys. Click and drag to zoom into a time range.'))),
  active?h('div',{className:'au-chart-tip',role:'status'},new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · ',cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens',' · '+count(active.attempts)+' requests',active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
@@ -1132,7 +1160,7 @@ function missingFieldNote(summary,key){
  const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>count(reasons[name])+' '+label):[];
  return (parts.length?parts.join(' · '):count(n)+' requests without this value')+' · subtotal';
 }
-function Summary({data,label,mode,agent,onSubagents}){
+function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
  const t=key=>data?viewTokens(s,key):'—';
@@ -1160,7 +1188,7 @@ function Summary({data,label,mode,agent,onSubagents}){
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
  mode==='Cost'&&s?.supplemental_requests?h('div',{className:'au-muted','data-testid':'retrospective-overview-note'},count(s.supplemental_requests)+' past request(s) valued at currently published provider rates, not historical charges'):null,
  h('div',{className:'au-provider-totals'},...providerRows)),
- h(UsageChart,{data,mode})):null,
+ h(UsageChart,{data,mode,onSelectRange})):null,
  h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open · '+count(data?.compression_count||0)+' compressions'),
  h('details',{'data-testid':'usage-diagnostics'},h('summary',{},'Usage diagnostics'),
  h('div',{className:'au-muted'},count(s?.pending||0)+' open (owner observed live) · '+count(s?.unresolved||0)+' unresolved · '+count(s?.abandoned||0)+' abandoned'),
@@ -1168,7 +1196,7 @@ function Summary({data,label,mode,agent,onSubagents}){
 }
 
 function Breakdown({data,mode,onDrill,group,setGroup}){
- const timeName=data?.trend?.unit==='hour'?'Hour':'Day';
+ const minuteBuckets=(data?.trend?.seconds||86400)<3600,timeName=minuteBuckets?'2 minutes':data?.trend?.unit==='hour'?'Hour':'Day';
  // Only the time table is reversed; the shared chart keeps chronological buckets.
  // Other groups arrive ordered by their latest call across the full filtered set.
  const rows=group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
@@ -1177,7 +1205,7 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
  function name(g,drill=true){
   if(group==='model')return h(drill?'div':'span',{},g.model,
    h(drill?'div':'span',{className:'au-muted',...(!drill?{style:{display:'block'}}:{})},uiNames[g.provider]||g.provider));
-  if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(timeName==='Hour'?{hour:'numeric'}:{})});
+  if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(minuteBuckets?{hour:'numeric',minute:'2-digit'}:timeName==='Hour'?{hour:'numeric'}:{})});
   const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
   const drillable=nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
   return h(drill&&drillable?'button':'span',{className:'au-drill',title:g.path||g.key,...(drill&&drillable?{onClick:()=>onDrill(group,g)}:{})},label,
@@ -1863,6 +1891,10 @@ function UsagePageScope({selected}){
  async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
  function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const local=x=>new Date(x*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19);setCustomStart(local(t.started));setCustomEnd(t.ended?local(t.ended):'')}
  function changePeriod(v){setPeriod(v);setFilterTest('');setAnchor(Date.now()/1000)}
+ function selectChartRange(lo,hi){
+  const local=t=>{const date=new Date(t*1000);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,19)};
+  setCustomStart(local(lo));setCustomEnd(local(hi));setFilterTest('');setPeriod('custom');
+ }
  function drill(kind,g){
   const next=nextDrillFilters(requestFilters,kind,g);if(!next)return;
   const nextKey=requestPageKey(navigationContext,next);
@@ -1920,7 +1952,7 @@ function UsagePageScope({selected}){
   h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
   data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
   h(Coverage,{data}),
-  h(Summary,{data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  h(Summary,{data,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,

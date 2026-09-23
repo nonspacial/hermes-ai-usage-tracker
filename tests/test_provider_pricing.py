@@ -244,7 +244,10 @@ def test_trend_clip_window_unknown_is_not_zero(tmp_path):
     s=Store(tmp_path);t=int(time.time()//3600)*3600
     s.request(req(started=t+10,usage={}), 'request_completed')
     d=s.read(t+5,t+2000);b=d['trend']['buckets'][0]
-    assert b['start']==t+5 and b['end']==t+2000 and b['missing_usage']==1 and b['attempts']==1
+    assert d['trend']['seconds']==120
+    assert b['start']==t+5 and b['end']==t+120 and b['missing_usage']==1 and b['attempts']==1
+    assert d['trend']['buckets'][-1]['end']==t+2000
+    assert all(bucket['attempts']==0 for bucket in d['trend']['buckets'][1:])
 
 def test_python_and_sql_summaries_match(tmp_path):
     s=Store(tmp_path);make_catalog(s,'openai',[sample_rate()])
