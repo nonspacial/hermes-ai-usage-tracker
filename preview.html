@@ -353,6 +353,7 @@ function h(type,props,...children){return React.createElement(typeof type==='fun
 function jsx(type,props,key){return h(type,{...props,...(key!==undefined?{key}:{} )})}const jsxs=jsx;
 function useState(initial){const v=active,i=v.index++;if(!(i in v.slots))v.slots[i]=typeof initial==='function'?initial():initial;
  return [v.slots[i],val=>{const next=typeof val==='function'?val(v.slots[i]):val;if(Object.is(next,v.slots[i]))return;v.slots[i]=next;if(v.alive)v.setState(s=>({tick:s.tick+1}))}]}
+function useRef(initial){const v=active,i=v.index++;if(!(i in v.slots))v.slots[i]={current:initial};return v.slots[i]}
 function useEffect(effect,deps){const v=active,i=v.index++,old=v.slots[i];if(!old||!deps||deps.some((d,k)=>!Object.is(d,old.deps[k]))){v.slots[i]={deps};v.pending.push(()=>{if(old?.cleanup)old.cleanup();v.slots[i].cleanup=effect()})}}
 function atom(value){const subscribers=new Set();return{get:()=>value,set:v=>{value=v;for(const f of subscribers)f(v)},subscribe:f=>{subscribers.add(f);return()=>subscribers.delete(f)}}}
 function useValue(a){const[v,set]=useState(a.get());useEffect(()=>a.subscribe(set),[a]);return v}
@@ -828,7 +829,94 @@ function QuotaBar({ window }) {
   })
 }
 
-function ProviderCard({ provider, isHidden, onNavigate }) {
+// All reset controls live in the card header. The same component is used on
+// Subscriptions and the Codex provider page; query identity includes profile.
+const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
+function CodexResetControls({profile}) {
+  const [open,setOpen] = useState(false), [confirm,setConfirm] = useState(false)
+  const [busy,setBusy] = useState(false), [message,setMessage] = useState('')
+  const badgeRef=useRef(null),useRefButton=useRef(null),dialogRef=useRef(null),confirmed=useRef(null)
+  const path = '/codex/resets?profile='+encodeURIComponent(profile)
+  const query = useQuery({queryKey:[ID,'codex-resets',profile],queryFn:()=>rest(path),
+    retry:false,refetchInterval:60000,refetchIntervalInBackground:false,refetchOnWindowFocus:false})
+  const state = query.data?.profile === profile && !query.isPlaceholderData ? query.data : null
+  const count = Number.isSafeInteger(state?.count) && state.count >= 0 ? state.count : null
+  const blocked = !!state?.blocked
+  const eligible = count > 0 && state?.redeemable === true && !blocked && !query.error
+  const confirmationValid=eligible && confirmed.current?.profile===profile &&
+    confirmed.current?.binding===state?.binding && confirmed.current?.episode===state?.episode &&
+    confirmed.current?.count===state?.count
+  function restoreFocus(){(useRefButton.current && !useRefButton.current.disabled ? useRefButton.current : badgeRef.current)?.focus()}
+  useEffect(()=>{if(confirm && !confirmationValid){setConfirm(false);restoreFocus()}},
+    [confirm,confirmationValid])
+  function closeConfirm(){setConfirm(false);restoreFocus()}
+  function dialogKeys(e){
+    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeConfirm()}
+    if(e.key==='Tab'){
+      const buttons=Array.from(dialogRef.current?.querySelectorAll('button:not(:disabled)')||[])
+      if(!buttons.length)return
+      const edge=e.shiftKey?buttons[0]:buttons[buttons.length-1]
+      if(document.activeElement===edge){e.preventDefault();(e.shiftKey?buttons[buttons.length-1]:buttons[0]).focus()}
+    }
+  }
+  const tone = count === null || count === 0 ? 'zero' : eligible ? 'ready' : 'waiting'
+  const reason = blocked ? 'Redemption status is uncertain. No second attempt is allowed; review your Codex account before trying again.'
+    : query.error ? 'Account-bound balance unavailable: '+String(query.error.message||query.error)
+    : count === null ? 'Balance or account identity is unknown; redemption is disabled.'
+    : count === 0 ? 'No banked resets available.'
+    : !eligible ? 'No provider-confirmed five-hour or weekly exhaustion; rounded 0% is not enough.' : 'An eligible limit was confirmed by Codex.'
+  async function auto(e) {
+    if(!state?.binding || busy)return
+    const enabled=e.currentTarget.checked
+    setBusy(true);setMessage('')
+    try {
+      const result=await rest('/codex/resets/auto',{method:'POST',body:{profile,binding:state.binding,enabled}})
+      if(result.profile!==profile)throw new Error('Wrong profile response')
+      await query.refetch({cancelRefetch:false})
+    }catch(err){setMessage(String(err.message||err));await query.refetch({cancelRefetch:false})}
+    finally{setBusy(false)}
+  }
+  async function redeem() {
+    if(!confirmationValid || busy)return
+    setBusy(true);setConfirm(false);setMessage('')
+    badgeRef.current?.focus()
+    try {
+      // Never use a cached window as redemption authority. The backend reads
+      // again under its account-scoped exclusive operation before consumption.
+      const result=await rest('/codex/resets/redeem',{method:'POST',body:{profile,
+        binding:state.binding,episode:state.episode,count:state.count}})
+      if(result.profile!==profile)throw new Error('Wrong profile response')
+      setMessage(result.outcome==='reset'||result.outcome==='alreadyRedeemed'
+        ? 'Reset applied; Codex limits were read back.' : 'Codex returned '+result.outcome+'; no reset was applied.')
+    }catch(err){setMessage(String(err.message||err))}
+    finally{setBusy(false);await query.refetch({cancelRefetch:false})}
+  }
+  return jsxs('div',{className:'au-reset-header','data-testid':'codex-resets',children:[
+    jsxs('label',{className:'au-reset-auto',children:[jsxs('span',{children:[
+      jsx('input',{type:'checkbox','aria-label':'Auto use banked Codex reset',
+        'aria-describedby':'au-reset-auto-warning',checked:!!state?.auto,
+        disabled:!state?.binding||!!query.error||busy||blocked,onChange:auto}), ' Auto use']}),
+      jsx('span',{id:'au-reset-auto-warning',className:'au-reset-tooltip',role:'tooltip',children:RESET_WARNING})]}),
+    jsx('button',{type:'button',className:'au-reset-badge',
+      'data-tone':tone,'aria-label':'Resets: '+(count===null?'unknown':count),
+      title:reason,ref:node=>{badgeRef.current=node},onClick:()=>{setOpen(!open);setConfirm(false);confirmed.current=null},children:'Resets: '+(count===null?'—':count)}),
+    open?jsxs('div',{className:'au-reset-popover',role:'group','aria-label':'Codex banked resets',children:[
+      jsx('div',{children:count===null?'Banked reset balance unavailable.':count+' banked reset'+(count===1?'':'s')+' available.'}),
+      jsx('div',{className:'au-reset-reason',children:reason}),
+      jsx('span',{title:eligible?'Redeem one banked reset':reason,children:
+        jsx('button',{type:'button',ref:node=>{useRefButton.current=node},disabled:!eligible||busy,title:eligible?'Redeem one banked reset':reason,
+          className:!eligible?'au-reset-blocked':'',onClick:()=>{confirmed.current={profile,binding:state.binding,episode:state.episode,count:state.count};setConfirm(true)},children:busy?'Checking…':'Use one reset'})}),
+      confirm && confirmationValid?jsxs('div',{ref:node=>{if(node && !dialogRef.current)node.querySelector('button')?.focus();dialogRef.current=node},role:'alertdialog','aria-label':'Confirm banked reset','aria-modal':true,onKeyDown:dialogKeys,children:[
+        jsx('p',{children:'Spend one banked reset? This refreshes eligible five-hour and weekly allowances and can change the weekly reset date.'}),
+        jsx('button',{type:'button',onClick:redeem,disabled:busy||!confirmationValid,children:'Confirm use'}),
+        jsx('button',{type:'button',onClick:closeConfirm,children:'Cancel'})]}):null,
+      message?jsx('p',{role:'status',children:message}):null,
+      jsx('button',{type:'button',onClick:()=>query.refetch({cancelRefetch:false}),disabled:busy,children:'Refresh balance'})
+    ]}):null
+  ]})
+}
+
+function ProviderCard({ provider, isHidden, onNavigate, profile }) {
   const status = statusOf(provider)
   const windows = provider.quota?.windows || []
   const details = provider.quota?.details || []
@@ -859,6 +947,7 @@ function ProviderCard({ provider, isHidden, onNavigate }) {
             ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: 'used recently' })
             : null,
           jsx('span', { className: 'flex-1' }),
+          provider.id === 'openai-codex' && profile ? jsx(CodexResetControls,{profile}) : null,
           jsx('button', {
             type: 'button',
             title: isHidden ? 'Show this provider again' : 'Hide this provider',
@@ -1183,6 +1272,22 @@ const ledgerCss = `
 .au-ledger .au-quota-home button.au-provider-name:is(:hover,:focus-visible){color:var(--ui-accent);background:var(--au-selected-bg);text-decoration:underline;text-underline-offset:3px}
 .au-ledger .au-provider-limits{margin:0 0 16px;min-width:0}
 .au-quota-card{container-type:inline-size;min-width:0}
+.au-quota-card>div:first-child{flex-wrap:wrap}
+.au-reset-header{position:relative;display:flex;align-items:center;gap:8px;font-size:.6875rem;flex-shrink:0}
+.au-reset-auto{white-space:nowrap;cursor:pointer;color:var(--ui-text-secondary)}
+.au-reset-tooltip{position:absolute;top:calc(100% + 6px);right:0;z-index:21;width:min(310px,80vw);padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg);color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);visibility:hidden;pointer-events:none}
+.au-reset-auto:is(:hover,:focus-within) .au-reset-tooltip{visibility:visible}
+.au-reset-auto input{vertical-align:middle;accent-color:var(--ui-accent)}
+.au-reset-auto:has(input:disabled){opacity:.6;cursor:not-allowed}
+.au-reset-badge{padding:3px 7px!important;border:1px solid var(--ui-stroke-secondary)!important;border-radius:12px!important;white-space:nowrap;font-weight:600}
+.au-reset-badge[data-tone="zero"]{color:var(--ui-text-quaternary)}
+.au-reset-badge[data-tone="waiting"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-text-warning,#d2b776)!important}
+.au-reset-badge[data-tone="ready"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-text-success,#64bba8)!important}
+.au-reset-popover{position:absolute;z-index:20;top:calc(100% + 6px);right:0;width:min(320px,80vw);padding:12px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg);color:var(--ui-text-primary);box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);white-space:normal;line-height:1.45}
+.au-reset-popover button{margin:6px 6px 0 0!important;padding:4px 8px!important;border:1px solid var(--ui-stroke-secondary)!important;border-radius:4px!important}
+.au-reset-popover button:disabled{cursor:not-allowed;opacity:.65}
+.au-reset-popover .au-reset-blocked{color:var(--ui-text-error,#d58c96)!important;border-color:var(--ui-stroke-error,#613f49)!important}
+.au-reset-reason{color:var(--ui-text-secondary);margin-top:5px}
 .au-quota-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 24px}
 .au-quota-rows>*{min-width:0;overflow-wrap:anywhere}
 .au-quota-rows:empty{display:none}
@@ -1821,7 +1926,7 @@ function QuotaHome({quota,selected,hiddenIds,showHidden,onNavigate}){
   error?h('p',{className:'au-muted'},'Showing the last good response — refresh failed: '+String(error.message||error)):null,
   !data.profiles?h('p',{className:'au-muted'},'Older backend: restart Hermes to load profile selection.'):null,
   h('p',{className:'au-muted'},providers.length+' provider(s)'+((data.profiles||[]).length>1?' in '+profile:'')+' · '+live+' reporting live quota'+((data.profiles||[]).length>1?' · switch profile above to inspect another':'')),
-  h(Separator,{}),h('div',{className:'flex flex-col gap-2'},...visible.map(p=>h(ProviderCard,{key:p.id,provider:p,onNavigate})),...(showHidden?hidden.map(p=>h(ProviderCard,{key:'hidden-'+p.id,provider:p,isHidden:true,onNavigate})):[]),
+  h(Separator,{}),h('div',{className:'flex flex-col gap-2'},...visible.map(p=>h(ProviderCard,{key:p.id,provider:p,onNavigate,profile})),...(showHidden?hidden.map(p=>h(ProviderCard,{key:'hidden-'+p.id,provider:p,isHidden:true,onNavigate,profile})):[]),
   !visible.length?h(EmptyState,{title:providers.length?'Every provider is hidden':'No providers to show',description:providers.length?'Use Hidden above to bring them back.':'This profile has no provider credentials and no recent usage.'}):null),
   h('p',{className:'au-muted'},"✕ on a card hides that provider (persisted, and excluded from the status-bar chip) · quota comes from each provider's own API using this profile's credentials."))
 }
@@ -1846,7 +1951,7 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
   unavailable_reason:'No quota data for this provider in this profile.'}};
  // Opening a hidden provider explicitly shows its card with the original Unhide
  // action; its Subscriptions/status-bar visibility remains controlled by that action.
- return h('section',props,h(ProviderCard,{provider:item,isHidden:hiddenIds.includes(providerId)}),
+ return h('section',props,h(ProviderCard,{provider:item,isHidden:hiddenIds.includes(providerId),profile:selected||data.profile}),
   quota.error?h('small',{className:'au-muted',role:'status',title:String(quota.error.message||quota.error)},'Quota refresh failed · last known value'):null);
 }
 // Connected is an observed producer lease, never inferred from an open quota card.
@@ -2464,6 +2569,11 @@ const plugin = {
 // BEGIN ALL PROFILES OFFLINE FIXTURES
 // Offline-only DTO fixtures. Never loaded by the packaged Desktop plugin.
 const baseDemoRest=demoRest;
+// Synthetic reset responses; never connect to a Codex account. Tests can
+// change window.demoResets before invalidating the reset query.
+window.demoResets={infra:{profile:'infra',count:0,auto:false,binding:'fixture-infra',episode:null,exhausted:false,redeemable:false,blocked:false},
+                   default:{profile:'default',count:0,auto:false,binding:'fixture-default',episode:null,exhausted:false,redeemable:false,blocked:false}};
+window.demoResetCalls=[];
 const fixtureProfiles=[{name:'default',profile_id:'p-default',is_default:true,aliases:[]},{name:'infra',profile_id:'p-infra',is_server:true,aliases:[]},{name:'all',profile_id:'p-all',aliases:[]}];
 window.scopeCalls=[];
 window.demoAggregateCoverage='complete';
@@ -2520,8 +2630,23 @@ async function fixtureAggregate(u){
  return out;
 }
 demoRest=async function(path,options={}){
- window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  const u=new URL(path,'https://offline.test');
+ if(u.pathname.startsWith('/codex/resets')){
+  const profile=u.searchParams.get('profile')||options.body?.profile||'infra';
+  window.demoResetCalls.push({path,method:options.method||'GET',profile});
+  const record=window.demoResets[profile];if(!record)throw new Error('Unknown synthetic reset profile');
+  if(u.pathname==='/codex/resets/auto'){
+   if(options.body.binding!==record.binding)throw new Error('Synthetic account changed');
+   record.auto=options.body.enabled;return {...record};
+  }
+  if(u.pathname==='/codex/resets/redeem'){
+   if(options.body.binding!==record.binding||options.body.episode!==record.episode||options.body.count!==record.count||!record.redeemable)throw new Error('Synthetic stale redemption');
+   record.count--;record.redeemable=false;record.exhausted=false;record.episode=null;
+   return {profile,outcome:'reset',view:{...record}};
+  }
+  return {...record};
+ }
+ window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  if(u.pathname==='/ledger/profiles')return {profiles:fixtureProfiles,scope_options:[{label:'All profiles',profile_scope:'all'},...fixtureProfiles.map(p=>({label:p.name,profile:p.name,profile_scope:'selected'}))],default_profile_scope:'selected'};
  if(u.searchParams.get('profile_scope')!=='all')return baseDemoRest(path,options);
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');

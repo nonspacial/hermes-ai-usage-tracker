@@ -21,6 +21,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -31,7 +32,81 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 log = logging.getLogger(__name__)
-router = APIRouter()
+
+
+def _reset_plugin_enabled() -> bool:
+    """Read the server process's plugin allow/deny lists without host config loaders.
+
+    Hermes' dashboard mounts user plugins from config.yaml's plugins.enabled;
+    plugins.disabled vetoes them and defaults to an empty list. Its config
+    loaders can create homes and good/corrupt backups even for a 'readonly'
+    call. An automatic spending gate must not cause those writes or inherit a
+    cached last-known-good allow-list after a malformed edit.
+    """
+    try:
+        import yaml
+        from hermes_constants import get_process_hermes_home
+
+        home = Path(get_process_hermes_home())  # never a request's selected profile
+        if not home.is_absolute():
+            return False
+        # Bound parsing cost; an oversized/partial file cannot authorise spending.
+        with (home / 'config.yaml').open('rb') as config_file:
+            raw = config_file.read(4 * 1024 * 1024 + 1)
+        if len(raw) > 4 * 1024 * 1024:
+            return False
+
+        class UniqueKeysLoader(yaml.SafeLoader):
+            """Reject ambiguous YAML keys, including nested plugin policy keys."""
+
+        def unique_mapping(loader, node):
+            loader.flatten_mapping(node)
+            result = {}
+            for key_node, value_node in node.value:
+                key = loader.construct_object(key_node, deep=True)
+                if not isinstance(key, str) or key in result:
+                    raise ValueError('ambiguous configuration mapping')
+                result[key] = loader.construct_object(value_node, deep=True)
+            return result
+
+        UniqueKeysLoader.add_constructor(
+            yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping)
+        config = yaml.load(raw.decode('utf-8'), Loader=UniqueKeysLoader)
+        if not isinstance(config, dict):
+            return False
+        plugins = config.get('plugins')
+        if not isinstance(plugins, dict):
+            return False
+        enabled, disabled = plugins.get('enabled'), plugins.get('disabled', [])
+        if not isinstance(enabled, list) or not isinstance(disabled, list):
+            return False
+        if not all(isinstance(name, str) for name in (*enabled, *disabled)):
+            return False
+        return 'ai-usage-tracker' in enabled and 'ai-usage-tracker' not in disabled
+    except Exception:
+        log.debug('Codex reset monitor could not verify plugin activation')
+        return False
+
+
+@asynccontextmanager
+async def _reset_lifespan(_app):
+    # FastAPI merges child-router lifespans into the app lifespan. A background
+    # observer survives closing the page; it reads only opted-in profiles.
+    codex_resets = None
+    try:
+        from _hermes_ai_usage_ledger_v2 import codex_resets
+        codex_resets.start_monitor(_profile_rows, _run_reset_home, _reset_plugin_enabled)
+    except Exception:
+        # Missing optional ledger code must not take the existing quota UI down.
+        log.warning("Codex reset observer unavailable")
+    try:
+        yield
+    finally:
+        if codex_resets is not None:
+            codex_resets.stop_monitor()
+
+
+router = APIRouter(lifespan=_reset_lifespan)
 
 _CACHE_TTL_SECONDS = 60.0
 _PROBE_TIMEOUT = 12.0
@@ -108,6 +183,22 @@ def _run_in_home(home: Optional[Path], fn: Callable[[], Any]) -> Any:
         return fn()
     token = set_hermes_home_override(home)
     try:
+        return fn()
+    finally:
+        reset_hermes_home_override(token)
+
+
+def _run_reset_home(home: Path, fn: Callable[[], Any]) -> Any:
+    """Fail closed on reset operations; legacy quota probes keep their fallback."""
+    try:
+        from hermes_constants import (get_hermes_home, reset_hermes_home_override,
+                                      set_hermes_home_override)
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError('Selected profile context unavailable.') from exc
+    token = set_hermes_home_override(home)
+    try:
+        if Path(get_hermes_home()).resolve() != Path(home).resolve():
+            raise RuntimeError('Selected profile context unavailable.')
         return fn()
     finally:
         reset_hermes_home_override(token)
@@ -753,9 +844,63 @@ def health() -> dict[str, Any]:
     return {"ok": True, "plugin": "ai-usage-tracker", "cached_profiles": sorted(_cache)}
 
 
+def _reset_profile(profile: Optional[str]) -> tuple[Path, str]:
+    home, name, error = _resolve_profile(profile)
+    if error or not home or not name:
+        raise HTTPException(404, "Unknown profile.")
+    return home, name
+
+
+def _reset_error(exc: Exception):
+    from _hermes_ai_usage_ledger_v2.codex_resets import Unavailable
+    if isinstance(exc, Unavailable):
+        raise HTTPException(409, str(exc)) from exc
+    log.warning("Codex reset operation unavailable: %s", type(exc).__name__)
+    raise HTTPException(503, "Codex reset service unavailable.") from exc
+
+
+@router.get("/codex/resets")
+def codex_resets_read(profile: Optional[str] = None) -> dict:
+    home, name = _reset_profile(profile)
+    try:
+        from _hermes_ai_usage_ledger_v2 import codex_resets
+        return {"profile": name, **_run_reset_home(home, lambda: codex_resets.observe(home))}
+    except Exception as exc:
+        _reset_error(exc)
+
+
+@router.post("/codex/resets/auto")
+def codex_resets_auto(body: dict) -> dict:
+    home, name = _reset_profile(body.get("profile"))
+    if type(body.get("enabled")) is not bool or not isinstance(body.get("binding"), str):
+        raise HTTPException(400, "Invalid opt-in request.")
+    try:
+        from _hermes_ai_usage_ledger_v2 import codex_resets
+        return {"profile": name, **_run_reset_home(home, lambda: codex_resets.set_auto(
+            home, body["binding"], body["enabled"]))}
+    except Exception as exc:
+        _reset_error(exc)
+
+
+@router.post("/codex/resets/redeem")
+def codex_resets_redeem(body: dict) -> dict:
+    home, name = _reset_profile(body.get("profile"))
+    if (not isinstance(body.get("binding"), str) or not isinstance(body.get("episode"), str)
+            or type(body.get("count")) is not int or body["count"] <= 0):
+        raise HTTPException(400, "Invalid redemption request.")
+    try:
+        from _hermes_ai_usage_ledger_v2 import codex_resets
+        result = _run_reset_home(home, lambda: codex_resets.redeem(home,
+            expected_binding=body["binding"], expected_episode=body["episode"],
+            expected_count=body["count"]))
+        return {"profile": name, **result}
+    except Exception as exc:
+        _reset_error(exc)
+
+
 # Personal ledger extension. An unavailable recorder must not remove quota routes.
 _ledger_store = None
-_quota_routes = list(router.routes)
+_quota_routes = [route for route in router.routes if route.path in ('/usage', '/profiles', '/health')]
 try:
     import importlib.util as _ledger_importlib
     _spec = _ledger_importlib.spec_from_file_location(

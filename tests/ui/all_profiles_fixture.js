@@ -1,5 +1,10 @@
 // Offline-only DTO fixtures. Never loaded by the packaged Desktop plugin.
 const baseDemoRest=demoRest;
+// Synthetic reset responses; never connect to a Codex account. Tests can
+// change window.demoResets before invalidating the reset query.
+window.demoResets={infra:{profile:'infra',count:0,auto:false,binding:'fixture-infra',episode:null,exhausted:false,redeemable:false,blocked:false},
+                   default:{profile:'default',count:0,auto:false,binding:'fixture-default',episode:null,exhausted:false,redeemable:false,blocked:false}};
+window.demoResetCalls=[];
 const fixtureProfiles=[{name:'default',profile_id:'p-default',is_default:true,aliases:[]},{name:'infra',profile_id:'p-infra',is_server:true,aliases:[]},{name:'all',profile_id:'p-all',aliases:[]}];
 window.scopeCalls=[];
 window.demoAggregateCoverage='complete';
@@ -56,8 +61,23 @@ async function fixtureAggregate(u){
  return out;
 }
 demoRest=async function(path,options={}){
- window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  const u=new URL(path,'https://offline.test');
+ if(u.pathname.startsWith('/codex/resets')){
+  const profile=u.searchParams.get('profile')||options.body?.profile||'infra';
+  window.demoResetCalls.push({path,method:options.method||'GET',profile});
+  const record=window.demoResets[profile];if(!record)throw new Error('Unknown synthetic reset profile');
+  if(u.pathname==='/codex/resets/auto'){
+   if(options.body.binding!==record.binding)throw new Error('Synthetic account changed');
+   record.auto=options.body.enabled;return {...record};
+  }
+  if(u.pathname==='/codex/resets/redeem'){
+   if(options.body.binding!==record.binding||options.body.episode!==record.episode||options.body.count!==record.count||!record.redeemable)throw new Error('Synthetic stale redemption');
+   record.count--;record.redeemable=false;record.exhausted=false;record.episode=null;
+   return {profile,outcome:'reset',view:{...record}};
+  }
+  return {...record};
+ }
+ window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  if(u.pathname==='/ledger/profiles')return {profiles:fixtureProfiles,scope_options:[{label:'All profiles',profile_scope:'all'},...fixtureProfiles.map(p=>({label:p.name,profile:p.name,profile_scope:'selected'}))],default_profile_scope:'selected'};
  if(u.searchParams.get('profile_scope')!=='all')return baseDemoRest(path,options);
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
