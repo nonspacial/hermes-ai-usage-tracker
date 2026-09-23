@@ -35,16 +35,15 @@ def run():
         assert result['calls'] == 4, result
         assert result['values'] == ['infra'] * 20 and result['isolated'] == 'default'
         assert result['remaining'] == 0, result
-        page.evaluate('''()=>{window.refreshOptions=[];const original=queryClient.invalidateQueries.bind(queryClient);
-          queryClient.invalidateQueries=(filters,options)=>{window.refreshOptions.push({filters,options});return original(filters,options)}}''')
+        before = page.evaluate('demoCalls.filter(x=>x.startsWith("/ledger?")).length')
         page.get_by_role('tab', name='All providers', exact=True).click()
-        page.wait_for_function('window.refreshOptions.some(x=>x.filters?.queryKey?.[1]==="ledger")')
-        options = page.evaluate('window.refreshOptions.filter(x=>["ledger","skills","connection"].includes(x.filters?.queryKey?.[1]))')
-        assert options and all(x.get('options', {}).get('cancelRefetch') is False for x in options), options
+        page.evaluate('addDemoEvent()')
+        page.wait_for_function('n=>demoCalls.filter(x=>x.startsWith("/ledger?")).length>n',arg=before)
+        assert page.get_by_role('button', name='Refresh', exact=True).count() == 1
         assert not errors, errors
         browser.close()
     print('PASS 20 concurrent same-scope reads share one transport call; profiles isolate; failures release flight; retries work')
-    print('PASS subscription invalidation never cancels/restarts an in-flight analytics/status/skills query')
+    print('PASS event hint schedules analytics without showing a manual Refresh cycle')
 
 
 if __name__ == '__main__':

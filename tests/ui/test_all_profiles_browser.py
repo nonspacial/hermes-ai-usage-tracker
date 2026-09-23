@@ -119,7 +119,8 @@ def run():
         expect(page.locator('tbody tr').first).to_be_visible()
         starts = page.evaluate('demoSocketStarts')
         page.clock.install()
-        # Remount under the deterministic clock, then observe actual callbacks.
+        # Rolling-window expiry alone requests a new response after one visible
+        # minute; unchanged cheap checks before then do not read the ledger.
         picker.select_option('profile:infra')
         picker.select_option('scope:all')
         expect(page.locator('tbody tr').first).to_be_visible()
@@ -154,7 +155,7 @@ def run():
         assert not errors, errors
         assert not network, network
         browser.close()
-    print('PASS tagged picker, real all profile, persistence, delayed switching, scoped IDs/drills/snapshots, partial CSV, unavailable values, no mutations/socket, visible 60s single-flight polling and narrow pane')
+    print('PASS tagged picker, real all profile, persistence, delayed switching, scoped IDs/drills/snapshots, partial CSV, unavailable values, no mutations/socket, visible rolling expiry and single-flight reconciliation and narrow pane')
 
 
 if __name__ == '__main__':

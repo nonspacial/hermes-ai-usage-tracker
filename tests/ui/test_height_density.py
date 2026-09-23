@@ -46,6 +46,10 @@ def run():
                     assert row['lower']>=119,row
                 if width==1500 and height==850:
                     assert row['chartBottom']<=row['upper']+1,row
+                if width==1500 and height in (849,850):
+                    # Short, wide Overview fits naturally; a tiny scrollbar
+                    # must not be masked by overflow clipping.
+                    assert row['natural']<=row['upper']+1,row
                 if height==850 and width in (980,1500):
                     page.locator('#root').screenshot(path=str(out/f'height-density-{width}.png'))
                 # Adjacent heights must not lose chart visibility or move

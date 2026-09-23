@@ -42,11 +42,11 @@ def run():
   expect(costs.get_by_test_id('component-amount')).to_have_text('15,000')
   expect(costs.locator('[data-field=reported_cost]')).to_contain_text('$0.0000')
   # A newly completed observation updates the custom counter without a refresh restart.
-  page.evaluate("""() => {const last=events.find(r=>r.id==='grown');events.push({...last,id:'grown-again',started:now-20,ended:now-19,process:'new-process',returned_service_tier:'fast',usage:{...last.usage,cache_read_tokens:18000,input_tokens:2000}});queryClient.invalidateQueries()}""")
+  page.evaluate("""() => {const last=events.find(r=>r.id==='grown');events.push({...last,id:'grown-again',started:now-20,ended:now-19,process:'new-process',returned_service_tier:'fast',usage:{...last.usage,cache_read_tokens:18000,input_tokens:2000}});window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}""")
   expect(card.locator('.au-number')).to_have_text('18K')
   expect(costs.get_by_test_id('component-amount')).to_have_text('18,000')
   # Independent child sequence doesn't borrow its parent's read counter.
-  page.evaluate("""() => {const source=events.find(r=>r.id==='grown');for(const [id,age,reads] of [['child-cold',50,0],['child-warm',10,9000]])events.push({...source,id,started:now-age,ended:now-age+1,session_id:'child',subagent_id:'child',agent_kind:'subagent',usage:{...source.usage,cache_read_tokens:reads,input_tokens:20000-reads}});queryClient.invalidateQueries()}""")
+  page.evaluate("""() => {const source=events.find(r=>r.id==='grown');for(const [id,age,reads] of [['child-cold',50,0],['child-warm',10,9000]])events.push({...source,id,started:now-age,ended:now-age+1,session_id:'child',subagent_id:'child',agent_kind:'subagent',usage:{...source.usage,cache_read_tokens:reads,input_tokens:20000-reads}});window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}""")
   expect(card.locator('.au-number')).to_have_text('27K')
   response=page.evaluate("demoRest('/ledger?profile=infra&start='+(now-3600)+'&end='+now+'&provider=openai-codex&limit=1')")
   assert response['summary']['session_cache_writes']['tokens']==27000

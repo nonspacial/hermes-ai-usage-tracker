@@ -462,7 +462,7 @@ const ledgerCss = `
 /* Shared with the standalone preview. Hermes ui-bg-primary is an accent fill,
    NOT the page background. Keep card elevation and segmented-control tracks
    distinct; do not change the host's page background or horizontal padding. */
-.au-ledger { container-type:inline-size; color:var(--ui-text-primary);font-size:13px;
+.au-ledger { container-type:inline-size; color:var(--ui-text-primary);font-size:.8125rem;
  --au-surface-bg:var(--ui-bg-chrome,var(--dt-background,#11111e));
  --au-card-bg:#1c1c28;--au-table-bg:#171723;--au-table-head-bg:#1c1c2b;
  --au-control-bg:#212132;--au-selected-bg:#2b2543;--au-hover-bg:#262437;
@@ -477,26 +477,26 @@ const ledgerCss = `
   --au-hover-bg:color-mix(in srgb,var(--ui-accent,#a799ef) 8%,var(--au-surface-bg));
  }
 }
-.au-ledger *{box-sizing:border-box}.au-ledger .au-muted{color:var(--ui-text-tertiary);font-size:12px;line-height:1.6}
+.au-ledger *{box-sizing:border-box}.au-ledger .au-muted{color:var(--ui-text-tertiary);font-size:.75rem;line-height:1.6}
 .au-ledger .au-box{background:var(--au-table-bg);border:1px solid var(--ui-stroke-secondary);border-radius:10px;padding:16px;margin:12px 0}
 .au-ledger .au-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin-top:12px}
 .au-ledger .au-metric{background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);padding:12px;border-radius:8px;min-width:0}
-.au-ledger .au-number{font-size:23px;font-weight:650;margin:6px 0;letter-spacing:-.6px}
+.au-ledger .au-number{font-size:1.4375rem;font-weight:650;margin:6px 0;letter-spacing:-.6px}
 .au-ledger .au-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
 .au-ledger button,.au-ledger select,.au-ledger input{font:inherit;color:var(--ui-text-primary);background:var(--au-control-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:7px 10px;max-width:100%}
 .au-ledger button{cursor:pointer}.au-ledger button:disabled{opacity:.5;cursor:default}
 .au-ledger .au-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0;padding-bottom:12px;border-bottom:1px solid var(--ui-stroke-secondary)}
 .au-ledger .au-table{background:var(--au-table-bg);width:100%}
-.au-ledger table{border-collapse:collapse;font-size:12px;width:100%;text-align:left;white-space:nowrap}
+.au-ledger table{border-collapse:collapse;font-size:.75rem;width:100%;text-align:left;white-space:nowrap}
 .au-ledger th,.au-ledger td{padding:10px 12px;border-bottom:1px solid var(--ui-stroke-secondary);vertical-align:top}
 .au-ledger th{background:var(--au-table-head-bg);color:var(--ui-text-secondary);font-weight:600}
 .au-ledger td:hover{background:var(--au-hover-bg)}
-.au-ledger pre{background:var(--au-surface-bg);white-space:pre-wrap;word-break:break-word;max-width:680px;font-size:11px;max-height:400px;overflow:auto}
+.au-ledger pre{background:var(--au-surface-bg);white-space:pre-wrap;word-break:break-word;max-width:680px;font-size:.6875rem;max-height:400px;overflow:auto}
 .au-ledger .au-json-details{min-width:145px}
 .au-ledger .au-json-details>summary{cursor:pointer;white-space:nowrap}
 .au-ledger .au-json-panel{position:relative;background:var(--au-surface-bg);border:1px solid var(--ui-stroke-secondary);border-radius:7px;margin-top:8px;width:min(660px,75vw);max-width:660px;min-width:240px;overflow:hidden}
 .au-ledger .au-json-toolbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:4px 6px;min-height:28px}
-.au-ledger .au-json-copy-status{font-size:11px;color:var(--ui-text-secondary)}
+.au-ledger .au-json-copy-status{font-size:.6875rem;color:var(--ui-text-secondary)}
 .au-ledger .au-json-copy,.au-ledger .au-json-copy:hover,.au-ledger .au-json-copy:active{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:4px;background:transparent;border:0;box-shadow:none;color:var(--ui-text-secondary);cursor:pointer}
 .au-ledger .au-json-copy:hover{color:var(--ui-accent)}
 .au-ledger .au-json-copy svg{display:block}
@@ -526,12 +526,12 @@ const ledgerCss = `
  .au-header-main>button{max-width:40px;overflow:hidden;text-overflow:ellipsis}
 }
 @container(max-width:400px){
- .au-header-title{font-size:11px}.au-page-header>.au-connection span:last-child{display:none}
+ .au-header-title{font-size:.6875rem}.au-page-header>.au-connection span:last-child{display:none}
  .au-header-chip,.au-header-profile{min-width:0}
  .au-ledger .au-page-header>.au-connection{padding:7px}
  .au-ledger .au-header-picker>:is(button,select){padding-left:5px;padding-right:5px}
 }
-.au-ledger .au-connection{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;font-size:11px;line-height:1.4;white-space:nowrap;border-radius:999px;background:transparent;flex:none}
+.au-ledger .au-connection{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;font-size:.6875rem;line-height:1.4;white-space:nowrap;border-radius:999px;background:transparent;flex:none}
 .au-ledger .au-connection-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 .au-ledger .au-connection[data-state="online"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-stroke-success,#2d514b)}
 .au-ledger .au-connection[data-state="limited"],.au-ledger .au-connection[data-state="unverified"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-stroke-warning,#5b5135)}
@@ -553,25 +553,25 @@ const ledgerCss = `
 
 .au-ledger .au-component-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:12px 0}
 .au-ledger .au-cost-card{background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;padding:12px;min-width:0}
-.au-ledger .au-cost-card .au-number{font-size:23px;overflow-wrap:anywhere}
-.au-ledger .au-cost-card dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 9px;margin:12px 0 0;font-size:11px;line-height:1.5}
+.au-ledger .au-cost-card .au-number{font-size:1.4375rem;overflow-wrap:anywhere}
+.au-ledger .au-cost-card dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 9px;margin:12px 0 0;font-size:.6875rem;line-height:1.5}
 .au-ledger .au-cost-card dt{margin:0;color:var(--ui-text-tertiary)}
 .au-ledger .au-cost-card dd{margin:0;text-align:right;color:var(--ui-text-primary);font-variant-numeric:tabular-nums}
-.au-ledger .au-read-growth{margin-top:10px;padding-top:8px;border-top:1px solid var(--ui-stroke-secondary);font-size:11px;color:var(--ui-text-tertiary);line-height:1.5}
+.au-ledger .au-read-growth{margin-top:10px;padding-top:8px;border-top:1px solid var(--ui-stroke-secondary);font-size:.6875rem;color:var(--ui-text-tertiary);line-height:1.5}
 .au-ledger .au-read-growth strong{font-weight:600;color:var(--ui-text-secondary)}
 @container(max-width:1100px){.au-ledger .au-component-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@container(max-width:620px){.au-ledger .au-component-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-cost-card .au-number{font-size:20px}}
+@container(max-width:620px){.au-ledger .au-component-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-cost-card .au-number{font-size:1.25rem}}
 @container(max-width:370px){.au-ledger .au-component-cards{grid-template-columns:1fr}}
 
 .au-ledger .au-rate-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
-@container (max-width:620px){.au-ledger .au-provider-tabs{display:none}.au-ledger .au-provider-select{display:block}.au-ledger .au-number{font-size:20px}}
+@container (max-width:620px){.au-ledger .au-provider-tabs{display:none}.au-ledger .au-provider-select{display:block}.au-ledger .au-number{font-size:1.25rem}}
 .au-ledger{color-scheme:dark;font-family:inherit}
-.au-ledger .au-usage-summary{padding:0 0 14px;border-bottom:1px solid var(--ui-stroke-secondary);margin-top:10px}
+.au-ledger .au-usage-summary{padding:0 0 14px;border-bottom:1px solid var(--ui-stroke-secondary);margin-top:6px}
 .au-ledger .au-hero{display:grid;grid-template-columns:minmax(240px,0.8fr) minmax(360px,1.7fr);gap:48px;align-items:start;margin:20px 0 25px}
-.au-ledger .au-big{font-size:48px;letter-spacing:-1.8px;font-weight:650;line-height:1.2;margin:4px 0 8px}
+.au-ledger .au-big{font-size:3rem;letter-spacing:-1.8px;font-weight:650;line-height:1.2;margin:4px 0 8px}
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
-.au-ledger .au-provider-row small{font-size:11px;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
-.au-ledger .au-provider-cost{font-weight:700;color:var(--ui-text-primary)}
+.au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
+.au-ledger .au-provider-cost{font-size:1.875rem;line-height:1.1;font-weight:700;color:var(--ui-text-primary)}
 .au-ledger .au-timeline-entry{background:var(--au-table-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:8px 0;overflow-wrap:anywhere}
 .au-ledger .au-timeline-scroll{padding-right:4px}
 .au-ledger .au-snapshot-picker{justify-content:flex-end}
@@ -580,21 +580,21 @@ const ledgerCss = `
 .au-ledger .au-timeline-session:before{content:'▸';display:inline-block;margin-right:8px;color:var(--ui-accent)}
 .au-ledger .au-timeline-entry[open] .au-timeline-session:before{content:'▾'}
 .au-ledger .au-timeline-entry dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:12px;margin:0;border-top:1px solid var(--ui-stroke-secondary)}
-.au-ledger .au-timeline-entry dt{font-size:11px;color:var(--ui-text-tertiary);margin-bottom:5px}
+.au-ledger .au-timeline-entry dt{font-size:.6875rem;color:var(--ui-text-tertiary);margin-bottom:5px}
 .au-ledger .au-timeline-entry dd{margin:0;min-width:0}
 @container(max-width:759px){.au-ledger .au-timeline-entry dl{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-timeline-entry>summary{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.au-ledger .au-timeline-session{grid-column:1/-1}}
 @container(max-width:400px){.au-ledger .au-timeline-entry dl{grid-template-columns:minmax(0,1fr)}}
 .au-ledger .au-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ui-accent);margin:0 8px 1px 0}
 .au-ledger .au-chart{min-width:0}.au-ledger .au-chart svg{display:block;width:100%;min-height:160px;outline-offset:4px}
-.au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:14px;margin:5px 0 10px}
-.au-ledger .au-axis{font-size:11px;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
+.au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;margin:5px 0 10px}
+.au-ledger .au-axis{font-size:.6875rem;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
 .au-ledger .au-line{fill:none;stroke:var(--ui-accent);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.au-ledger .au-area{fill:var(--ui-accent);opacity:.10}
 .au-ledger .au-crosshair{stroke:var(--ui-text-tertiary);stroke-dasharray:4 4}.au-ledger .au-point{fill:var(--ui-accent);stroke:var(--au-surface-bg);stroke-width:2}
-.au-ledger .au-chart-tip{min-height:26px;font-size:11px;color:var(--ui-text-secondary);text-align:right;padding-right:10px}
+.au-ledger .au-chart-tip{min-height:26px;font-size:.6875rem;color:var(--ui-text-secondary);text-align:right;padding-right:10px}
 .au-ledger .au-totals{gap:12px;grid-template-columns:repeat(7,minmax(0,1fr));margin:10px 0 20px}
 .au-ledger .au-totals .au-metric{border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:10px 12px}
-.au-ledger .au-totals .au-number{font-size:25px;font-weight:580;margin:7px 0}
-.au-ledger .au-totals .au-metric>.au-muted:last-child{font-size:10px;line-height:1.4}
+.au-ledger .au-totals .au-number{font-size:1.5625rem;font-weight:580;margin:7px 0}
+.au-ledger .au-totals .au-metric>.au-muted:last-child{font-size:.625rem;line-height:1.4}
 .au-ledger .au-view-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:16px 0 9px}
 .au-ledger .au-segment{display:inline-flex;gap:3px;align-items:center;border:1px solid var(--ui-stroke-secondary);background:transparent;padding:3px;border-radius:9px;max-width:100%}
 .au-ledger .au-segment button{background:transparent;border:1px solid transparent;padding:6px 11px;color:var(--ui-text-tertiary);border-radius:6px;white-space:nowrap}
@@ -611,19 +611,19 @@ const ledgerCss = `
 .au-ledger button:focus-visible,.au-ledger select:focus-visible,.au-ledger input:focus-visible,.au-ledger summary:focus-visible{outline:2px solid var(--ui-accent,#a799ef);outline-offset:3px}
 .au-ledger .au-provider-select,.au-ledger .au-mode-select,.au-ledger .au-period-select{border-color:var(--ui-accent,#a799ef)}
 .au-ledger .au-section-summary{margin:12px 0 18px}
-.au-ledger .au-window-label{margin-left:auto;font-size:11px}.au-ledger .au-mode-select,.au-ledger .au-period-select{display:none}
-.au-ledger .au-filters{opacity:.94}.au-ledger .au-filters button,.au-ledger .au-filters input,.au-ledger .au-filters select{padding:5px 9px;font-size:12px}
-.au-ledger .au-quality-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.au-ledger .au-quality{margin:8px 0 0;color:var(--ui-text-tertiary);font-size:11px}
+.au-ledger .au-window-label{margin-left:auto;font-size:.6875rem}.au-ledger .au-mode-select,.au-ledger .au-period-select{display:none}
+.au-ledger .au-filters{opacity:.94}.au-ledger .au-filters button,.au-ledger .au-filters input,.au-ledger .au-filters select{padding:5px 9px;font-size:.75rem}
+.au-ledger .au-quality-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.au-ledger .au-quality{margin:8px 0 0;color:var(--ui-text-tertiary);font-size:.6875rem}
 .au-ledger details>summary{cursor:pointer}.au-ledger .au-quota-collapsible{margin-top:24px;padding:16px 0;border-top:1px solid var(--ui-stroke-secondary)}
 .au-ledger .au-breakdown{margin-top:16px}.au-ledger .au-breakdown td:not(:first-child),.au-ledger .au-breakdown th:not(:first-child){text-align:right}
 .au-ledger .au-breakdown th:first-child,.au-ledger .au-breakdown td:first-child{padding-left:0}
 @container (max-width:980px){.au-ledger .au-totals{grid-template-columns:repeat(3,minmax(0,1fr))}.au-ledger .au-hero{gap:25px;grid-template-columns:minmax(170px,.7fr) minmax(310px,1.5fr)}.au-ledger .au-window-label{flex-basis:100%;margin-left:0}.au-ledger .au-period-buttons{display:none}.au-ledger .au-period-select{display:block}}
-@container (max-width:620px){.au-ledger .au-hero{display:block}.au-ledger .au-big{font-size:39px}.au-ledger .au-provider-totals{margin-top:18px}.au-ledger .au-chart{margin-top:28px}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-mode-buttons{display:none}.au-ledger .au-mode-select{display:block}.au-ledger .au-chart-title{flex-wrap:wrap}.au-ledger .au-totals .au-number{font-size:23px}.au-ledger .au-quality-line{display:block}}
+@container (max-width:620px){.au-ledger .au-hero{display:block}.au-ledger .au-big{font-size:2.4375rem}.au-ledger .au-provider-totals{margin-top:18px}.au-ledger .au-chart{margin-top:28px}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-mode-buttons{display:none}.au-ledger .au-mode-select{display:block}.au-ledger .au-chart-title{flex-wrap:wrap}.au-ledger .au-totals .au-number{font-size:1.4375rem}.au-ledger .au-quality-line{display:block}}
 
 .au-ledger .au-subagent-card{display:flex;flex-direction:column;align-items:flex-start;text-align:left;border:1px solid var(--ui-stroke-secondary);padding:10px 12px;min-width:0;background:transparent}
-.au-ledger .au-subagent-card .au-muted:last-child{font-size:10px}
+.au-ledger .au-subagent-card .au-muted:last-child{font-size:.625rem}
 .au-ledger .au-main-tabs{margin-top:18px}.au-ledger .au-quota-home{margin-top:10px}
-.au-ledger .au-subpage-tabs{margin-top:16px}.au-ledger .au-subpage-tabs button{font-size:12px}
+.au-ledger .au-subpage-tabs{margin-top:16px}.au-ledger .au-subpage-tabs button{font-size:.75rem}
 .au-ledger .au-provider-select{margin:14px 0;width:100%}
 .au-ledger .au-quota-home hr{border:0;border-top:1px solid var(--ui-stroke-secondary);margin:12px 0}
 .au-ledger .au-quota-home [class~='w-28']{width:112px;flex-shrink:0}
@@ -638,15 +638,15 @@ const ledgerCss = `
 .au-ledger .au-provider-limits .border button{background:transparent;border:0;padding:0 4px}
 .au-ledger .au-provider-quota-status{display:flex;align-items:center;gap:10px;min-height:44px;color:var(--ui-text-tertiary)}
 .au-ledger .au-drill{background:transparent;border:0;text-align:left;padding:0;color:var(--ui-accent);max-width:260px;white-space:normal;overflow-wrap:anywhere}
-.au-ledger .au-drill small{display:block;color:var(--ui-text-tertiary);font-size:10px}
+.au-ledger .au-drill small{display:block;color:var(--ui-text-tertiary);font-size:.625rem}
 .au-ledger .au-request-navigation{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:12px 0 16px;padding:0;min-width:0}
 .au-ledger .au-return-actions{display:flex;align-items:center;justify-content:flex-end;gap:18px;flex-wrap:nowrap;flex:none;margin-left:auto}
-.au-ledger .au-return-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;line-height:16px;min-height:30px;padding:7px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--ui-accent);font-weight:600;white-space:nowrap}
+.au-ledger .au-return-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:.75rem;line-height:16px;min-height:30px;padding:7px 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--ui-accent);font-weight:600;white-space:nowrap}
 .au-ledger button.au-return-button:hover:not(:disabled):not([aria-selected="true"]):not([aria-pressed="true"]):not([aria-checked="true"]){background:transparent;text-decoration:underline;text-underline-offset:3px}
 .au-ledger .au-return-button .au-back-icon{display:block;flex:none;width:14px;height:14px}
 .au-ledger .au-return-button .au-return-label{display:block;line-height:16px}
 .au-ledger .au-active-scopes{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
-.au-ledger .au-scope-chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:5px 9px;font-size:11px;border-radius:999px;background:var(--au-control-bg);color:var(--ui-text-secondary)}
+.au-ledger .au-scope-chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:5px 9px;font-size:.6875rem;border-radius:999px;background:var(--au-control-bg);color:var(--ui-text-secondary)}
 .au-ledger .au-scope-chip>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px}
 .au-ledger .au-scope-chip>span:last-child{flex:none}
 @container(max-width:620px){.au-ledger .au-active-scopes{flex-basis:100%}.au-ledger .au-request-navigation{gap:8px}.au-ledger .au-scope-chip>span:first-child{max-width:230px}}
@@ -662,7 +662,7 @@ const ledgerCss = `
 @container(min-width:1000px){.au-ledger .au-skill-legend{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .au-ledger .au-skill-legend-row{display:flex;align-items:center;gap:9px;padding:8px;text-align:left;min-width:0;flex-wrap:wrap}
 .au-ledger .au-skill-legend-row>span:not(.au-skill-swatch){flex:1;min-width:0;overflow-wrap:anywhere}
-.au-ledger .au-skill-legend-row>strong{font-size:12px;font-variant-numeric:tabular-nums}
+.au-ledger .au-skill-legend-row>strong{font-size:.75rem;font-variant-numeric:tabular-nums}
 .au-ledger .au-skill-swatch{display:block;width:10px;height:10px;flex:none;border-radius:2px}
 .au-ledger [data-testid="skills-usage"] .au-segment{flex-wrap:wrap}
 .au-ledger [data-testid="skills-usage"] :is(h3,label){overflow-wrap:anywhere;min-width:0;max-width:100%}
@@ -674,7 +674,7 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"] tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;padding:14px;margin-bottom:10px;border:1px solid var(--ui-stroke-secondary);border-radius:7px;background:var(--au-table-bg)}
 .au-ledger .au-table[data-layout="records"] thead tr{display:table-row;padding:0;margin:0}
 .au-ledger .au-table[data-layout="records"] :is(td,th){display:block;min-width:0;padding:0;border:0;text-align:left;background:transparent;overflow-wrap:anywhere;white-space:normal}
-.au-ledger .au-table[data-layout="records"] .au-field-label{display:block;color:var(--ui-text-tertiary);font-size:11px;font-weight:400;margin-bottom:4px}
+.au-ledger .au-table[data-layout="records"] .au-field-label{display:block;color:var(--ui-text-tertiary);font-size:.6875rem;font-weight:400;margin-bottom:4px}
 .au-ledger .au-table[data-layout="records"] .au-field-value{min-width:0;line-height:1.5;overflow-wrap:anywhere}
 .au-ledger .au-table[data-layout="records"] .au-record-heading{grid-column:1 / -1;padding-bottom:10px;border-bottom:1px solid var(--ui-stroke-secondary);font-weight:600}
 .au-ledger .au-table[data-layout="records"] .au-record-details{grid-column:1 / -1}
@@ -711,8 +711,8 @@ const ledgerCss = `
 .au-pane .au-chart svg{height:clamp(160px,24cqh,320px)}
 /* Interpolate compact spacing into the original tall layout (1400px).
    Container units track the pane, not the browser window or monitor. */
-.au-pane .au-hero{margin:clamp(6px,calc(-26.667px + 3.333cqh),20px) 0 clamp(8px,calc(-35.667px + 4.333cqh),25px);gap:clamp(24px,calc(-64px + 8cqh),48px)}
-.au-pane .au-big{font-size:clamp(36px,calc(17.455px + 2.182cqh),48px);margin:clamp(2px,calc(-2px + .4cqh),4px) 0 clamp(4px,calc(-4px + .8cqh),8px)}
+.au-pane .au-hero{margin:clamp(6px,calc(-26.667px + 3.333cqh),20px) 0 clamp(4px,calc(-35.667px + 4.333cqh),25px);gap:clamp(24px,calc(-64px + 8cqh),48px)}
+.au-pane .au-big{font-size:clamp(2.25rem,calc(1.0909375rem + 2.182cqh),3rem);margin:clamp(2px,calc(-2px + .4cqh),4px) 0 clamp(4px,calc(-4px + .8cqh),8px)}
 .au-pane .au-provider-totals{margin-top:clamp(10px,calc(-56px + 6cqh),28px)}
 .au-pane .au-provider-row{margin:clamp(8px,calc(-25px + 3cqh),17px) 0;gap:clamp(4px,calc(-10.667px + 1.333cqh),8px)}
 .au-pane .au-totals{gap:clamp(8px,calc(-6.667px + 1.333cqh),12px);margin:clamp(8px,calc(.667px + .667cqh),10px) 0 clamp(10px,calc(-26.667px + 3.333cqh),20px)}
@@ -720,8 +720,8 @@ const ledgerCss = `
 .au-pane .au-totals .au-number{margin:clamp(4px,calc(-7px + 1cqh),7px) 0}
 .au-pane .au-view-controls{margin:clamp(8px,calc(-21.333px + 2.667cqh),16px) 0 clamp(8px,calc(4.333px + .333cqh),9px);gap:clamp(8px,calc(-6.667px + 1.333cqh),12px)}
 .au-pane .au-chart svg{height:clamp(180px,calc(-333.333px + 46.667cqh),320px)}
-.au-pane .au-chart-title{margin:clamp(2px,calc(-9px + 1cqh),5px) 0 clamp(6px,calc(-8.667px + 1.333cqh),10px)}
-.au-pane .au-usage-summary{padding-bottom:clamp(8px,calc(-14px + 2cqh),14px)}
+.au-pane .au-chart-title{margin:clamp(2px,calc(-9px + 1cqh),5px) 0 clamp(4px,calc(-8.667px + 1.333cqh),10px)}
+.au-pane .au-usage-summary{padding-bottom:clamp(6px,calc(-14px + 2cqh),14px)}
 @container(max-height:1100px){.au-pane .au-chart svg{height:clamp(160px,calc(92px + 8cqh),180px)}}
 /* The wide two-column summary is structural: toggling it at a height
    breakpoint made the summary grow as the pane gained a single pixel. */
@@ -732,7 +732,7 @@ const ledgerCss = `
 }
 @container(max-width:980px){.au-pane .au-hero{gap:clamp(24px,calc(20.333px + .333cqh),25px)}}
 @container(max-width:620px){
- .au-pane .au-big{font-size:clamp(36px,calc(31.364px + .545cqh),39px)}
+ .au-pane .au-big{font-size:clamp(2.25rem,calc(1.96025rem + .545cqh),2.4375rem)}
  .au-pane .au-provider-totals{margin-top:clamp(10px,calc(-19.333px + 2.667cqh),18px)}
 }
 .au-reader:focus-visible,.au-upper:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
@@ -1255,6 +1255,122 @@ function sharedLedgerRead(path,options,identity=path){
  const pending=Promise.resolve().then(()=>scopedRead(path,options)).finally(()=>{if(pendingLedgerReads.get(identity)===pending)pendingLedgerReads.delete(identity)});
  pendingLedgerReads.set(identity,pending);return pending;
 }
+let liveLedgerOwnerId=0;
+// The token is a filesystem hint, not a database revision. Only a full REST
+// response publishes accounting; a hint never modifies totals or event rows.
+function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis}){
+ let alive=true,active=false,dirty=false,manual=false,token=null,checking=false;
+ let unsupported=false,failures=0,checkFailures=0,flight=0,followup=null,retry=null;
+ const now=()=>clock.now?.()??Date.now();
+ let lastFallback=now();
+ const identity='live:'+ ++liveLedgerOwnerId;
+ const scope=isAllProfiles(profile)?'all':'selected';
+ const tokenPath='/ledger/change-token?'+new URLSearchParams(isAllProfiles(profile)?{profile_scope:'all'}:{profile_scope:'selected',profile:profile||''});
+ const current=()=>alive;
+ const clear=()=>{clock.clearTimeout(followup);clock.clearTimeout(retry);followup=retry=null};
+ const check=async()=>{
+  if(!alive||unsupported||checking)return null;
+  checking=true;
+  try{
+   const result=await rest(tokenPath,{timeoutMs:8000});
+   if(!alive)return null;
+   if(result?.version!==1||result?.profile_scope!==scope||result?.read_only!==true||
+      result?.token_kind!=='opaque-filesystem-hint'||typeof result?.change_token!=='string'||
+      result?.capabilities?.change_check!==true)throw new Error('Unsupported change-check response');
+   if(checkFailures){checkFailures=0;publish({checkLimited:false})}
+   return result.change_token;
+  }catch(error){
+   if(alive){
+    checkFailures++;
+    if(error.status===404||error.status===405||/Unsupported change-check response/.test(String(error.message)))unsupported=true;
+    if(unsupported||checkFailures>=3)publish({checkLimited:true});
+   }
+   return null;
+  }finally{checking=false}
+ };
+ const schedule=(delay)=>{
+  if(!alive||active||followup)return;
+  followup=clock.setTimeout(()=>{followup=null;start()},delay);
+ };
+ async function start(){
+  if(!alive||active)return;
+  clear();active=true;dirty=false;
+  publish({fetching:true,manual});
+  let before=null,after=null,failed=false;
+  try{
+   // A busy check must not be used as evidence that a read acknowledged a hint.
+   before=await check();
+   const response=await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,identity+':'+ ++flight);
+   after=await check();
+   if(!current())return;
+   if(before!==null&&after!==null&&before!==after)dirty=true;
+   // A token observed only after the read cannot certify this response.
+   if(before!==null&&after===before)token=after;
+   publish({data:response,error:null,fetching:false,manual});
+   failures=0;
+  }catch(error){
+   if(!current())return;
+   failed=true;failures++;
+   publish({error,fetching:false,manual:false});
+   manual=false;
+  }finally{
+   active=false;
+   if(!alive)return;
+   if(dirty){
+    // Release the shared flight before starting a fresh read. Bursts collapse
+    // into one follow-up, including a hint delivered during the post-read check.
+    schedule(failed?Math.min(30000,5000*failures):400);
+   }else if(failed){
+    retry=clock.setTimeout(()=>{retry=null;start()},Math.min(30000,5000*failures));
+   }else if(manual){manual=false;publish({manual:false})}
+  }
+ }
+ function hint(){if(!alive)return;if(active){dirty=true;return}schedule(150)}
+ async function checkForChanges(){
+  if(!alive)return;
+  if(unsupported){
+   if(!windowSeconds&&document.visibilityState!=='hidden'&&now()-lastFallback>=60000){lastFallback=now();hint()}
+   return;
+  }
+  if(checkFailures>=3){
+   if(now()-lastFallback<60000)return;
+   lastFallback=now();
+   const recovered=await check();
+   if(!alive)return;
+   if(recovered!==null){if(token!==recovered)hint();return}
+   if(!windowSeconds&&document.visibilityState!=='hidden')hint();
+   return;
+  }
+  const next=await check();
+  if(!alive||next===null)return;
+  if(token===null){token=next;hint();return}
+  if(next!==token)hint();
+ }
+ function refresh(){if(!alive)return;manual=true;publish({manual:true});hint()}
+ function dispose(){alive=false;clear()}
+ return {start,hint,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
+}
+function useLiveLedger({profile,path,view,enabled,windowSeconds}){
+ const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
+ const [owner]=useState(()=>({key:null,coordinator:null}));
+ const key=JSON.stringify([pickerValue(profile),view,path,windowSeconds]);
+ if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.coordinator=null}
+ useEffect(()=>{
+  if(!enabled)return;
+  const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,publish:patch=>{
+   if(owner.key===key)setState(previous=>({...previous,...patch,view:key}));
+  }});
+  owner.coordinator=coordinator;
+  coordinator.start();
+  const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
+  const expiry=windowSeconds?setInterval(()=>{if(document.visibilityState!=='hidden')coordinator.hint()},60000):null;
+  const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();if(windowSeconds)coordinator.hint()}};
+  document.addEventListener('visibilitychange',visible);
+  return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
+ },[key,enabled]);
+ const current=state.view===key?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
+ return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
+}
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
  return h('details',{className:'au-refresh-menu',onKeyDown:event=>{if(event.key==='Escape'){event.currentTarget.removeAttribute('open');event.currentTarget.querySelector('summary').focus()}}},
@@ -1263,22 +1379,21 @@ function RefreshMenu({refresh,reload,busy}){
    h('button',{type:'button',disabled:busy,onClick:choose(refresh)},'Refresh data'),
    h('button',{type:'button',disabled:busy,onClick:choose(reload),title:'Reload analytics readers in this backend process. Does not reload recorder hooks or restart agents.'},'Reload analytics backend')));
 }
-function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
- const [control]=useState(()=>({alive:true,scope:profile,epoch:0,serial:0,busy:false,latest:{}}));
+function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
+ const [control]=useState(()=>({alive:true,scope:profile,epoch:0,serial:0,busy:false,latest:{},onHint:null}));
  if(control.scope!==profile){control.scope=profile;control.epoch++;control.busy=false}
- control.view=readScope;
- const [health,setHealth]=useState(null),[reading,setReading]=useState(null),[operation,setOperation]=useState(null);
+ control.onHint=onHint;
+ const [health,setHealth]=useState(null),[operation,setOperation]=useState(null);
  const [transport,setTransport]=useState(null),[connectionEpoch,setConnectionEpoch]=useState(0);
  useEffect(()=>{control.alive=true;return()=>{control.alive=false;control.epoch++}},[]);
  async function probe(kind,path,identity=path){
-  const epoch=control.epoch,serial=++control.serial,view=readScope;control.latest[kind]=serial;
-  const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial&&(kind!=='read'||control.view===view);
-  const publish=value=>{if(current())(kind==='status'?setHealth:setReading)({scope:profile,epoch,view,received:Date.now(),...value})};
+  const epoch=control.epoch,serial=++control.serial;control.latest[kind]=serial;
+  const current=()=>control.alive&&control.scope===profile&&control.epoch===epoch&&control.latest[kind]===serial;
+  const publish=value=>{if(current())setHealth({scope:profile,epoch,received:Date.now(),...value})};
   try{const data=await sharedLedgerRead(path,kind==='status'?{timeoutMs:8000}:undefined,identity);publish({ok:true,data});return data}
   catch(error){publish({ok:false});throw error}
  }
  const status=()=>probe('status','/ledger/status?'+new URLSearchParams(scopeParams(profile)));
- const read=async()=>({...await probe('read',rollingPath(readPath,windowSeconds),readPath),_viewScope:readScope});
  // An old success cannot stay green indefinitely if fresh checks stop arriving.
  useEffect(()=>{
   if(isAllProfiles(profile)||!health?.ok||health.stale)return;
@@ -1288,7 +1403,7 @@ function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
  useEffect(()=>{
   let live=true,timer,mode='native-events';
   const update=(state,detail)=>{if(live)setTransport({scope:profile,enabled,state,detail})};
-  if(isAllProfiles(profile)){update('limited','All profiles uses read-only polling; recorder health is profile-specific.');return()=>{live=false}}
+  if(isAllProfiles(profile)){update('limited','All profiles uses read-only change checks; recorder health is profile-specific.');return()=>{live=false}}
   if(!enabled){update('not_needed','Live analytics subscription is idle on Subscriptions.');return()=>{live=false}}
   if(!socket){update('limited','Live update subscription unavailable; REST polling remains active.');return()=>{live=false}}
   update('connecting','Waiting for the live update subscription to acknowledge.');
@@ -1296,11 +1411,11 @@ function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
   deadline(8000);
   let stop;
   try{stop=socket('/ledger/events?profile='+encodeURIComponent(profile),frame=>{
-   if(!live||!['connected','heartbeat','changed'].includes(frame?.type))return;
+   if(!live||control.scope!==profile||!['connected','heartbeat','changed'].includes(frame?.type))return;
    if(frame.mode)mode=frame.mode;
    update(mode==='native-events'?'connected':'limited',mode==='native-events'?'Live update subscription acknowledged.':'Server is using display-refresh fallback.');deadline(45000);
    if(frame.type==='changed'||frame.type==='connected'){
-    queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
+    control.onHint?.();
     queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
    }
    if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]},{cancelRefetch:false});
@@ -1308,36 +1423,36 @@ function useRecorderHealth({profile,readScope,readPath,enabled,windowSeconds}){
   return()=>{live=false;clearTimeout(timer);if(typeof stop==='function')stop()};
  },[profile,enabled,connectionEpoch]);
  async function reconnect(){
-  if(control.busy||!control.alive||control.scope!==profile||control.view!==readScope)return false;
+  if(control.busy||!control.alive||control.scope!==profile)return false;
   control.busy=true;const epoch=++control.epoch;
   setOperation({scope:profile,epoch,busy:true});setConnectionEpoch(value=>value+1);
-  const results=await Promise.allSettled([status(),enabled?read():Promise.resolve()]);
+  control.onHint?.();
+  const results=await Promise.allSettled([status()]);
   if(!control.alive||control.scope!==profile||control.epoch!==epoch)return false;
   control.busy=false;setOperation({scope:profile,epoch,busy:false});
-  if(!isAllProfiles(profile))queryClient.invalidateQueries({queryKey:[ID,'ledger',profile]},{cancelRefetch:false});
-  else queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
   return results.every(result=>result.status==='fulfilled');
  }
- const checked=health?.scope===profile&&health.epoch===control.epoch?health:null,readChecked=reading?.scope===profile&&reading.epoch===control.epoch&&reading.view===readScope?reading:null;
+ const checked=health?.scope===profile&&health.epoch===control.epoch?health:null;
  const link=transport?.scope===profile&&transport.enabled===enabled?transport:null;
  const pending=operation?.scope===profile&&operation.epoch===control.epoch&&operation.busy;
  let state='checking',label=pending?'Reconnecting':'Connecting',detail='Waiting for fresh recorder and data checks.';
  if(checked?.ok&&!checked.stale&&checked.data.state==='not_recording'){state='not_recording';label='Not recording';detail=checked.data.message||'No live recorder reporting for this profile.'}
- else if(checked?.ok===false||(enabled&&readChecked?.ok===false)){state='disconnected';label='Disconnected';detail='A fresh connection/data check failed. Retrying automatically.'}
- else if(!pending&&checked?.ok&&!checked.stale&&(!enabled||readChecked?.ok)){
+ else if(checked?.ok===false||(enabled&&readError)){state='disconnected';label='Disconnected';detail='A fresh connection/data check failed. Retrying automatically.'}
+ else if(!pending&&checked?.ok&&!checked.stale){
   const data=checked.data;state=data.state||'unverified';detail=[data.message,...(data.warnings||[]).slice(0,3)].filter(Boolean).join(' · ');
   if(state==='online'){
-   if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified; awaiting subscription acknowledgement.'}
+   if(changeLimited&&enabled){state='limited';detail+=' Change checks unavailable; visible-page 60-second fallback is active.'}
+   else if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified; awaiting subscription acknowledgement.'}
    else if(link.state==='limited'){state='limited';detail+=' '+link.detail}
   }
   label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
  }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
- if(isAllProfiles(profile)){state=checked?.ok===false||readChecked?.ok===false?'disconnected':'limited';label=pending?'Refreshing':'Polling';detail='Read-only · 60-second visible-page polling. Recorder health unavailable across profiles.'}
- return {status,read,reconnect,state,label,detail,busy:!!pending||link?.state==='connecting'};
+ if(isAllProfiles(profile)){state=readError?'disconnected':'limited';label=pending?'Refreshing':readError?'Disconnected':changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed; showing the last good response. Retrying automatically.':changeLimited?'Read-only · change checks unavailable; visible-page 60-second fallback.':'Read-only · change checks every 30 seconds; rolling windows expire on a visible-page minute. No aggregate events.'}
+ return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting'};
 }
 function ConnectionBadge({connection,disabled}){
- const {state,label,detail,busy,reconnect}=connection;
- const action=label==='Polling'?'Refresh read-only data.':'Click to reconnect and refresh. Running agents are not restarted.';
+ const {state,label,detail,busy,reconnect,readOnly}=connection;
+ const action=readOnly?'Refresh read-only data.':'Click to reconnect and refresh. Running agents are not restarted.';
  const title=detail+' '+action;
  return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
@@ -1474,11 +1589,10 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
  const start=Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
  const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest)
  const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
- const queryKey=[ID,'ledger',selected,provider,start,end||0,offset,session,filterTest,agent,project,sessionScope,subagentId]
- const windowSeconds=aggregate&&period!=='custom'?ranges[period]:0;
- const connection=useRecorderHealth({profile:selected,readScope,readPath:'/ledger?'+params,enabled:!isQuota,windowSeconds});
- const ledger=useQuery({...readOptions(selected),queryKey,queryFn:connection.read,enabled:!isQuota})
- useQuery({...readOptions(selected),queryKey:[ID,'connection',selected],queryFn:connection.status});
+ const windowSeconds=period!=='custom'?ranges[period]:0;
+ const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:readScope,enabled:!isQuota,windowSeconds});
+ const connection=useRecorderHealth({profile:selected,enabled:!isQuota,onHint:ledger.hint,readError:ledger.error,changeLimited:ledger.checkLimited});
+ useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
  const [reloadBusy,setReloadBusy]=useState(false),[reloadNotice,setReloadNotice]=useState(null);
  useEffect(()=>{reloadControl.alive=true;return()=>{reloadControl.alive=false}},[]);
@@ -1494,19 +1608,18 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
    if(!result.revision||result.revision!==active.revision)throw new Error('Active revision changed before verification.');
    message('Analytics '+active.revision.slice(0,12)+' loaded. Refreshing data…');
    const healthy=reloadControl.alive&&reloadControl.scope===selected?await connection.reconnect():false;
-   message('Analytics '+active.revision.slice(0,12)+' loaded.'+(healthy?'':' Data/status refresh incomplete; check the badge.'));
+   message('Analytics '+active.revision.slice(0,12)+' loaded.'+(healthy?' Data refresh queued; status verified.':' Status check incomplete; data refresh queued.'));
   }catch(error){
    message(switched?'Reload was accepted, but follow-up verification failed. Refresh to check the active backend.':
     (error.status===404||error.status===405||/404|405/.test(String(error.message)))?'Reload support is not active yet. One backend restart is required.':String(error.message||'Analytics reload failed; previous code remains active.'));
   }finally{reloadControl.busy=false;if(reloadControl.alive)setReloadBusy(false)}
  }
- useEffect(()=>{if(aggregate||period==='custom')return;const timer=setInterval(()=>setAnchor(Date.now()/1000),60000);return()=>clearInterval(timer)},[period,aggregate])
  const [ledgerCache]=useState(()=>({scope:'',data:null}));
  const [detailEntries]=useState(()=>new Map());
  const [identityLabels]=useState(()=>new Map());
- const currentData=ledger.data?._viewScope===readScope?ledger.data:null;
+ const currentData=ledger.data;
  if(currentData){ledgerCache.scope=readScope;ledgerCache.data=currentData}
- const data=aggregate&&ledger.error?null:currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quota.data?.providers||[];
+ const data=currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quota.data?.providers||[];
  for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
   for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
  }
@@ -1514,9 +1627,12 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
  const labels=Object.fromEntries(providers.map(p=>[p.id,p.label]));labels['openai-codex']='Codex';labels['nous']='Nous Portal'
  const names=[...new Set([...providers.map(p=>p.id),...(data?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
  const label=provider?(labels[provider]||provider):'All providers'
- const refresh=()=>{if(reloadControl.busy||connection.busy)return;pendingRefresh=true;inventory.refetch({cancelRefetch:false});
-  if(aggregate){ledger.refetch({cancelRefetch:false});queryClient.invalidateQueries({queryKey:[ID,'connection',selected]},{cancelRefetch:false});queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false})}
-  else connection.reconnect();
+ const [manualQuotaBusy,setManualQuotaBusy]=useState(false);
+ const refresh=()=>{if(reloadControl.busy||ledger.manual||manualQuotaBusy)return;pendingRefresh=true;
+  if(isQuota){setManualQuotaBusy(true);Promise.allSettled([inventory.refetch({cancelRefetch:false}),quota.refetch({cancelRefetch:false})]).finally(()=>{if(reloadControl.alive)setManualQuotaBusy(false)});return}
+  inventory.refetch({cancelRefetch:false});
+  ledger.refresh();queryClient.invalidateQueries({queryKey:[ID,'connection',selected]},{cancelRefetch:false});
+  queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
   quota.refetch({cancelRefetch:false});
  }
  async function exportAll(){setBusy(true);setErr('');try{
@@ -1541,7 +1657,7 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
    downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,stored_accounting:r.stored_accounting||null,supplemental_valuation:r.supplemental_valuation||null,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
- async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.refetch()}catch(e){setErr(String(e.message||e))}}
+ async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
  function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const local=x=>new Date(x*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19);setCustomStart(local(t.started));setCustomEnd(t.ended?local(t.ended):'')}
  function changePeriod(v){setPeriod(v);setFilterTest('');setAnchor(Date.now()/1000)}
  function drill(kind,g){
@@ -1552,8 +1668,8 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
   setDrillTrail({context:navigationContext,entries:[...drillHistory,previous].slice(-50)});
   setRequestFilters(next);setRequestPage({key:nextKey,offset:0});setTab('Requests');
  }
- const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:quota.isFetching||ledger.isFetching,refetch:refresh,refreshBusy:reloadBusy||connection.busy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||quota.isFetching}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · polling':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.isFetching})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
@@ -1570,7 +1686,7 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
  if(data?.summary){
    if(tab==='Overview')body=h(Breakdown,{data,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
    if(tab==='Requests')body=h(RequestView,{key:pageKey+':'+offset,data,offset,details:detailContext,onDrill:drill,more:()=>setOffset(data.next_offset),back:()=>setOffset(Math.max(0,offset-200))})
-   if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:()=>ledger.refetch(),onError:setErr})
+   if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:ledger.hint,onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data,mode:compMode,setMode:setCompMode,details:detailContext})
 
    if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],data.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',readable(g,'task'),g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
@@ -1601,12 +1717,12 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
   h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
   data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
   h(Coverage,{data}),
-  h(Summary,{data:aggregate&&ledger.error?{summary:null}:data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  h(Summary,{data,label,mode:displayMode,agent,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,
   err?notice(err):null,
-  ledger.error&&!data?h('p',{className:'au-muted'},aggregate?'Usage unavailable. '+String(ledger.error.message||ledger.error):'Usage unavailable. Reconnecting…'):null,
+  ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
   tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setFilterTest('')},onEnd:v=>{setCustomEnd(v);setFilterTest('')},window:data?.window}):null,
   body||h('p',{className:'au-muted'},data?.summary===null?'Recorded usage unavailable for this selection.':'Waiting for ledger…'))))
 }

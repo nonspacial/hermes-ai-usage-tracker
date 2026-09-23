@@ -84,7 +84,7 @@ def run():
           const base=rest;
           rest=async(path,...args)=>{const d=await base(path,...args);
             if(path.startsWith('/ledger?')){d.requests=d.requests.slice(0,1);d.request_count=1;d.next_offset=null;}return d;};
-          queryClient.invalidateQueries();
+          window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'});
         }''')
         expect(details).to_have_count(1)
         settle(page)

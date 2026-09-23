@@ -26,7 +26,7 @@ FIXTURE = """() => {
   }
   return d;
  };
- queryClient.invalidateQueries();
+ window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'});
 }"""
 
 
@@ -99,7 +99,7 @@ def run():
                 before = target.evaluate('e=>e.getBoundingClientRect().top-e.closest(".au-reader").getBoundingClientRect().top')
                 assert reader.evaluate('e=>e.scrollTop>0')
                 root_height = page.locator('.au-pane').evaluate('e=>e.scrollHeight')
-                page.evaluate('arrivals+=3;queryClient.invalidateQueries()')
+                page.evaluate("arrivals+=3;window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})")
                 expect(entries).to_have_count(80 + page.evaluate('arrivals'))
                 settle(page)
                 delta = page.evaluate('held.getBoundingClientRect().top-held.closest(".au-reader").getBoundingClientRect().top') - before

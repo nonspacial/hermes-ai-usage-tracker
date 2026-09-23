@@ -23,6 +23,16 @@ def add_routes(router,resolve_profile,server_home):
     @router.get('/ledger/profiles')
     def local_profiles():
         return aggregate.public_inventory(aggregate.discover(server_home()))
+
+    @router.get('/ledger/change-token')
+    def change_token(profile:str='', profile_scope:str='selected'):
+        # A cheap hint, not a durable revision or a replacement for periodic
+        # reconciliation. Do not instantiate Store or connect to source SQLite.
+        from .change_check import check
+        all_profiles = scope(profile_scope)
+        root = None if all_profiles else check_profile(profile)
+        return check(aggregate.discover(server_home()), selected_root=root)
+
     analytics = AnalyticsRuntime()
 
     def check_profile(profile):

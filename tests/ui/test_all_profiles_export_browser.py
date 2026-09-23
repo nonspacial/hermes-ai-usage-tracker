@@ -63,8 +63,8 @@ def run():
         assert page.evaluate('downloads.length') == 1
         page.evaluate('movingExport=false;failAggregate=true')
         page.get_by_role('button', name='Refresh', exact=True).click()
-        expect(page.get_by_test_id('recorded-summary')).to_contain_text('unavailable')
-        expect(page.locator('tbody tr')).to_have_count(0)
+        expect(page.get_by_test_id('usage-stale')).to_contain_text('last good recorded usage')
+        expect(page.locator('tbody tr')).to_have_count(200)
         expect(picker).to_have_value('scope:all')
         page.evaluate('failAggregate=false')
         page.get_by_role('button', name='Refresh', exact=True).click()
@@ -82,9 +82,8 @@ def run():
         # Old backends accepting unknown query parameters cannot look aggregated.
         page.evaluate('window.oldAggregateBackend=true')
         page.get_by_role('button', name='Refresh', exact=True).click()
-        expect(page.get_by_test_id('recorded-summary')).to_contain_text('unavailable')
-        expect(page.locator('.au-reader')).to_contain_text('backend restart is required')
-        expect(page.locator('tbody tr')).to_have_count(0)
+        expect(page.get_by_test_id('usage-stale')).to_contain_text('backend restart is required')
+        expect(page.locator('tbody tr')).to_have_count(200)
         # Capability discovery gates old quota routes before they can probe accounts.
         page.evaluate('''()=>{
           window.oldAggregateBackend=false;discoveredProfiles=null;
@@ -94,12 +93,12 @@ def run():
         expect(page.locator('tbody tr')).to_have_count(200)
         page.evaluate('window.scopeCalls=[]')
         picker.select_option('scope:all')
-        expect(page.get_by_test_id('recorded-summary')).to_contain_text('unavailable')
-        assert not page.evaluate("scopeCalls.some(c=>new URL(c.path,'https://offline').searchParams.get('profile_scope')==='all')")
+        expect(page.get_by_test_id('usage-stale')).to_contain_text('Synthetic missing inventory route')
+        assert not page.evaluate("scopeCalls.some(c=>new URL(c.path,'https://offline').pathname==='/ledger'&&new URL(c.path,'https://offline').searchParams.get('profile_scope')==='all')")
         assert not errors, errors
         assert not network, network
         browser.close()
-    print('PASS 2400 globally ordered collision-safe rows, 200-row paging, two-page fixed-window CSV, mutation detection, transport failure clearing, old-backend rejection and delayed individual replies')
+    print('PASS 2400 globally ordered collision-safe rows, 200-row paging, two-page fixed-window CSV, mutation detection, transport failure retaining last good data, old-backend rejection and delayed individual replies')
 
 
 if __name__ == '__main__':

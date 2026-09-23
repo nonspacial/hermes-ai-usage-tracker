@@ -37,7 +37,7 @@ def run():
   badge.click();page.wait_for_timeout(100)
   after=page.evaluate('({start:demoSocketStarts,stop:demoSocketStops,calls:demoCalls.slice('+str(before['calls'])+')})')
   assert after['start']==before['start']+1 and after['stop']==before['stop']+1
-  assert after['calls'] and all(v.startswith('/ledger?') or v.startswith('/ledger/status?') for v in after['calls'])
+  assert after['calls'] and all(v.startswith(('/ledger?','/ledger/status?','/ledger/change-token?')) for v in after['calls'])
   # Offline/unknown do not remain falsely green because old data is in memory.
   page.evaluate('failStatus=true;failLedger=true');badge.click();page.wait_for_timeout(80)
   assert badge.get_attribute('data-state')=='disconnected'

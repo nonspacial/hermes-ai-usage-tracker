@@ -46,7 +46,7 @@ def run():
         badge.evaluate('el=>el.click()')
         assert page.evaluate('demoSocketStarts') == starts
         page.evaluate("release('status')")
-        expect(badge).to_have_attribute('aria-busy', 'true')
+        expect(badge).to_have_attribute('aria-busy', 'false')
         page.evaluate("release('read')")
         expect(badge).to_have_text('Online')
         expect(badge).to_have_attribute('aria-busy', 'false')
@@ -109,7 +109,7 @@ def run():
         badge.click()
         expect(badge).to_have_text('Not recording')
         expect(badge).to_have_attribute('data-state', 'not_recording')
-        expect(badge).to_have_attribute('aria-busy', 'true')
+        expect(badge).to_have_attribute('aria-busy', 'false')
         page.evaluate("release('read')")
         expect(badge).to_have_attribute('aria-busy', 'false')
 

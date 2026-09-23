@@ -17,7 +17,7 @@ FIXTURE=r'''() => {
  }
  add('cold',120,0);add('warm',90,12000);add('grown',60,15000);
  events.push({id:'pending',started:now-1,session_id:'other',status:'pending',source:'main_hook',process:'demo',provider:'openai-codex',model:'test-only-model'});
- queryClient.invalidateQueries();
+ window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'});
 }'''
 
 
@@ -45,7 +45,7 @@ def run():
   page.get_by_role('navigation',name='Provider subpages',exact=True).get_by_role('tab',name='Cache & costs',exact=True).click()
   cache=page.get_by_test_id('cache-costs');cards=page.get_by_test_id('component-cost-cards');rates=page.get_by_test_id('published-rates')
   expect(cards.locator('article')).to_have_count(5)
-  expect(page.get_by_test_id('cost-card-total').locator('dt').filter(has_text='Requests without this value')).to_have_attribute('title','1 awaiting usage · subtotal')
+  expect(page.get_by_test_id('cost-card-total').locator('dt').filter(has_text='Requests without this value')).to_have_attribute('title','1 awaiting usage (owner process observed live) · subtotal')
   assert 'records missing' not in page.locator('body').inner_text()
   expect(cache.locator('table')).to_have_count(1)
   expect(page.get_by_test_id('component-costs')).to_have_count(0)
@@ -86,12 +86,12 @@ def run():
   print('PASS 1700/860/390/320 layout, grey card fills, summary first, no horizontal page overflow')
   # Unknowns stay unknown; empty window is a separate zero state.
   page.set_viewport_size({'width':1700,'height':1100})
-  page.evaluate("events=events.filter(r=>r.id==='pending');queryClient.invalidateQueries()")
+  page.evaluate("events=events.filter(r=>r.id==='pending');window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})")
   for key in expected:
    expect(page.get_by_test_id('cost-card-'+key).get_by_test_id('component-amount')).to_have_text('—' if key=='cache_write_tokens' else '— *')
    expect(page.get_by_test_id('cost-card-'+key).locator('[data-field="tokens"]')).to_have_text('—')
   expect(write_card).to_contain_text('Awaiting read comparison')
-  page.evaluate('events=[];queryClient.invalidateQueries()')
+  page.evaluate("events=[];window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})")
   for key in expected:
    expect(page.get_by_test_id('cost-card-'+key).get_by_test_id('component-amount')).to_have_text('0' if key=='cache_write_tokens' else '$0.0000')
    expect(page.get_by_test_id('cost-card-'+key).locator('[data-field="tokens"]')).to_have_text('0')

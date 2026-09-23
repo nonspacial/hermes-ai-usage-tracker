@@ -119,6 +119,73 @@ def run():
         print('Theme audit semantic colours:',json.dumps(audit))
         assert not errors,errors
         assert not network,network
+        # A fresh isolated page exercises root preference, not a host-root
+        # override in the plugin. Include both one and several provider rows.
+        type_page=browser.new_page(viewport={'width':1800,'height':1300})
+        type_page.route('**/*',lambda r:r.abort())
+        type_page.on('pageerror',lambda e:errors.append(str(e)))
+        type_page.set_content((ROOT/'preview.html').read_text())
+        type_page.add_style_tag(content='#root{max-width:none;flex:none;width:1500px;height:980px;margin:0;padding:0}')
+        type_page.get_by_role('tab',name='All providers',exact=True).click()
+        type_page.get_by_role('group',name='Usage display').get_by_role('button',name='Cost').click()
+        type_page.evaluate('''() => {const base=rest;window.oneProvider=false;
+          rest=async(path,...args)=>{const data=await base(path,...args);
+            if(path.startsWith('/ledger?') && data.provider_groups){
+              if(window.oneProvider)data.provider_groups=data.provider_groups.slice(0,1);
+              data.provider_groups=data.provider_groups.map(g=>({...g,unpriced_requests:1}));
+            }return data;};}''')
+        samples=[]
+        for root_size in (16,20):
+            type_page.evaluate('(n)=>document.documentElement.style.fontSize=n+"px"',root_size)
+            for width,height in ((1500,850),(980,850),(390,850),(1500,1400),(390,420)):
+                type_page.locator('#root').evaluate('(e,s)=>{e.style.width=s[0]+"px";e.style.height=s[1]+"px"}',[width,height])
+                for one in (False,True):
+                    type_page.evaluate('(one)=>{window.oneProvider=one}',one)
+                    type_page.get_by_role('button',name='Refresh',exact=True).click()
+                    type_page.wait_for_function('''one=>document.querySelectorAll('.au-provider-cost').length===(one?1:4)''',arg=one)
+                    type_page.evaluate('() => new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+                    size=type_page.evaluate('''() => {
+                      const a=document.querySelector('.au-provider-cost'),percent=a.parentElement,
+                        axis=document.querySelector('.au-axis'),upper=document.querySelector('.au-upper'),
+                        lower=document.querySelector('.au-reader'),pane=document.querySelector('.au-pane');
+                      return {root:parseFloat(getComputedStyle(document.documentElement).fontSize),
+                        amount:parseFloat(getComputedStyle(a).fontSize),
+                        percent:parseFloat(getComputedStyle(percent).fontSize),
+                        axis:parseFloat(getComputedStyle(axis).fontSize),
+                        weight:getComputedStyle(a).fontWeight,
+                        partial:percent.textContent.includes('partial'),
+                        upper:upper.clientHeight,natural:upper.scrollHeight,
+                        lower:lower.clientHeight,document:document.documentElement.scrollWidth-innerWidth,
+                        pane:pane.scrollHeight-pane.clientHeight};}''')
+                    assert abs(size['amount']-30*root_size/16)<.1,(root_size,width,height,one,size)
+                    assert abs(size['percent']-12*root_size/16)<.1,(root_size,width,height,one,size)
+                    assert abs(size['axis']-11*root_size/16)<.1,(root_size,width,height,one,size)
+                    assert abs(size['amount']/size['percent']-2.5)<.01,size
+                    assert size['weight']=='700' and size['partial'],size
+                    assert size['pane']<=1 and size['document']<=1 and size['lower']>=70,size
+                    if root_size==16 and width==1500 and height==850 and one:
+                        assert size['natural']<=size['upper']+1,size
+                    samples.append((root_size,width,height,one,round(size['amount'],1),round(size['natural']-size['upper'])))
+                    if root_size==16 and width==1500 and height==850 and one:
+                        type_page.locator('#root').screenshot(path=str(ART/'typography-overview-one-provider-16.png'))
+                    if root_size==20 and width==1500 and height==850 and not one:
+                        type_page.locator('#root').screenshot(path=str(ART/'typography-overview-multi-provider-20.png'))
+        # Existing chart keyboard callback and lower-reader scroll owner survive.
+        type_page.locator('#root').evaluate('e=>{e.style.width="1500px";e.style.height="850px"}')
+        type_page.get_by_test_id('usage-chart').focus()
+        type_page.get_by_test_id('usage-chart').press('ArrowRight')
+        expect(type_page.locator('.au-chart-tip')).to_contain_text('requests')
+        type_page.locator('.au-upper').focus()
+        type_page.locator('.au-upper').press('Control+End')
+        assert type_page.locator('.au-upper').evaluate('e=>e.scrollTop+e.clientHeight>=e.scrollHeight-1')
+        type_page.get_by_role('tab',name='Codex',exact=True).click()
+        quota=type_page.locator('.au-quota-card [class~="text-xs"]').first
+        expect(quota).to_be_visible()
+        assert abs(quota.evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')-15)<.1
+        assert abs(type_page.locator('.au-ledger').evaluate('e=>parseFloat(getComputedStyle(e).fontSize)')-16.25)<.1
+        assert not errors,errors
+        print('PASS 20 typography cases: 16/20px root, one/multiple partial providers, amount 2.5x subdued percentage, SVG labels, containment, chart keyboard and upper scroll',samples)
+        type_page.close()
         browser.close()
 
 if __name__=='__main__':run()

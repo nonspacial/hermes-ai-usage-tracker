@@ -91,7 +91,7 @@ def run():
   expect(page.get_by_role('combobox',name='Project',exact=True)).to_have_value('repo-hermes')
   show_all.click();expect(rows()).to_have_count(7)
   # A scoped saved test stays selected, including its exact start/end.
-  page.evaluate("() => {savedTests.unshift({id:'navigation-test',label:'Navigation fixture',started:now-86400,ended:now});queryClient.invalidateQueries()}")
+  page.evaluate("() => {savedTests.unshift({id:'navigation-test',label:'Navigation fixture',started:now-86400,ended:now});window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}")
   page.get_by_role('combobox',name='Saved tests',exact=True).select_option('navigation-test');settled()
   start=page.get_by_role('textbox',name='Window start',exact=True).input_value()
   end=page.get_by_role('textbox',name='Window end',exact=True).input_value()
@@ -108,7 +108,7 @@ def run():
   page.evaluate("""() => {const t=Date.now()/1000-60;for(let i=0;i<430;i++){
    const e=JSON.parse(JSON.stringify(events[0]));e.id='paging-'+i;e.started=t-i;e.ended=e.started+.1;
    e.session_id='demo-session-'+(i%5);Object.assign(e,demoContexts[e.session_id]);events.push(e);
-  }queryClient.invalidateQueries()}""")
+  }window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}""")
   expect(rows()).to_have_count(200)
   page.get_by_role('button',name='Next requests',exact=True).click();settled()
   expect(listing).to_contain_text('Showing 201–400 of 437 requests.')

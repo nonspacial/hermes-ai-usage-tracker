@@ -45,7 +45,7 @@ def run():
               d.requests=Array.from({length:40},(_,i)=>({...d.requests[0],id:'dense-'+i,session_id:'dense-'+i}));
               d.compressions=Array.from({length:window.sparseCount},(_,i)=>({...d.compressions[0],id:'sparse-'+i,session_id:'sparse-'+i}));
               d.request_count=40;d.next_offset=null;
-            }return d;};queryClient.invalidateQueries();
+            }return d;};window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'});
         }''')
         nav=page.get_by_role('navigation',name='Provider subpages')
         # Overview groups never collapse: all stacked fields count towards
@@ -70,7 +70,7 @@ def run():
             for height in [420,900,1400,2100]:
                 page.locator('#root').evaluate('(e,s)=>{e.style.width=s[0]+"px";e.style.height=s[1]+"px"}',[width,height])
                 for count in [0,1,2,9]:
-                    page.evaluate('(n)=>{window.sparseCount=n;queryClient.invalidateQueries()}',count)
+                    page.evaluate("(n)=>{window.sparseCount=n;window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}",count)
                     nav.get_by_role('tab',name='Requests',exact=True).click()
                     expect(page.locator('.au-reader tbody tr')).to_have_count(40)
                     settle(page)
