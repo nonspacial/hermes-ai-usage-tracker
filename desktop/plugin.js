@@ -613,6 +613,20 @@ const ledgerCss = `
 .au-ledger .au-section-summary{margin:12px 0 18px}
 .au-ledger .au-window-label{margin-left:auto;font-size:.6875rem}.au-ledger .au-mode-select,.au-ledger .au-period-select{display:none}
 .au-ledger .au-filters{opacity:.94}.au-ledger .au-filters button,.au-ledger .au-filters input,.au-ledger .au-filters select{padding:5px 9px;font-size:.75rem}
+/* Use a small flex basis so native select option widths cannot force a
+   second toolbar row before the available space has been shared. */
+.au-ledger .au-filters select{flex:1 1 105px;min-width:95px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.au-ledger .au-filters select[aria-label="Saved tests"]{flex-basis:145px;min-width:130px;max-width:247px}
+/* Keep the controls on one row through the three-column metric layout.
+   Allow their ordinary wrapping only after the metrics switch to two columns. */
+@container (min-width:621px) and (max-width:980px){
+ .au-ledger .au-filters{gap:2px}
+ .au-ledger .au-filters select{flex:1 1 95px;min-width:90px;padding-inline:4px}
+ .au-ledger .au-filters select[aria-label="Project"]{flex-basis:98px;min-width:98px}
+ .au-ledger .au-filters select[aria-label="Saved tests"]{flex-basis:108px;min-width:108px}
+ .au-ledger .au-filters input[aria-label="Session ID"]{flex:1 1 70px;min-width:70px;padding-inline:3px}
+ .au-ledger .au-filters button{padding-inline:4px}
+}
 .au-ledger .au-quality-line{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.au-ledger .au-quality{margin:8px 0 0;color:var(--ui-text-tertiary);font-size:.6875rem}
 .au-ledger details>summary{cursor:pointer}.au-ledger .au-quota-collapsible{margin-top:24px;padding:16px 0;border-top:1px solid var(--ui-stroke-secondary)}
 .au-ledger .au-breakdown{margin-top:16px}.au-ledger .au-breakdown td:not(:first-child),.au-ledger .au-breakdown th:not(:first-child){text-align:right}
