@@ -1,78 +1,219 @@
-# AI Usage Tracker for Hermes
+# AI usage + for Hermes Desktop
 
-Subscription quotas, request-level token accounting, cache analysis and skills/context history in Hermes Desktop.
+AI usage + shows your subscription allowances and the usage recorded by your Hermes agents. Use it to check how much quota remains, inspect individual requests, compare models and projects, or see how skills and context compression contribute to a session.
 
-This fork extends [lvabarajithan/hermes-ai-usage-tracker](https://github.com/lvabarajithan/hermes-ai-usage-tracker). It started from the **2.0.0-test.17** ledger import and includes subsequent recording, performance and UI improvements. The original MIT licence and quota integrations are retained. This is a development fork, not an official Hermes release.
-<p>
-    <a href="docs/images/live-subscriptions.png"><img width="600" src="docs/images/live-subscriptions.png" alt="Live Subscriptions page with provider quota cards and two-column Nous Portal details"></a>
-    <a href="docs/images/live-overview.png"><img width="400" src="docs/images/live-overview.png" alt="Live All providers overview with summary cards, usage chart and model breakdown"></a>
-</p>
-[Features](#behaviour) · [Provider coverage](#provider-coverage) · [Installation](#installation-is-separate-from-source-changes) · [Development](#development-checks)
+The plugin appears as **AI usage +** in Hermes Desktop. Its installation name is `ai-usage-tracker`.
 
-## Behaviour
+This is a development fork of [hermes-ai-usage-tracker](https://github.com/lvabarajithan/hermes-ai-usage-tracker), released under the [MIT licence](LICENSE). It is not an official Hermes release.
 
-- **All profiles** is the first profile-picker option and combines recorded usage across discovered local Hermes profiles without changing the existing selected-profile preference. Record identities remain profile-qualified; missing, unrecorded or unreadable sources produce explicit coverage states rather than invented zeros. Subscription allowances are not combined—select an individual profile for quota cards.
-- Aggregate mode is read-only, checks a cheap change token every 30 seconds while open, and has no aggregate event stream. A visible rolling window is recomputed each minute for expiry; older backends without change checks fall back to at most one visible full read per minute. Test markers, pricing changes and analytics reload are disabled. Each full read copies ledger/WAL snapshots into temporary storage, so large histories increase disk I/O. Ambiguous hardlinked databases and nonempty rollback journals are rejected. CSV includes profile provenance and detects observed changes during paging, but is not an atomic cross-profile snapshot.
-- Activating **All profiles** after installation requires a safely arranged Hermes backend restart; the analytics-only reload button cannot load its new API routes. No restart is performed by the installer.
+## Contents
 
-- **Subscriptions** opens on first use with the original quota cards, profile picker, refresh, status-bar provider selection and hide/unhide controls. Each provider **name only** opens its existing provider tab by mouse or keyboard; the card body and hide control remain independent. On a provider page the top card's name is plain text.
-- Closing and reopening the pane with an unchanged period restores the last provider page, nested subpage, display mode, Overview grouping, Compressions type, Skills view/model/skill and the selected profile's period/custom bounds, agent/project/session/test filters. These are validated, versioned view preferences in plugin storage, scoped to each selected profile or to the separate read-only All profiles scope; rolling periods stay rolling. A restored provider ID is checked against the selected profile's available provider catalogue before a provider-specific ledger read; while that catalogue loads no provider-specific read is sent, and a missing or malformed provider falls back to Subscriptions. The All providers choice needs no catalogue. Actively choosing a different period still clears the Skills model and skill selection as before; simply closing and reopening the pane does not. A new profile without saved preferences starts on Subscriptions. Busy/error states, pagination, data snapshots and confirmations are not saved. An implicit server profile with no resolved profile name is not persisted.
-- Banked Codex resets are **not active** in the plugin. Hermes can show a banked-reset count in quota detail text when available, but that text is not a typed balance or account-authority contract. The approved badge/auto-use HTML remains a throwaway simulation: the plugin lacks a proven same-account Codex app-server credential binding and a typed limit-exhaustion event from active Hermes turns. No redemption or automatic consumption occurs. See [the feasibility audit](docs/CODEX_BANKED_RESETS_FEASIBILITY.md#implementation-audit-supported-integration-blocker).
-- Provider cards with six or more quota/detail rows use two columns when the card is wide enough, reverting to one in narrow panes. Nous Portal can show a subscription gauge and renewal detail when supplied by its account response; no weekly allowance is invented.
-- All providers and individual providers have nested Overview, Requests, Cache & costs, Compressions, Models & tasks and **Skills usage** pages. Individual provider pages retain their quota card above analytics.
-- **Skills usage** uses the global period/profile/provider/project/session/agent filters, plus a model filter. Click the frequency pie or its legend to inspect timestamped loads and reference reads. Context footprint and Session timeline show recorded estimates and linked compression boundaries. No duplicate frequency bar chart, historical reconstruction or prompt/result body storage. See [SKILLS_USAGE.md](SKILLS_USAGE.md) for capture limits and the API contract. New recording requires reloading the updated backend and producer processes; analytics-only reload cannot install these hooks.
-- Native request hooks and guarded runtime adapters record usage in each producing Hermes home's `usage-ledger/events.sqlite3`. The UI refreshes persisted events; it does not reconstruct usage from cumulative session counters.
-- Displayed **Cache writes** is the sum of positive consecutive cache-read differences within each session stream. Its caption is **Calculated from session reads**. Provider counters and saved costs remain separate and unchanged; calculated writes are not additional processed tokens.
-- Request JSON, CSV, attribution, compression correlations and saved price snapshots preserve missing-versus-zero distinctions.
-- New attribution uses same-profile active named projects and explicit folder ownership. Historical changes are operator-only: see [PROJECT_ATTRIBUTION.md](PROJECT_ATTRIBUTION.md) for the dry-run/apply reconciliation CLI and preservation guarantees.
-- Selected-profile usage listens for recorder events and checks a cheap, read-only filesystem change token every 20 seconds for missed events and catalogue-only changes. A token is a best-effort hint, **not** a SQLite revision or an accounting delta: only a fresh full response publishes totals, requests and groups together. One generation owns each view; hints during a read trigger a separate follow-up after it clears. Manual Refresh alone shows a busy control; automatic updates leave the last good response visible. Failed reads show a stale warning and retry with bounded backoff. Rolling windows also re-read once per visible minute to account for expiry; an unsupported change-check route uses a bounded visible-page full-read fallback. Large reports can still take substantial time, and there is no incremental-read acceleration.
-- Requests, saved-rate groups, Compressions and Models & tasks retain tables where they fit and become initially collapsed accordions in narrower panes. Headers expose identity and known token values; expanded records retain their labelled fields and JSON controls. Responsive changes preserve keyed records and keyboard focus.
-- Compression headers use **Start** for the configured threshold and **End** for the first subsequent reported input. These are not exact before/after measurements: the threshold is not measured starting usage, and the next request may include new content. Missing values remain **—**.
-- Skills pies sit above their legends, capped at 320px. Legends use one, two or three columns according to pane width. Session timeline accordions retain open state and reading position, with bounded internal scrolling.
+- [Install the plugin](#install-the-plugin)
+- [Open the dashboard](#open-the-dashboard)
+- [Inspect recorded usage](#inspect-recorded-usage)
+- [Understand the numbers](#understand-the-numbers)
+- [Use banked Codex resets](#use-banked-codex-resets)
+- [Export a report](#export-a-report)
+- [Update or roll back](#update-or-roll-back)
+- [Troubleshooting](#troubleshooting)
+- [Data and privacy](#data-and-privacy)
+- [Technical reference](#technical-reference)
 
-Read [SESSION_CACHE_WRITES.md](SESSION_CACHE_WRITES.md) for the current calculation contract, [ANALYTICS_RELOAD.md](ANALYTICS_RELOAD.md) for the Refresh menu and real connection indicator, and [COMPATIBILITY.md](COMPATIBILITY.md) for capture limitations. Historical sections in imported documents describe earlier releases, not fresh validation. [UPSTREAM_README.md](UPSTREAM_README.md) describes the original quota-only plugin.
+## Install the plugin
 
-## Provider coverage
+You need Hermes Desktop and Python 3. Install the plugin on the machine where Hermes runs, in each Hermes profile whose usage you want to record. Installing it in one profile does not start recording in the others.
 
-Recording follows Hermes' protocol paths rather than a fixed provider-name list. **Token recording, cost estimates and subscription quotas have different coverage.**
+The commands below use a local checkout of this repository. Run them from the repository directory.
 
-| Area | Current coverage |
-|---|---|
-| Main request recording | Normal Hermes hooks for OpenAI-compatible Chat Completions, Responses and Anthropic Messages, when the producing process loads this plug-in. |
-| Claude / Anthropic | Native main-stream usage snapshots survive interruption; absent cache fields remain unknown. Only received counts can be retained. |
-| Gemini | Native metadata is captured before conversion inserts defaults or drops thinking counts. Thinking is included once and reported totals are preserved. |
-| Cost estimates | Exact matched catalogues for OpenAI, OpenRouter, Nous and Ollama. Direct Anthropic/Gemini and other unmatched providers can record tokens while remaining unpriced. Estimates are not subscription debits. |
-| Subscription cards | Only available provider quota APIs and reported windows. Recording support does not imply a quota API exists. |
-| Not certified as complete | Custom transports, separate app-server/ACP runtimes, some direct-streaming auxiliary calls and SDK-internal retries below observed hooks. |
+### 1. Choose the Hermes home
 
-See [COMPATIBILITY.md](COMPATIBILITY.md) for detailed boundaries. Synthetic tests establish source-contract behaviour, not authenticated compatibility with every provider. Historical missing usage is not reconstructed.
+The usual locations are `~/.hermes` for the default profile and `~/.hermes/profiles/<name>` for a named profile. If your installation uses another location, use that instead. The directory must already exist, and the installer refuses symlink destinations or symlinked parent directories.
 
-## Repository layout
+Set the intended location once. This example selects a profile named `work`:
 
-The plugin now lives at the repository root, matching the upstream installation layout:
-
-```text
-plugin.yaml                 Plugin identity and hook declarations
-__init__.py / bootstrap.py   Recorder registration and runtime loading
-desktop/plugin.js           Desktop quota and analytics UI
-dashboard/plugin_api.py     Original quota routes plus ledger API
-ledger_runtime/             Capture, accounting, attribution, storage and pricing
-tests/                      Offline Python and browser checks
-docs/images/                Cropped, redacted real-app README screenshots
-install.py                  Explicit-home installer with receipts and rollback
-doctor.py                   Offline Hermes source-signature inspection
-cache_write_report.py       Explicit-home cache-evidence report
-build_preview.py            Refresh the synthetic preview from desktop/plugin.js
-preview.html                Synthetic offline SDK/React harness
+```bash
+TARGET_HOME="$HOME/.hermes/profiles/work"
 ```
 
-The installer copies only named plugin files and runtime directories, not repository history, tests or private archives. The retained `catalog/` files describe the original upstream release and are **not a release declaration for this fork**. Do not run the upstream publication script to publish this build.
+For the default profile, use `TARGET_HOME="$HOME/.hermes"` instead.
 
-## Development checks
+### 2. Preview and apply the installation
 
-See [RECORDER_LIFECYCLE.md](RECORDER_LIFECYCLE.md) for turn-scoped cleanup, late-usage handling and the meaning of unavailable-field indicators. Historical unknown counters are not fabricated or backfilled.
+Check which files the installer will create or replace:
 
-Use an isolated environment; do not install test dependencies into a running Hermes environment:
+```bash
+python3 install.py --home "$TARGET_HOME"
+```
+
+If the destination is correct, apply the installation:
+
+```bash
+python3 install.py --home "$TARGET_HOME" --apply
+```
+
+The installer copies the plugin files, backs up any files it replaces and prints the path to a rollback receipt. Keep that path if you may need to undo the update. It does not enable the plugin, change credentials, delete recorded usage or restart Hermes.
+
+### 3. Enable it for the same profile
+
+For the `work` profile used above:
+
+```bash
+hermes --profile work plugins enable ai-usage-tracker --no-allow-tool-override
+```
+
+Replace `work` with your profile name. For the default profile, omit `--profile work`. The plugin does not need permission to replace Hermes' built-in tools.
+
+After active work has finished, restart the Hermes backend and the agent processes that should record usage. Copying the files alone does not load the recorder into processes that are already running.
+
+## Open the dashboard
+
+Open **AI usage +** in Hermes Desktop and select a profile. On first use, the pane opens on **Subscriptions**.
+
+Each subscription card shows the allowance and reset windows reported by that provider. Click the provider's name to open its usage pages. The hide control only changes whether the card is shown; it does not disable recording. Use the hidden-provider control or **Unhide all** to restore cards.
+
+Choose **All providers** to inspect recorded usage across providers in the selected profile.
+
+Choose **All profiles** in the profile picker to combine recorded usage from discovered local profiles. This view is read-only. It does not combine subscription allowances, so select an individual profile to see quota cards or use account controls. Check the coverage message before treating the totals as complete. A missing or unreadable profile ledger is not the same as zero usage.
+
+The pane remembers your page, display choices and filters separately for each profile and for All profiles. Reopening a rolling period such as Past 24h keeps it rolling rather than restoring an old fixed date range.
+
+## Inspect recorded usage
+
+Start by selecting a provider or All providers. Choose a time window, then narrow the results by project, session or agent as needed. **All recorded** includes the history available in the selected scope. **Custom** lets you enter start and end times.
+
+The usage pages answer different questions:
+
+| Page | What to do here |
+| --- | --- |
+| Overview | Read the totals and usage chart, then change the grouping to compare where usage went. |
+| Requests | Inspect individual recorded calls and their token counts. Open a record's JSON details when you need the underlying fields. |
+| Cache & costs | Compare cache reads, calculated cache writes and estimated costs. Inspect the rates used and refresh provider prices. |
+| Compressions | Review recorded context compression and micro-compaction events alongside their linked usage. |
+| Models & tasks | Compare usage by model and task. |
+| Skills usage | See which skills were loaded, inspect reference reads and follow context estimates through a session. |
+
+On Skills usage, select a slice of the frequency pie or an entry in its legend to inspect that skill's loads and reference reads. Use the model filter to narrow the results. Switch to **Context footprint** for estimated context composition or **Session timeline** to inspect observations and compression boundaries in order.
+
+In narrow panes, some tables become collapsed records. Expand a record to see its fields. Widen the pane if you prefer the table layout.
+
+Usage refreshes automatically while the pane is open. Click **Refresh** for an immediate update. If a read fails, the last successful result can remain visible with a stale-data warning; do not mistake it for a fresh result.
+
+## Understand the numbers
+
+### Quota, tokens and cost are different measurements
+
+Subscription cards show what the provider reports about your account allowance. The usage pages show requests captured by the local recorder. Their dollar values are API-equivalent estimates, not subscription charges or a conversion of quota into money.
+
+A provider can report tokens without offering a quota API or a matching price catalogue. Automatic pricing currently has adapters for OpenAI, OpenRouter, Nous and Ollama. A usable catalogue and an exact model match are still required. Direct Anthropic and Gemini requests can have token counts but no price.
+
+A missing value means unknown, not zero. A subtotal with missing fields may be less than the complete cost.
+
+### Cache writes are calculated
+
+The displayed **Cache writes** value is labelled **Calculated from session reads**. It adds the positive increases between consecutive cache-read counts in a session. It is not a provider-reported write counter and should not be added to the processed-token total.
+
+Provider-reported cache counters remain separate. See [the cache-write calculation](SESSION_CACHE_WRITES.md) if you need to reconcile a report.
+
+### Prices can be saved or retrospective
+
+New requests save a matching price snapshot when one is available. Those saved rates and costs do not change when the catalogue updates.
+
+Previously unpriced requests may receive a separately labelled retrospective estimate using a newer published rate. That estimate can change after a price refresh; it does not rewrite the original record or claim that the newer rate applied at the time.
+
+Use **Refresh provider prices** on Cache & costs to request a catalogue update. If a refresh fails, the plugin keeps the last successful catalogue. [Pricing sources and calculations](PRICING_SOURCES.md) explains rate matching, missing prices and cache savings.
+
+### Compression and context values are estimates
+
+On a compression record, **Start** is the configured threshold, not a measured before-compression token count. **End** is the first subsequent reported input and may include new content. Do not treat the difference as an exact saving.
+
+Skills and context observations only cover events the recorder saw. The plugin does not reconstruct earlier skill loads or recover usage that a provider never reported.
+
+## Use banked Codex resets
+
+The Codex card has a **Resets** badge and an **Auto use** option. These controls require the Codex CLI on the backend's executable path, a supported app-server response and a ChatGPT subscription credential that the plugin can verify against the selected profile's account. If the balance or account identity cannot be confirmed, spending is disabled.
+
+To spend a reset manually:
+
+1. Select the individual profile and open its Codex card on Subscriptions or the Codex provider page.
+2. Click **Resets** to inspect the balance and eligibility message. Use **Refresh balance** if needed.
+3. When Codex confirms an eligible exhausted limit, click **Use one reset**.
+4. Read the warning and choose **Confirm use** to spend it, or **Cancel** to leave the account unchanged.
+
+A rounded 0% allowance is not enough to enable redemption. The backend checks the account, balance and limit again before spending.
+
+**Auto use spends resets without a confirmation each time.** It is off until you opt in for that profile and account. While the backend is running and the plugin remains enabled, its monitor can redeem a reset when Codex confirms eligible exhaustion, even if the pane is closed. Clear Auto use to turn it off.
+
+On Plus accounts, automatic use can trigger at the five-hour limit, not only the weekly limit. A reset refreshes eligible five-hour and weekly allowances and can change the weekly reset date. Using one early can waste the weekly reset, so leave Auto use off if you want to decide when to spend each reset.
+
+If redemption returns an uncertain result, further attempts are blocked. Check your Codex account before taking further action; the plugin does not automatically retry an uncertain spend.
+
+## Export a report
+
+Select the profile, provider, time window and filters you want, then click **Export request CSV**. The export includes matching request rows across pages, not just the rows currently visible.
+
+All profiles exports include profile provenance. They read profiles and pages separately, so they are not a single simultaneous snapshot. If the plugin detects a change during export, it stops rather than downloading a report with inconsistent pages. Refresh and try again.
+
+Review the file before sharing it. Session identifiers and local paths can identify private work even though the recorder does not store prompt or response bodies.
+
+## Update or roll back
+
+To update an installed copy, run the same preview and apply commands from the source revision you want to install. You do not need to enable the plugin again.
+
+Desktop UI files may hot-reload, but recorder, pricing, API and other backend changes require a restart after active work has finished. The Refresh menu's **Reload analytics backend** option only reloads a limited set of analytics readers. It does not install repository changes or update recorder hooks, and it will report when a restart is required.
+
+To undo an installation, use the receipt path printed by the installer. Preview the rollback first:
+
+```bash
+python3 install.py --rollback /path/to/receipt.json
+```
+
+Then apply it:
+
+```bash
+python3 install.py --rollback /path/to/receipt.json --apply
+```
+
+Rollback restores replaced plugin files and removes files introduced by that installation. It leaves the usage ledger intact. It refuses to overwrite files changed since installation. Arrange the required backend and producer restarts separately.
+
+## Troubleshooting
+
+### The dashboard opens, but no usage appears
+
+Check the selected profile and time window first. Then confirm the plugin is enabled in the profile running the agent and that the producing process restarted after installation. Opening analytics does not itself start recording or create missing history.
+
+Normal Hermes request hooks cover OpenAI-compatible Chat Completions, Responses and Anthropic Messages. Additional observers retain native Anthropic and Gemini counts where supported. Custom transports, separate app-server or ACP runtimes, some auxiliary streaming calls and SDK-internal retries may not be fully captured.
+
+### The recorder badge is not green
+
+Click the badge to check recorder status and reconnect the analytics subscription. **Not recording** means no valid producer heartbeat was found. **Limited** means capture or subscription support is degraded; polling may still work. **Disconnected** means a check failed or its status expired.
+
+**Online** confirms recent recorder and connection checks, not complete capture of every request path. See [recorder status and reload controls](ANALYTICS_RELOAD.md) for the detailed meanings.
+
+### A cost or quota is missing
+
+Check whether the provider reports that value. Token recording, subscription quota and pricing have separate coverage. Refresh prices for an unpriced model, but do not expect an unsupported model or provider to gain a price. Missing values are intentionally left unknown.
+
+### A large report is slow
+
+Narrow the time window or select one profile. All profiles reads copy ledger snapshots into temporary storage, so large histories require more disk I/O. There is no automatic retention policy; monitor the size of your ledger if you keep long histories.
+
+## Data and privacy
+
+Each producing Hermes home stores recorded usage in `usage-ledger/events.sqlite3`. Records include token counts and metadata such as session IDs, project attribution, skill observations and pricing evidence. The recorder does not store prompt or response bodies and does not add model inference calls.
+
+Quota checks contact provider services using the existing account integration. Price refreshes contact public catalogue sources without forwarding your prompts, usage records or account credentials. Codex reset controls use the selected account's credential for authenticated app-server operations; redemption changes that account's allowance.
+
+All profiles combines local profiles only. It does not collect ledgers from other machines. Keep backups of any usage history you need to retain.
+
+## Technical reference
+
+For details beyond day-to-day use, read [provider capture limitations](COMPATIBILITY.md), [skills recording](SKILLS_USAGE.md), [project attribution](PROJECT_ATTRIBUTION.md) and [recorder lifecycle](RECORDER_LIFECYCLE.md). Some reference documents retain historical release notes; those sections are not descriptions of the current interface.
+
+The original plugin documentation is in [UPSTREAM_README.md](UPSTREAM_README.md). [IMPORT_NOTES.md](IMPORT_NOTES.md) records this fork's import history.
+
+### Development checks
+
+Create an isolated test environment rather than installing dependencies into a running Hermes environment:
 
 ```bash
 uv venv .venv
@@ -81,69 +222,6 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt
 node --check --input-type=module < desktop/plugin.js
 ```
 
-Browser suites are executable scripts, not pytest test functions. Install Chromium with Playwright, set `CHROMIUM_PATH` to its executable, regenerate `preview.html` with `build_preview.py`, then run the individual `tests/ui/test_*.py` scripts. They use synthetic records and an offline SDK; passing them does not establish live capture coverage or native clipboard behaviour.
+Keep test homes and temporary output separate from real Hermes data. The Python tests use fixture databases and disable online pricing. Optional native-provider contract tests need `HERMES_CAPTURE_CORE` set to a read-only Hermes source checkout; otherwise they skip.
 
-Tests set `HERMES_USAGE_PRICING_OFFLINE=1` and use temporary fixture databases. Keep `HOME`, `HERMES_HOME` and temporary output isolated from real Hermes data when running verification.
-
-The optional native-provider contract tests require `HERMES_CAPTURE_CORE` pointing to an explicitly supplied read-only Hermes source tree. Without it, source-dependent tests skip. They execute selected real conversion/dispatch definitions with synthetic transports, not Hermes startup or authenticated clients. The provider-fix verification ran **318 Python tests successfully**, including these contracts; that is a recorded check, not a promise about every future environment.
-
-## Installation is separate from source changes
-
-Against an explicitly chosen, existing real Hermes home:
-
-```bash
-python3 install.py --home /actual/hermes/home
-# Only when installation is intended:
-python3 install.py --home /actual/hermes/home --apply
-```
-
-The first command is plan-only. Applying creates file backups and a rollback receipt, but does not enable the plugin, restart producers, alter credentials or remove ledger data. **The native Claude/Gemini observer and accounting updates require restarting the backend and producing agents at a safe time. Analytics-only reload is insufficient.** Desktop UI files can hot-reload independently. Do not disrupt active workloads. Symlink destinations are refused; identify the real installation before applying.
-
-Enable only once per intended profile. This plugin needs no built-in tool override permission. For example:
-
-```bash
-hermes --profile infra plugins enable ai-usage-tracker --no-allow-tool-override
-```
-
-The explicit denial avoids Hermes's legacy override question and clears an existing override grant in the selected profile. Ordinary file updates do not need another enable command. Native `hermes plugins install nonspacial/hermes-ai-usage-tracker --enable` is an alternative only after the intended source revision has been published; it installs remote code, not uncommitted local changes. Do not use `--force` to replace a working installation without first arranging preservation of local changes.
-
-Quotas and background pricing can make network calls. The recorder does not add inference calls, collect prompt/response text or export credentials. Local paths and session IDs are private metadata; review exports before sharing.
-
-## Local import provenance
-
-The fork and upstream `main` both resolved to `77bdf112117d6d8811477d8837d3cb9a3a9d99d9` during import. All original-source entries in `UPSTREAM_SOURCE_MANIFEST.json` matched that checkout. `PRESERVED_UPSTREAM.json` retains component/probe regression fingerprints.
-
-On the originating workstation, all pre-existing project contents were preserved under Git-ignored `.local-history/`, including the complete handoff, original test.17 package, archives and historical usage exports. They are not part of the publishable repository. At the original import, runtime/UI source was unchanged and development paths and installer packaging were adapted to this root layout. Subsequent changes are recorded in Git history; see [IMPORT_NOTES.md](IMPORT_NOTES.md) for the historical import checks.
-
-## Screenshots
-
-Real-app captures with private identifiers redacted. Click to enlarge. Token values are snapshots; dollar figures are API-equivalent estimates, not subscription charges.
-
-<p>
-<a href="docs/images/live-requests-table.png"><img width="700" src="docs/images/live-requests-table.png" alt="Live Requests tab as a wide table; private identifier columns redacted"></a>
-<a href="docs/images/live-cache-wide.png"><img width="393" src="docs/images/live-cache-wide.png" alt="Live Cache and costs tab with component cards and saved-rate table"></a>
-</p>
-
-<p>
-<a href="docs/images/live-compressions.png"><img width="218" src="docs/images/live-compressions.png" alt="Live Compressions tab showing a committed compression record"></a>
-<a href="docs/images/live-requests-cards.png"><img width="306" src="docs/images/live-requests-cards.png" alt="Live Requests tab with collapsed session headers and an expanded request"></a>
-</p>
-
-<p>
-<a href="docs/images/live-cache-cards.png"><img width="147" src="docs/images/live-cache-cards.png" alt="Live Cache and costs in a narrower pane with wrapped metrics and record-style rates"></a>
-<a href="docs/images/live-wide-summary.png"><img width="473" src="docs/images/live-wide-summary.png" alt="Wide Codex view with subscription allowance, main token counter and hourly usage chart"></a>
-</p>
-
-<p>
-<a href="docs/images/live-models-tasks.png"><img width="214" src="docs/images/live-models-tasks.png" alt="Models and tasks accordions with one group expanded and private task IDs redacted"></a>
-<a href="docs/images/live-skills-thin.png"><img width="139" src="docs/images/live-skills-thin.png" alt="Skills frequency in a narrow pane with the pie above two legend columns"></a>
-</p>
-
-<p>
-<a href="docs/images/live-skills-wide.png"><img width="391" src="docs/images/live-skills-wide.png" alt="Wide Skills frequency view with a capped pie and three-column legend"></a>
-<a href="docs/images/live-context-footprint.png"><img width="527" src="docs/images/live-context-footprint.png" alt="Context footprint snapshot with estimated system, skill and conversation token composition"></a>
-</p>
-
-<p>
-<a href="docs/images/live-timeline.png"><img width="529" src="docs/images/live-timeline.png" alt="Session timeline with an expanded observation and redacted session and project identifiers"></a>
-</p>
+Browser tests are standalone scripts under `tests/ui`, not pytest test functions. They use synthetic records in an offline preview. Regenerate `preview.html` with `build_preview.py`, install Chromium through Playwright, set `CHROMIUM_PATH` to its executable and run the relevant test script. These checks do not prove live provider capture or native clipboard behaviour.
