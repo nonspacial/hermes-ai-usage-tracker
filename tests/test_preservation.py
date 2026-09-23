@@ -16,9 +16,23 @@ def test_original_desktop_components_unchanged():
         # selection and scoped reads. The all-profiles browser suites cover
         # persistence, individual profiles, stale replies and read-only polling.
         # Keep the original-source manifest hashes as historical evidence.
+        # UsageChip's approved display labels changed; normalise only those
+        # exact strings before checking its immutable historical fingerprint.
         if name in ('PageHeader', 'ProviderCard', 'ProfilePicker', 'useUsage'):
             continue
         start=source.index('function '+name+'(');body=source[start:source.index('\n}',start)+2]
+        if name == 'UsageChip':
+            preview=(ROOT/'preview.html').read_text()
+            start=preview.index('function '+name+'(')
+            assert body==preview[start:preview.index('\n}',start)+2],name
+            for approved, historical in (
+                (": 'AI usage +'", ": 'AI usage'"),
+                (' (pinned on the AI usage + page)', ' (pinned on the AI usage page)'),
+                ('`AI usage +: ${detail}`', '`AI usage: ${detail}`'),
+                (" : data ? 'AI usage +' : 'AI usage +…'", " : data ? 'AI usage' : 'AI usage…'"),
+            ):
+                assert body.count(approved)==1,(name,approved)
+                body=body.replace(approved,historical)
         assert hashlib.sha256(body.encode()).hexdigest()==sha,name
 
 def test_original_quota_probe_functions_unchanged():

@@ -64,7 +64,7 @@ def run():
   # Nested project -> session -> Back -> Back, restoring the original grouping.
   subnav.get_by_role('tab',name='Overview',exact=True).click()
   page.get_by_role('group',name='Breakdown grouping').get_by_role('button',name='Project',exact=True).click()
-  page.locator('.au-breakdown tbody button').filter(has_text='hermes-agent').click()
+  page.locator('.au-breakdown tbody button.au-drill').filter(has_text='hermes-agent').click()
   expect(page.get_by_role('combobox',name='Project',exact=True)).to_have_value('repo-hermes')
   expect(rows()).to_have_count(5)
   session_link('demo-session-2').click();expect(rows()).to_have_count(1)
@@ -76,7 +76,7 @@ def run():
   expect(page.get_by_role('combobox',name='Project',exact=True)).to_have_value('')
   # Subagent entry path clears BOTH narrow subagent ID and agent scope.
   page.get_by_role('group',name='Breakdown grouping').get_by_role('button',name='Subagents',exact=True).click()
-  page.locator('.au-breakdown tbody button').filter(has_text='test-worker').click()
+  page.locator('.au-breakdown tbody button.au-drill').filter(has_text='test-worker').click()
   expect(rows()).to_have_count(1)
   show_all.click();expect(rows()).to_have_count(7)
   expect(page.get_by_role('combobox',name='Agent scope',exact=True)).to_have_value('')

@@ -300,7 +300,7 @@ function QuotaBar({ window }) {
   })
 }
 
-function ProviderCard({ provider, isHidden }) {
+function ProviderCard({ provider, isHidden, onNavigate }) {
   const status = statusOf(provider)
   const windows = provider.quota?.windows || []
   const details = provider.quota?.details || []
@@ -314,7 +314,15 @@ function ProviderCard({ provider, isHidden }) {
       jsxs('div', {
         className: 'flex items-center gap-2',
         children: [
-          jsx('span', { className: 'text-sm font-medium', children: provider.label }),
+          onNavigate
+            ? jsx('button', {
+                type: 'button',
+                className: 'au-provider-name text-sm font-medium',
+                'aria-label': `Open ${provider.label} provider page`,
+                onClick: () => { haptic('tap'); onNavigate(provider.id) },
+                children: provider.label
+              })
+            : jsx('span', { className: 'au-provider-name-static text-sm font-medium', children: provider.label }),
           provider.quota?.plan
             ? jsx(Badge, { variant: 'muted', size: 'xs', children: provider.quota.plan })
             : null,
@@ -643,6 +651,8 @@ const ledgerCss = `
 .au-ledger .au-quota-home [class~='w-28']{width:112px;flex-shrink:0}
 .au-ledger .au-quota-home .border{background:transparent;border-radius:5px;padding:12px;margin:0}
 .au-ledger .au-quota-home .border button{background:transparent;border:0;padding:0 4px}
+.au-ledger .au-quota-home button.au-provider-name{padding:2px 4px;margin:-2px -4px;border:0;background:transparent;color:var(--ui-text-primary);text-align:left;white-space:normal;overflow-wrap:anywhere}
+.au-ledger .au-quota-home button.au-provider-name:is(:hover,:focus-visible){color:var(--ui-accent);background:var(--au-selected-bg);text-decoration:underline;text-underline-offset:3px}
 .au-ledger .au-provider-limits{margin:0 0 16px;min-width:0}
 .au-quota-card{container-type:inline-size;min-width:0}
 .au-quota-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 24px}
@@ -1231,6 +1241,39 @@ const QUOTA_PAGE='Subscriptions';
 // Providers are the main destinations; detail pages never enter that navigation.
 const QUOTA_HOME='__quota_home__';
 const PROVIDER_SUBPAGES=['Overview','Requests','Cache & costs','Compressions','Models & tasks','Skills usage'];
+const VIEW_KEY='usage-view-v1:';
+const viewScope=selected=>isAllProfiles(selected)?'aggregate:all':selected?'profile:'+selected:'';
+const PERIODS=['1h','24h','7d','30d','90d','all','custom'];
+const GROUPS=['model','time','project','session','subagent'];
+const SKILL_VIEWS=['Frequency','Context footprint','Session timeline'];
+const safeId=value=>typeof value==='string'&&value.length<=160&&!/[\x00-\x1f]/.test(value)?value:'';
+const option=(value,choices,fallback)=>choices.includes(value)?value:fallback;
+function readView(profile){
+ const defaults={provider:QUOTA_HOME,tab:'Overview',mode:'Tokens',period:'24h',customStart:'',customEnd:'',
+  filterTest:'',compMode:'all',group:'model',filters:{...EMPTY_REQUEST_FILTERS},skillsView:'Frequency',skillsModel:'',skillsSkill:''};
+ // An implicit server profile is not stable across backend/profile changes.
+ if(!profile)return defaults;
+ let raw;try{raw=storage?.get(VIEW_KEY+encodeURIComponent(profile),null)}catch{return defaults}
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||raw.version!==1||raw.profile!==profile)return defaults;
+ const filters=raw.filters&&typeof raw.filters==='object'&&!Array.isArray(raw.filters)?raw.filters:{};
+ const datetime=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?$/.test(value)&&!Number.isNaN(Date.parse(value))?value:'';
+ const period=option(raw.period,PERIODS,'24h');
+ const customStart=period==='custom'?datetime(raw.customStart):'';
+ const customEnd=period==='custom'?datetime(raw.customEnd):'';
+ return {...defaults,
+  provider:raw.provider===''?'':raw.provider===QUOTA_HOME?QUOTA_HOME:safeId(raw.provider)||QUOTA_HOME,
+  tab:option(raw.tab,PROVIDER_SUBPAGES,'Overview'),mode:option(raw.mode,['Tokens','Cost'],'Tokens'),period,
+  customStart,customEnd:customStart&&customEnd&&Date.parse(customEnd)<Date.parse(customStart)?'':customEnd,
+  filterTest:safeId(raw.filterTest),compMode:option(raw.compMode,['all','compression','micro_compaction'],'all'),
+  group:option(raw.group,GROUPS,'model'),
+  filters:{agent:option(filters.agent,['','primary','subagent','unknown'],''),project:safeId(filters.project),
+   session:safeId(filters.session),sessionScope:option(filters.sessionScope,['family','exact'],'family'),subagentId:safeId(filters.subagentId)},
+  skillsView:option(raw.skillsView,SKILL_VIEWS,'Frequency'),skillsModel:safeId(raw.skillsModel),skillsSkill:safeId(raw.skillsSkill)};
+}
+function saveView(profile,view){
+ if(!profile)return;
+ try{storage?.set(VIEW_KEY+encodeURIComponent(profile),{version:1,profile,...view})}catch{/* in-memory state remains usable */}
+}
 function tabKeys(event){
  const keys=['ArrowLeft','ArrowRight','Home','End'];
  if(!keys.includes(event.key)||event.target.getAttribute('role')!=='tab')return;
@@ -1239,18 +1282,18 @@ function tabKeys(event){
  const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
  event.preventDefault();buttons[next].focus();buttons[next].click();
 }
-function QuotaHome({quota,selected,hiddenIds,showHidden}){
+function QuotaHome({quota,selected,hiddenIds,showHidden,onNavigate}){
  const data=quota.data,error=quota.error;
  if(error&&!data)return h(ErrorState,{title:'Could not load usage',description:String(error.message||error)},h(Button,{onClick:()=>quota.refetch()},'Retry'));
  if(!data)return h('div',{},h(Skeleton,{}),h(Skeleton,{}));
  if(isAllProfiles(selected))return h('section',{'data-testid':'quota-home'},notice('Combined subscription quota unavailable. Accounts may be shared across profiles; no quota probes are performed. Select an individual profile for its quota.'));
- const providers=data.providers||[],visible=providers.filter(p=>!hiddenIds.includes(p.id)),hidden=providers.filter(p=>hiddenIds.includes(p.id));
+ const providers=Array.isArray(data.providers)?data.providers:[],visible=providers.filter(p=>!hiddenIds.includes(p.id)),hidden=providers.filter(p=>hiddenIds.includes(p.id));
  const live=visible.filter(p=>p.quota?.available).length,profile=selected||data.profile||'this profile';
  return h('section',{className:'au-quota-home','data-testid':'quota-home'},
   error?h('p',{className:'au-muted'},'Showing the last good response — refresh failed: '+String(error.message||error)):null,
   !data.profiles?h('p',{className:'au-muted'},'Older backend: restart Hermes to load profile selection.'):null,
   h('p',{className:'au-muted'},providers.length+' provider(s)'+((data.profiles||[]).length>1?' in '+profile:'')+' · '+live+' reporting live quota'+((data.profiles||[]).length>1?' · switch profile above to inspect another':'')),
-  h(Separator,{}),h('div',{className:'flex flex-col gap-2'},...visible.map(p=>h(ProviderCard,{key:p.id,provider:p})),...(showHidden?hidden.map(p=>h(ProviderCard,{key:'hidden-'+p.id,provider:p,isHidden:true})):[]),
+  h(Separator,{}),h('div',{className:'flex flex-col gap-2'},...visible.map(p=>h(ProviderCard,{key:p.id,provider:p,onNavigate})),...(showHidden?hidden.map(p=>h(ProviderCard,{key:'hidden-'+p.id,provider:p,isHidden:true,onNavigate})):[]),
   !visible.length?h(EmptyState,{title:providers.length?'Every provider is hidden':'No providers to show',description:providers.length?'Use Hidden above to bring them back.':'This profile has no provider credentials and no recent usage.'}):null),
   h('p',{className:'au-muted'},"✕ on a card hides that provider (persisted, and excluded from the status-bar chip) · quota comes from each provider's own API using this profile's credentials."))
 }
@@ -1509,9 +1552,10 @@ function UsagePie({items,label,onChoose,selected}){
    key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
   },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
 }
-function SkillsUsageView({params,scope,onSession,profile,windowSeconds}){
- const [view,setView]=useState('Frequency'),[model,setModel]=useState(''),[skill,setSkill]=useState(''),[offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
- useEffect(()=>{setModel('');setSkill('');setOffset(0);setSnapshotId('')},[scope]);
+function SkillsUsageView({params,scope,onSession,profile,windowSeconds,view,setView,model,setModel,skill,setSkill}){
+ const [offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
+ const [scopeOwner]=useState(()=>({scope}));
+ useEffect(()=>{if(scopeOwner.scope!==scope){scopeOwner.scope=scope;setModel('');setSkill('');setOffset(0);setSnapshotId('')}},[scope]);
  const p=new URLSearchParams(params);p.set('model',model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
  const path='/ledger/skills?'+p,key=path;
  const query=useQuery({...readOptions(profile),queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,path),_skillsScope:key})});
@@ -1576,20 +1620,39 @@ function SkillsUsageView({params,scope,onSession,profile,windowSeconds}){
 
 function UsagePage(){
  const selected=useValue($profile);
- const [provider,setProvider]=useState(QUOTA_HOME),[tab,setTab]=useState('Overview');
  // Remount profile-local filters, details and async controls synchronously, before
  // any request for the new scope can inherit a qualified ID from the old one.
- return h(UsagePageScope,{key:pickerValue(selected),selected,provider,setProvider,tab,setTab});
+ return h(UsagePageScope,{key:pickerValue(selected),selected});
 }
-function UsagePageScope({selected,provider,setProvider,tab,setTab}){
+function UsagePageScope({selected}){
+ const [saved]=useState(()=>readView(viewScope(selected)));
+ const [providerChoice,setProvider]=useState(saved.provider),[tab,setTab]=useState(saved.tab);
+ const [restoringProvider,setRestoringProvider]=useState(()=>!!saved.provider&&saved.provider!==QUOTA_HOME);
  const aggregate=isAllProfiles(selected);
  const inventory=useQuery({queryKey:[ID,'profiles'],queryFn:()=>sharedLedgerRead('/ledger/profiles'),staleTime:60000,retry:false,refetchOnWindowFocus:false});
  const [showHidden,setShowHidden]=useState(false), hiddenIds=useValue($hidden),chipProvider=useValue($chipProvider)
  const quota=useUsage(selected,REFRESH_PAGE_MS)
- const [displayMode,setDisplayMode]=useState('Tokens'),[period,setPeriod]=useState('24h'),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(''),[customEnd,setCustomEnd]=useState(''),[filterTest,setFilterTest]=useState(''),[err,setErr]=useState(''),[compMode,setCompMode]=useState('all'),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
- const [requestFilters,setRequestFilters]=useState(()=>({...EMPTY_REQUEST_FILTERS}));
+ // A saved provider ID is not authority to query the ledger. Wait for the
+ // selected profile's quota catalogue; never borrow another profile's rows.
+ const quotaCurrent=!!quota.data&&!quota.isPlaceholderData&&
+  (aggregate?quota.data.profile_scope==='all':!selected||quota.data.profile===selected);
+ const available=quotaCurrent&&Array.isArray(quota.data.providers)
+  ?quota.data.providers.some(row=>row&&typeof row.id==='string'&&row.id===providerChoice):false;
+ // A cached match is safe; an absent ID, wrong-profile response or retry error
+ // cannot become a fallback until the current catalogue read has settled.
+ const catalogueReady=available||(!quota.isFetching&&(!!quota.error||!!quota.data));
+ const provider=restoringProvider?(catalogueReady&&available?providerChoice:QUOTA_HOME):providerChoice;
+ useEffect(()=>{
+  if(restoringProvider&&catalogueReady){setProvider(provider);setRestoringProvider(false)}
+ },[restoringProvider,catalogueReady,provider]);
+ const [displayMode,setDisplayMode]=useState(saved.mode),[period,setPeriod]=useState(saved.period),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(saved.customStart),[customEnd,setCustomEnd]=useState(saved.customEnd),[filterTest,setFilterTest]=useState(saved.filterTest),[err,setErr]=useState(''),[compMode,setCompMode]=useState(saved.compMode),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
+ const [requestFilters,setRequestFilters]=useState(()=>saved.filters);
  const {agent,project,session,sessionScope,subagentId}=requestFilters;
- const [breakdownGroup,setBreakdownGroup]=useState('model');
+ const [breakdownGroup,setBreakdownGroup]=useState(saved.group);
+ const [skillsView,setSkillsView]=useState(saved.skillsView),[skillsModel,setSkillsModel]=useState(saved.skillsModel),[skillsSkill,setSkillsSkill]=useState(saved.skillsSkill);
+ useEffect(()=>{if(restoringProvider&&!catalogueReady)return;saveView(viewScope(selected),{provider,tab,mode:displayMode,period,customStart,customEnd,filterTest,
+  compMode,group:breakdownGroup,filters:requestFilters,skillsView,skillsModel,skillsSkill})},
+  [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
  const [drillTrail,setDrillTrail]=useState({context:'',entries:[]});
  const [requestPage,setRequestPage]=useState({key:'',offset:0});
  // The rolling clock is intentionally excluded: refreshing live totals must not
@@ -1655,7 +1718,7 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
  const [identityLabels]=useState(()=>new Map());
  const currentData=ledger.data;
  if(currentData){ledgerCache.scope=readScope;ledgerCache.data=currentData}
- const data=currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quota.data?.providers||[];
+ const data=currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quotaCurrent&&Array.isArray(quota.data.providers)?quota.data.providers:[];
  for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
   for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
  }
@@ -1717,7 +1780,7 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
  const subNav=h('nav',{className:'au-tabs au-subpage-tabs','aria-label':'Provider subpages','data-testid':'provider-subnavigation'},
   h('div',{role:'tablist','aria-label':'Provider subpages',style:{display:'contents'},onKeyDown:tabKeys},...PROVIDER_SUBPAGES.map(v=>h('button',{key:v,id:subId(v),role:'tab','aria-selected':tab===v,'aria-controls':'au-subpage-panel',tabIndex:tab===v?0:-1,onClick:()=>setTab(v)},v))));
  if(isQuota)return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
-  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota,selected,hiddenIds,showHidden}))))
+  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota:quotaCurrent&&Array.isArray(quota.data.providers)?quota:{...quota,data:null,error:catalogueReady?quota.error||new Error('Provider catalogue unavailable for this profile.'):null},selected,hiddenIds,showHidden,onNavigate:setProvider}))))
  let body=null
  if(data?.summary){
    if(tab==='Overview')body=h(Breakdown,{data,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
@@ -1729,7 +1792,7 @@ function UsagePageScope({selected,provider,setProvider,tab,setTab}){
     data.groups.map(g=>JSON.stringify([g.provider,g.model,g.agent_kind,g.task])),
     data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,readable(g,'task')].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
- if(tab==='Skills usage')body=h(SkillsUsageView,{profile:selected,windowSeconds,params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'})});
+ if(tab==='Skills usage')body=h(SkillsUsageView,{profile:selected,windowSeconds,params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'}),view:skillsView,setView:setSkillsView,model:skillsModel,setModel:setSkillsModel,skill:skillsSkill,setSkill:setSkillsSkill});
  return h(AnalyticsPane,{},h('style',{},ledgerCss),
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
   h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,

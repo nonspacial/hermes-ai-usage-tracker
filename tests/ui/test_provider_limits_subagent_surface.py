@@ -76,6 +76,8 @@ def run():
         page.get_by_role('group',name='Time window',exact=True).get_by_role('button',name='30 days',exact=True).click()
         assert card_first(page,'openai-codex').inner_text()==before
         page.get_by_role('combobox',name='Hermes profile',exact=True).select_option('profile:default')
+        expect(page.get_by_test_id('quota-home')).to_be_visible()
+        main.get_by_role('tab',name='Codex',exact=True).click()
         expect(page.get_by_test_id('provider-limits')).to_have_attribute('data-profile','default')
         expect(page.get_by_test_id('provider-limits').get_by_text('99% left',exact=True)).to_be_visible()
         page.get_by_role('combobox',name='Hermes profile',exact=True).select_option('profile:infra')

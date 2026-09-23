@@ -2,6 +2,7 @@
 import csv
 import io
 import os
+import re
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 
@@ -24,6 +25,8 @@ def run():
         page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.locator('tbody tr').first).to_be_visible()
         picker.select_option('profile:all')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.get_by_role('button', name='Start test marker')).to_be_visible()
         assert page.evaluate("scopeCalls.some(c=>c.path.startsWith('/ledger?')&&new URL(c.path,'https://offline').searchParams.get('profile')==='all')")
         assert page.evaluate("demoStored['selected-profile-v1']") == 'all'
@@ -31,6 +34,8 @@ def run():
         page.get_by_role('textbox', name='Session ID', exact=True).fill('demo-session-0')
         page.evaluate('window.scopeCalls=[];window.holdAggregate=[]')
         picker.select_option('scope:all')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.get_by_role('textbox', name='Session ID', exact=True)).to_have_value('')
         expect(page.locator('tbody tr')).to_have_count(0)
         assert page.evaluate("demoStored['selected-profile-v1']") == 'all'
@@ -39,12 +44,16 @@ def run():
         # A held aggregate response cannot reappear after selecting an individual.
         page.wait_for_function('holdAggregate.length>0')
         picker.select_option('profile:default')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.locator('tbody tr').first).to_be_visible()
         page.evaluate('holdAggregate.splice(0).forEach(f=>f());window.holdAggregate=null')
         expect(picker).to_have_value('profile:default')
         assert not page.locator('[data-row-id^="ap1."]').count()
         # Enter aggregate with colliding local IDs from two physical profiles.
         picker.select_option('scope:all')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.get_by_test_id('profile-coverage')).to_contain_text('complete')
         expect(page.locator('tbody tr').first).to_be_visible()
         keys = page.locator('tbody tr').evaluate_all('(rows)=>rows.map(r=>r.dataset.rowId)')
@@ -123,6 +132,8 @@ def run():
         # minute; unchanged cheap checks before then do not read the ledger.
         picker.select_option('profile:infra')
         picker.select_option('scope:all')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('tab', name='Requests', exact=True).click()
         expect(page.locator('tbody tr').first).to_be_visible()
         starts = page.evaluate('demoSocketStarts')
         page.evaluate('window.scopeCalls=[]')
@@ -152,10 +163,23 @@ def run():
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert page.locator('.au-reader').evaluate('e=>e.clientHeight>0&&e.closest(".au-pane").clientHeight<=innerHeight')
         page.screenshot(path=str(ROOT / 'tests/ui/artifacts/all-profiles-narrow.png'))
+        # Render the shipped chip in the offline fixture (kept byte-identical
+        # to desktop/plugin.js by test_preservation) and exercise its route.
+        page.evaluate("""() => {
+            window.chipNavigation=[];
+            host.navigate=path=>chipNavigation.push(path);
+            const node=document.createElement('div');
+            node.id='chip-behaviour';document.body.append(node);
+            ReactDOM.render(h(UsageChip,{}),node);
+        }""")
+        chip = page.locator('#chip-behaviour').get_by_role('button', name=re.compile(r'^AI usage \+:'))
+        expect(chip).to_have_text('AI usage +')
+        chip.click()
+        assert page.evaluate('chipNavigation') == ['/ai-usage']
         assert not errors, errors
         assert not network, network
         browser.close()
-    print('PASS tagged picker, real all profile, persistence, delayed switching, scoped IDs/drills/snapshots, partial CSV, unavailable values, no mutations/socket, visible rolling expiry and single-flight reconciliation and narrow pane')
+    print('PASS tagged picker, real all profile, persistence, delayed switching, scoped IDs/drills/snapshots, partial CSV, unavailable values, no mutations/socket, visible rolling expiry, single-flight reconciliation, narrow pane and chip label/navigation')
 
 
 if __name__ == '__main__':
