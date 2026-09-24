@@ -849,9 +849,9 @@ function QuotaBar({ window }) {
 // Subscriptions and the Codex provider page; query identity includes profile.
 const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
 function CodexResetControls({profile}) {
-  const [open,setOpen] = useState(false), [confirm,setConfirm] = useState(false)
+  const [confirm,setConfirm] = useState(false)
   const [busy,setBusy] = useState(false), [message,setMessage] = useState('')
-  const badgeRef=useRef(null),useRefButton=useRef(null),dialogRef=useRef(null),confirmed=useRef(null)
+  const badgeRef=useRef(null),dialogRef=useRef(null),confirmed=useRef(null),operation=useRef(false)
   const path = '/codex/resets?profile='+encodeURIComponent(profile)
   const query = useQuery({queryKey:[ID,'codex-resets',profile],queryFn:()=>rest(path),
     retry:false,refetchInterval:60000,refetchIntervalInBackground:false,refetchOnWindowFocus:false})
@@ -862,7 +862,7 @@ function CodexResetControls({profile}) {
   const confirmationValid=eligible && confirmed.current?.profile===profile &&
     confirmed.current?.binding===state?.binding && confirmed.current?.episode===state?.episode &&
     confirmed.current?.count===state?.count
-  function restoreFocus(){(useRefButton.current && !useRefButton.current.disabled ? useRefButton.current : badgeRef.current)?.focus()}
+  function restoreFocus(){badgeRef.current?.focus()}
   useEffect(()=>{if(confirm && !confirmationValid){setConfirm(false);restoreFocus()}},
     [confirm,confirmationValid])
   function closeConfirm(){setConfirm(false);restoreFocus()}
@@ -882,18 +882,20 @@ function CodexResetControls({profile}) {
     : count === 0 ? 'No banked resets available.'
     : !eligible ? 'No provider-confirmed five-hour or weekly exhaustion; rounded 0% is not enough.' : 'An eligible limit was confirmed by Codex.'
   async function auto(e) {
-    if(!state?.binding || busy)return
+    if(!state?.binding || busy || operation.current)return
     const enabled=e.currentTarget.checked
+    operation.current=true
     setBusy(true);setMessage('')
     try {
       const result=await rest('/codex/resets/auto',{method:'POST',body:{profile,binding:state.binding,enabled}})
       if(result.profile!==profile)throw new Error('Wrong profile response')
       await query.refetch({cancelRefetch:false})
     }catch(err){setMessage(String(err.message||err));await query.refetch({cancelRefetch:false})}
-    finally{setBusy(false)}
+    finally{operation.current=false;setBusy(false)}
   }
   async function redeem() {
-    if(!confirmationValid || busy)return
+    if(!confirmationValid || busy || operation.current)return
+    operation.current=true
     setBusy(true);setConfirm(false);setMessage('')
     badgeRef.current?.focus()
     try {
@@ -905,30 +907,26 @@ function CodexResetControls({profile}) {
       setMessage(result.outcome==='reset'||result.outcome==='alreadyRedeemed'
         ? 'Reset applied; Codex limits were read back.' : 'Codex returned '+result.outcome+'; no reset was applied.')
     }catch(err){setMessage(String(err.message||err))}
-    finally{setBusy(false);await query.refetch({cancelRefetch:false})}
+    finally{try{await query.refetch({cancelRefetch:false})}finally{operation.current=false;setBusy(false)}}
   }
   return jsxs('div',{className:'au-reset-header','data-testid':'codex-resets',children:[
     jsxs('label',{className:'au-reset-auto',children:[jsxs('span',{children:[
-      jsx('input',{type:'checkbox','aria-label':'Auto use banked Codex reset',
+      'Auto use ',jsx('input',{type:'checkbox','aria-label':'Auto use banked Codex reset',
         'aria-describedby':'au-reset-auto-warning',checked:!!state?.auto,
-        disabled:!state?.binding||!!query.error||busy||blocked,onChange:auto}), ' Auto use']}),
+        disabled:!state?.binding||!!query.error||busy||blocked,onChange:auto})]}),
       jsx('span',{id:'au-reset-auto-warning',className:'au-reset-tooltip',role:'tooltip',children:RESET_WARNING})]}),
     jsx('button',{type:'button',className:'au-reset-badge',
       'data-tone':tone,'aria-label':'Resets: '+(count===null?'unknown':count),
-      title:reason,ref:node=>{badgeRef.current=node},onClick:()=>{setOpen(!open);setConfirm(false);confirmed.current=null},children:'Resets: '+(count===null?'—':count)}),
-    open?jsxs('div',{className:'au-reset-popover',role:'group','aria-label':'Codex banked resets',children:[
-      jsx('div',{children:count===null?'Banked reset balance unavailable.':count+' banked reset'+(count===1?'':'s')+' available.'}),
-      jsx('div',{className:'au-reset-reason',children:reason}),
-      jsx('span',{title:eligible?'Redeem one banked reset':reason,children:
-        jsx('button',{type:'button',ref:node=>{useRefButton.current=node},disabled:!eligible||busy,title:eligible?'Redeem one banked reset':reason,
-          className:!eligible?'au-reset-blocked':'',onClick:()=>{confirmed.current={profile,binding:state.binding,episode:state.episode,count:state.count};setConfirm(true)},children:busy?'Checking…':'Use one reset'})}),
-      confirm && confirmationValid?jsxs('div',{ref:node=>{if(node && !dialogRef.current)node.querySelector('button')?.focus();dialogRef.current=node},role:'alertdialog','aria-label':'Confirm banked reset','aria-modal':true,onKeyDown:dialogKeys,children:[
-        jsx('p',{children:'Spend one banked reset? This refreshes eligible five-hour and weekly allowances and can change the weekly reset date.'}),
+      title:reason,ref:node=>{badgeRef.current=node},onClick:()=>{
+        if(!eligible||busy||operation.current)return
+        confirmed.current={profile,binding:state.binding,episode:state.episode,count:state.count}
+        setConfirm(true)
+      },children:'Resets: '+(count===null?'—':count)}),
+    confirm && confirmationValid?jsxs('div',{className:'au-reset-dialog',ref:node=>{if(node&&node!==dialogRef.current)node.querySelector('button')?.focus();dialogRef.current=node},role:'alertdialog','aria-label':'Confirm banked reset','aria-modal':true,onKeyDown:dialogKeys,children:[
+        jsx('p',{children:'Are you sure you want to use one banked reset? This refreshes eligible five-hour and weekly allowances and can change the weekly reset date.'}),
         jsx('button',{type:'button',onClick:redeem,disabled:busy||!confirmationValid,children:'Confirm use'}),
         jsx('button',{type:'button',onClick:closeConfirm,children:'Cancel'})]}):null,
-      message?jsx('p',{role:'status',children:message}):null,
-      jsx('button',{type:'button',onClick:()=>query.refetch({cancelRefetch:false}),disabled:busy,children:'Refresh balance'})
-    ]}):null
+    message?jsx('span',{role:'status',children:message}):null
   ]})
 }
 
@@ -1304,11 +1302,9 @@ const ledgerCss = `
 .au-reset-badge[data-tone="zero"]{color:var(--ui-text-quaternary)}
 .au-reset-badge[data-tone="waiting"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-text-warning,#d2b776)!important}
 .au-reset-badge[data-tone="ready"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-text-success,#64bba8)!important}
-.au-reset-popover{position:absolute;z-index:20;top:calc(100% + 6px);right:0;width:min(320px,80vw);padding:12px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg);color:var(--ui-text-primary);box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);white-space:normal;line-height:1.45}
-.au-reset-popover button{margin:6px 6px 0 0!important;padding:4px 8px!important;border:1px solid var(--ui-stroke-secondary)!important;border-radius:4px!important}
-.au-reset-popover button:disabled{cursor:not-allowed;opacity:.65}
-.au-reset-popover .au-reset-blocked{color:var(--ui-text-error,#d58c96)!important;border-color:var(--ui-stroke-error,#613f49)!important}
-.au-reset-reason{color:var(--ui-text-secondary);margin-top:5px}
+.au-reset-dialog{position:absolute;z-index:20;top:calc(100% + 6px);right:0;width:min(320px,80vw);padding:12px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg);color:var(--ui-text-primary);box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);white-space:normal;line-height:1.45}
+.au-reset-dialog button{margin:6px 6px 0 0!important;padding:4px 8px!important;border:1px solid var(--ui-stroke-secondary)!important;border-radius:4px!important}
+.au-reset-dialog button:disabled{cursor:not-allowed;opacity:.65}
 .au-quota-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 24px}
 .au-quota-rows>*{min-width:0;overflow-wrap:anywhere}
 .au-quota-rows:empty{display:none}
@@ -1763,13 +1759,13 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  h('div',{className:'au-muted'},count(s?.missing_usage||0)+' missing usage · '+count(s?.unpriced_requests||0)+' partially/unpriced'))))
 }
 
-function Breakdown({data,mode,onDrill,group,setGroup}){
- const seconds=data?.trend?.seconds||86400,minuteBuckets=seconds<3600;
- const timeName=seconds===60?'Minute':minuteBuckets?data?.trend?.unit||'2 minutes':data?.trend?.unit==='hour'?'Hour':'Day';
+function Breakdown({data,header,mode,onDrill,group,setGroup}){
+ const seconds=(data||header)?.trend?.seconds||86400,minuteBuckets=seconds<3600;
+ const timeName=seconds===60?'Minute':minuteBuckets?(data||header)?.trend?.unit||'2 minutes':(data||header)?.trend?.unit==='hour'?'Hour':'Day';
  // Only the time table is reversed; the shared chart keeps chronological buckets.
  // Other groups arrive ordered by their latest call across the full filtered set.
- const rows=group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
- const total=mode==='Cost'?Number(data.summary.known_cost_usd):data.summary.known.total_tokens;
+ const rows=!data?.summary?[]:group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
+ const total=mode==='Cost'?Number(data?.summary?.known_cost_usd||0):data?.summary?.known?.total_tokens||0;
  const grouping={model:'Model',time:timeName,project:'Project',session:'Session',subagent:'Subagents'};
  function name(g,drill=true){
   const actionable=drill&&nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
@@ -1793,7 +1789,8 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
    {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
    {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
   ]
- }))):h('p',{className:'au-muted'},'No recorded activity in this window.'))
+ }))):h('p',{className:'au-muted',role:!data?.summary?'status':undefined,'data-testid':!data?.summary?'ledger-view-pending':undefined},
+  data?.summary===null?'Recorded usage unavailable for this selection.':data?.summary?'No recorded activity in this window.':'Loading Overview · '+group+'…'))
 }
 
 // Request drill-downs are reversible local navigation. These fields narrow the
@@ -2166,13 +2163,14 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
 }
 function useLiveLedger({profile,path,view,enabled,windowSeconds}){
  const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
- const [owner]=useState(()=>({key:null,coordinator:null}));
+ const [owner]=useState(()=>({key:null,epoch:0,coordinator:null}));
  const key=JSON.stringify([pickerValue(profile),view,path,windowSeconds]);
- if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.coordinator=null}
+ if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.epoch++;owner.coordinator=null}
  useEffect(()=>{
   if(!enabled)return;
+  const epoch=owner.epoch;
   const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,publish:patch=>{
-   if(owner.key===key)setState(previous=>({...previous,...patch,view:key}));
+   if(owner.key===key&&owner.epoch===epoch)setState(previous=>({...previous.view===key&&previous.epoch===epoch?previous:{data:null,error:null,manual:false,checkLimited:false},...patch,view:key,epoch}));
   }});
   owner.coordinator=coordinator;
   coordinator.start();
@@ -2182,7 +2180,7 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds}){
   document.addEventListener('visibilitychange',visible);
   return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
  },[key,enabled]);
- const current=state.view===key?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
+ const current=state.view===key&&state.epoch===owner.epoch?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
  return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
 }
 function RefreshMenu({refresh,reload,busy}){
@@ -2442,9 +2440,13 @@ function UsagePageScope({selected}){
  const start=chartBounds&&period==='custom'?chartBounds.start:Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=chartBounds&&period==='custom'?chartBounds.end:period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
  const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId,model,model_provider:modelProvider});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest);
  if(bucketStart!=null&&bucketEnd!=null){params.set('bucket_start',String(bucketStart));params.set('bucket_end',String(bucketEnd))}
+ const projectionView=({'Overview':'overview','Requests':'requests','Cache & costs':'cache','Compressions':'compressions','Models & tasks':'models','Skills usage':'skills'})[tab];
+ params.set('view',projectionView);
+ if(projectionView==='overview')params.set('group',breakdownGroup);
  const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
+ const projectionScope=JSON.stringify([readScope,projectionView,projectionView==='overview'?breakdownGroup:null]);
  const windowSeconds=period!=='custom'?ranges[period]:0;
- const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:readScope,enabled:!isQuota&&customValid,windowSeconds});
+ const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:projectionScope,enabled:!isQuota&&customValid,windowSeconds});
  const connection=useRecorderHealth({profile:selected,enabled:!isQuota,onHint:ledger.hint,readError:ledger.error,changeLimited:ledger.checkLimited});
  useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
@@ -2468,18 +2470,25 @@ function UsagePageScope({selected}){
     (error.status===404||error.status===405||/404|405/.test(String(error.message)))?'Reload support is not active yet. One backend restart is required.':String(error.message||'Analytics reload failed; previous code remains active.'));
   }finally{reloadControl.busy=false;if(reloadControl.alive)setReloadBusy(false)}
  }
- const [ledgerCache]=useState(()=>({scope:'',data:null}));
+ const [ledgerCache]=useState(()=>({scope:'',data:null,headerScope:'',header:null}));
  const [detailEntries]=useState(()=>new Map());
  const [identityLabels]=useState(()=>new Map());
  const currentData=ledger.data;
- if(currentData){ledgerCache.scope=readScope;ledgerCache.data=currentData}
- const data=currentData||(ledgerCache.scope===readScope?ledgerCache.data:null),providers=quotaCurrent&&Array.isArray(quota.data.providers)?quota.data.providers:[];
+ // A committed selection starts a new flight even when returning to a view
+ // visited earlier. Only same-view background refresh may retain its body.
+ if(ledgerCache.scope!==projectionScope){ledgerCache.scope=projectionScope;ledgerCache.data=null}
+ if(currentData){ledgerCache.data=currentData;ledgerCache.headerScope=readScope;ledgerCache.header=currentData}
+ const data=currentData||(ledgerCache.scope===projectionScope?ledgerCache.data:null);
+ // Only shared header fields may bridge a committed tab/group selection. Never
+ // render a previous breakdown or detail payload beneath the new tab label.
+ const headerData=data||(ledgerCache.headerScope===readScope?ledgerCache.header:null);
+ const providers=quotaCurrent&&Array.isArray(quota.data.providers)?quota.data.providers:[];
  for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
   for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
  }
  const detailContext={scope:selected,entries:detailEntries};
  const labels=Object.fromEntries(providers.map(p=>[p.id,p.label]));labels['openai-codex']='Codex';labels['nous']='Nous Portal'
- const names=[...new Set([...providers.map(p=>p.id),...(data?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
+ const names=[...new Set([...providers.map(p=>p.id),...(headerData?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
  const label=provider?(labels[provider]||provider):'All providers'
  const [manualQuotaBusy,setManualQuotaBusy]=useState(false);
  const refresh=()=>{if(reloadControl.busy||ledger.manual||manualQuotaBusy)return;pendingRefresh=true;
@@ -2492,6 +2501,7 @@ function UsagePageScope({selected}){
  async function exportAll(){setBusy(true);setErr('');try{
    const rows=[],seen=new Set();let offset=0,signature=null,exportCoverage=null;
    const frozen=new URLSearchParams(params);
+   frozen.delete('view');frozen.delete('group'); // Export requires the complete legacy response and catalog guards.
    frozen.set('start',String(data.window.start));frozen.set('end',String(data.window.end));
    for(;;){
     if(!reloadControl.alive||reloadControl.scope!==selected)throw new Error('Export cancelled: profile changed.');
@@ -2512,7 +2522,7 @@ function UsagePageScope({selected}){
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
  async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});setChartBounds(null);if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else{const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
- function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setChartBounds(null);setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const bounds=t.ended?markerWindow(t.started,t.ended):[localHalfHour(t.started),''];setCustomStart(bounds[0]);setCustomEnd(bounds[1])}
+ function chooseTest(id){const t=headerData?.tests?.find(t=>t.id===id);if(!t)return;setChartBounds(null);setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const bounds=t.ended?markerWindow(t.started,t.ended):[localHalfHour(t.started),''];setCustomStart(bounds[0]);setCustomEnd(bounds[1])}
  function changePeriod(v){if(v===period)return;setPeriod(v);setChartBounds(null);setFilterTest('');setAnchor(Date.now()/1000);if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null})}
  function selectChartRange(lo,hi){
   setCustomStart(localHalfHour(lo));setCustomEnd(localHalfHour(hi));setChartBounds({start:lo,end:hi});setPeriod('custom');if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null});
@@ -2541,8 +2551,8 @@ function UsagePageScope({selected}){
  if(isQuota)return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota:quotaCurrent&&Array.isArray(quota.data.providers)?quota:{...quota,data:null,error:catalogueReady?quota.error||new Error('Provider catalogue unavailable for this profile.'):null},selected,hiddenIds,showHidden,onNavigate:changeProvider}))))
  let body=null
+ if(tab==='Overview')body=h(Breakdown,{data,header:headerData,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
  if(data?.summary){
-   if(tab==='Overview')body=h(Breakdown,{data,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
    if(tab==='Requests')body=h(RequestView,{key:pageKey+':'+offset,data,offset,details:detailContext,onDrill:drill,more:()=>setOffset(data.next_offset),back:()=>setOffset(Math.max(0,offset-200))})
    if(tab==='Cache & costs')body=h(CacheView,{data,profile:selected,provider,refresh:ledger.hint,onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data,mode:compMode,setMode:setCompMode,details:detailContext})
@@ -2561,30 +2571,30 @@ function UsagePageScope({selected}){
    h('select',{className:'au-mode-select','aria-label':'Usage display',value:displayMode,onChange:e=>{setDisplayMode(e.target.value);}},...['Cost','Tokens'].map(v=>h('option',{key:v,value:v},v))),
    h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
-   h('span',{className:'au-muted au-window-label'},data?new Date(data.window.start*1000).toLocaleString()+' — '+new Date(data.window.end*1000).toLocaleString():'')),
+   h('span',{className:'au-muted au-window-label'},headerData?new Date(headerData.window.start*1000).toLocaleString()+' — '+new Date(headerData.window.end*1000).toLocaleString():'')),
   h('div',{className:'au-toolbar au-filters'},
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}):null,
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}):null,
   filterTest?h('button',{type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
   period==='custom'&&!customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart. No data is requested until valid.'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
-  h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(data?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
+  h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(headerData?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
   h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
   session?h('select',{'aria-label':'Session scope',value:sessionScope,onChange:e=>editRequestFilters({sessionScope:e.target.value})},h('option',{value:'family'},'Session + descendants'),h('option',{value:'exact'},'This session only')):null,
   subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+(identityLabels.get(subagentId)||subagentId.slice(-14))+' ×'):null,
   (project||agent||session||subagentId||model||bucketStart!=null)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
   !aggregate&&h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
   h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
-  data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
-  h(Coverage,{data}),
-  h(Summary,{data,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  headerData?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
+  h(Coverage,{data:headerData}),
+  h(Summary,{data:headerData,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
-  tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
+  tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
   err?notice(err):null,
   ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
-  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setChartBounds(null)},onEnd:v=>{setCustomEnd(v);setChartBounds(null)},window:data?.window}):null,
-  body||h('p',{className:'au-muted'},data?.summary===null?'Recorded usage unavailable for this selection.':'Waiting for ledger…'))))
+  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setChartBounds(null)},onEnd:v=>{setCustomEnd(v);setChartBounds(null)},window:headerData?.window}):null,
+  body||h('p',{className:'au-muted',role:'status','data-testid':'ledger-view-pending'},data?.summary===null?'Recorded usage unavailable for this selection.':'Loading '+tab+(tab==='Overview'?' · '+breakdownGroup:'')+'…'))))
 }
 
 
@@ -2697,6 +2707,32 @@ const plugin = {
 // BEGIN ALL PROFILES OFFLINE FIXTURES
 // Offline-only DTO fixtures. Never loaded by the packaged Desktop plugin.
 const baseDemoRest=demoRest;
+// Match projection.py's version-1 wire shape. Keep the legacy fixture full:
+// projected reads alone omit fields, rather than silently supplying full DTOs.
+const fixtureCommon=['generated_at','seq','window','summary','request_count','next_offset',
+ 'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
+const fixtureDetail=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
+ 'compressions','compression_truncated','groups','model_groups','project_groups',
+ 'session_groups','subagent_groups','agent_groups','health','rates','quota_observations',
+ 'crossing_start','crossing_end'];
+const fixtureGroups={model:'model_groups',time:null,project:'project_groups',
+ session:'session_groups',subagent:'subagent_groups'};
+const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
+ cache:['price_catalogs','applied_rate_groups'],compressions:['compressions','compression_truncated'],
+ models:['groups'],skills:[]};
+function fixtureProject(full,p){
+ const view=p.get('view'),group=p.get('group');
+ if(view===null){if(group!==null)throw new Error('Group requires a view');return full}
+ if(!Object.hasOwn(fixtureViews,view)||view==='overview'&&!Object.hasOwn(fixtureGroups,group)||
+    view!=='overview'&&group!==null)throw new Error('Invalid projection');
+ const included=[...new Set([...fixtureCommon,...fixtureViews[view],...(view==='overview'&&fixtureGroups[group]?[fixtureGroups[group]]:[])])].sort();
+ const omitted=fixtureDetail.filter(field=>!included.includes(field)).sort();
+ for(const field of included)if(!Object.hasOwn(full,field))throw new Error('Fixture lacks projected field '+field);
+ return {...Object.fromEntries(included.map(field=>[field,full[field]])),
+  ...Object.fromEntries(['profile_scope','read_only','refresh_mode','analytics_revision','coverage','quota','profile_sequences']
+   .filter(field=>Object.hasOwn(full,field)).map(field=>[field,full[field]])),
+  projection:{version:1,included,omitted}};
+}
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
 window.demoResets={infra:{profile:'infra',count:0,auto:false,binding:'fixture-infra',episode:null,exhausted:false,redeemable:false,blocked:false},
@@ -2753,9 +2789,10 @@ async function fixtureAggregate(u){
   out.requests=rows.slice(offset,offset+limit);out.request_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
   for(const [field,kind,key] of [['project_groups','project','key'],['session_groups','session','key'],['subagent_groups','subagent','key'],['project_options','project','id'],['compressions','compression','id'],['tests','test','id'],['groups',null,'id']])out[field]=active.flatMap(p=>(base[field]||[]).map(r=>fixtureQualify(r,p,kind,key)));
   out.compression_count=active.length?out.compressions.length:null;
+  out.compression_truncated=false;
   out.provider_groups=grouped(rows,['provider']);out.model_groups=grouped(rows.map(r=>({...r,model:r.response_model||r.model||'unknown'})),['provider','model']);out.applied_rate_groups=appliedRateGroups(rows);
  }
- return out;
+ return u.pathname==='/ledger'?fixtureProject(out,p):out;
 }
 demoRest=async function(path,options={}){
  const u=new URL(path,'https://offline.test');
@@ -2776,7 +2813,11 @@ demoRest=async function(path,options={}){
  }
  window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  if(u.pathname==='/ledger/profiles')return {profiles:fixtureProfiles,scope_options:[{label:'All profiles',profile_scope:'all'},...fixtureProfiles.map(p=>({label:p.name,profile:p.name,profile_scope:'selected'}))],default_profile_scope:'selected'};
- if(u.searchParams.get('profile_scope')!=='all')return baseDemoRest(path,options);
+ if(u.searchParams.get('profile_scope')!=='all'){
+  const result=await baseDemoRest(path,options);
+  if(u.pathname!=='/ledger')return result;
+  return fixtureProject({...result,compression_truncated:false},u.searchParams);
+ }
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
  if(u.pathname==='/usage')return {profile_scope:'all',read_only:true,providers:[],quota:{available:false,reason:'aggregate_quota_unavailable'}};
  if(u.pathname==='/ledger/status')return {profile_scope:'all',read_only:true,refresh_mode:'polling',status:'unavailable',reason:'Recorder health is profile-specific; select a profile.'};

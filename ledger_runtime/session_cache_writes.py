@@ -16,6 +16,10 @@ from typing import Iterable
 
 BASIS = 'max(0, current cache reads - previous cache reads), per session stream'
 
+# The same short-circuit expression is used by the unprojected summary and by
+# its per-read TEMP materialisation. Closed history never inspects process state.
+READ_STATE_SQL = "(CASE WHEN status IN ('abandoned_without_usage','abandoned_with_usage') THEN 'abandoned' WHEN status IN ('pending','usage_received') AND ended IS NULL THEN execution_state(data) ELSE 'closed' END)"
+
 
 def count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
@@ -120,19 +124,35 @@ def materialise_summary(c, sql):
         return sql
     expressions = dict.fromkeys(re.findall(r"json_extract\(data,'[^']+'\)", sql))
     fields = {expr: 'summary_value_' + str(i) for i, expr in enumerate(expressions)}
-    c.execute('CREATE TEMP TABLE read_summary_values AS SELECT id,' +
+    c.execute('CREATE TEMP TABLE read_summary_values AS SELECT id,ended,' +
               ','.join(expr + ' AS ' + name for expr, name in fields.items()) +
-              ' FROM session_write_projection')
+              ',' + READ_STATE_SQL + ' AS read_execution_state FROM ('
+              'SELECT p.id,p.data,r.ended,r.status FROM session_write_projection p '
+              'JOIN main.requests r ON r.id=p.id)')
     c.execute('CREATE UNIQUE INDEX temp.read_summary_id ON read_summary_values(id)')
+    # Each missing-field category is identical in every total, trend and
+    # attribution grouping. Compute it once after scalar/state projection,
+    # rather than running the same CASE six times per metric per rollup.
+    projected_sql = sql
+    for expr, name in fields.items():
+        projected_sql = projected_sql.replace(expr, name)
+    projected_sql = projected_sql.replace(READ_STATE_SQL, 'read_execution_state')
+    reasons = dict.fromkeys(re.findall(r'\(CASE WHEN .*? END\)', projected_sql))
+    for i in range(len(reasons)):
+        c.execute('ALTER TABLE read_summary_values ADD COLUMN summary_reason_' + str(i) + ' TEXT')
+    if reasons:
+        c.execute('UPDATE read_summary_values SET ' + ','.join(
+            'summary_reason_' + str(i) + '=' + expr for i, expr in enumerate(reasons)))
     c.execute('DROP VIEW temp.requests')
     c.execute('CREATE TEMP VIEW requests AS SELECT r.id,r.started,r.ended,r.provider,r.model,'
               'r.session_id,r.task,r.compression_id,r.status,COALESCE(p.data,r.data) AS data,' +
-              ','.join('v.' + name for name in fields.values()) +
+              'v.read_execution_state,' + ','.join('v.' + name for name in fields.values()) + ',' +
+              ','.join('v.summary_reason_' + str(i) for i in range(len(reasons))) +
               ' FROM main.requests r LEFT JOIN session_write_projection p ON p.id=r.id'
               ' LEFT JOIN read_summary_values v ON v.id=r.id')
-    for expr, name in fields.items():
-        sql = sql.replace(expr, name)
-    return sql
+    for i, expr in enumerate(reasons):
+        projected_sql = projected_sql.replace(expr, 'summary_reason_' + str(i))
+    return projected_sql
 
 
 def project(c, where, params, end):

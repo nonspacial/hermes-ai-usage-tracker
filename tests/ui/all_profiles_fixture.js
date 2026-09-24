@@ -1,5 +1,31 @@
 // Offline-only DTO fixtures. Never loaded by the packaged Desktop plugin.
 const baseDemoRest=demoRest;
+// Match projection.py's version-1 wire shape. Keep the legacy fixture full:
+// projected reads alone omit fields, rather than silently supplying full DTOs.
+const fixtureCommon=['generated_at','seq','window','summary','request_count','next_offset',
+ 'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
+const fixtureDetail=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
+ 'compressions','compression_truncated','groups','model_groups','project_groups',
+ 'session_groups','subagent_groups','agent_groups','health','rates','quota_observations',
+ 'crossing_start','crossing_end'];
+const fixtureGroups={model:'model_groups',time:null,project:'project_groups',
+ session:'session_groups',subagent:'subagent_groups'};
+const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
+ cache:['price_catalogs','applied_rate_groups'],compressions:['compressions','compression_truncated'],
+ models:['groups'],skills:[]};
+function fixtureProject(full,p){
+ const view=p.get('view'),group=p.get('group');
+ if(view===null){if(group!==null)throw new Error('Group requires a view');return full}
+ if(!Object.hasOwn(fixtureViews,view)||view==='overview'&&!Object.hasOwn(fixtureGroups,group)||
+    view!=='overview'&&group!==null)throw new Error('Invalid projection');
+ const included=[...new Set([...fixtureCommon,...fixtureViews[view],...(view==='overview'&&fixtureGroups[group]?[fixtureGroups[group]]:[])])].sort();
+ const omitted=fixtureDetail.filter(field=>!included.includes(field)).sort();
+ for(const field of included)if(!Object.hasOwn(full,field))throw new Error('Fixture lacks projected field '+field);
+ return {...Object.fromEntries(included.map(field=>[field,full[field]])),
+  ...Object.fromEntries(['profile_scope','read_only','refresh_mode','analytics_revision','coverage','quota','profile_sequences']
+   .filter(field=>Object.hasOwn(full,field)).map(field=>[field,full[field]])),
+  projection:{version:1,included,omitted}};
+}
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
 window.demoResets={infra:{profile:'infra',count:0,auto:false,binding:'fixture-infra',episode:null,exhausted:false,redeemable:false,blocked:false},
@@ -56,9 +82,10 @@ async function fixtureAggregate(u){
   out.requests=rows.slice(offset,offset+limit);out.request_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
   for(const [field,kind,key] of [['project_groups','project','key'],['session_groups','session','key'],['subagent_groups','subagent','key'],['project_options','project','id'],['compressions','compression','id'],['tests','test','id'],['groups',null,'id']])out[field]=active.flatMap(p=>(base[field]||[]).map(r=>fixtureQualify(r,p,kind,key)));
   out.compression_count=active.length?out.compressions.length:null;
+  out.compression_truncated=false;
   out.provider_groups=grouped(rows,['provider']);out.model_groups=grouped(rows.map(r=>({...r,model:r.response_model||r.model||'unknown'})),['provider','model']);out.applied_rate_groups=appliedRateGroups(rows);
  }
- return out;
+ return u.pathname==='/ledger'?fixtureProject(out,p):out;
 }
 demoRest=async function(path,options={}){
  const u=new URL(path,'https://offline.test');
@@ -79,7 +106,11 @@ demoRest=async function(path,options={}){
  }
  window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
  if(u.pathname==='/ledger/profiles')return {profiles:fixtureProfiles,scope_options:[{label:'All profiles',profile_scope:'all'},...fixtureProfiles.map(p=>({label:p.name,profile:p.name,profile_scope:'selected'}))],default_profile_scope:'selected'};
- if(u.searchParams.get('profile_scope')!=='all')return baseDemoRest(path,options);
+ if(u.searchParams.get('profile_scope')!=='all'){
+  const result=await baseDemoRest(path,options);
+  if(u.pathname!=='/ledger')return result;
+  return fixtureProject({...result,compression_truncated:false},u.searchParams);
+ }
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
  if(u.pathname==='/usage')return {profile_scope:'all',read_only:true,providers:[],quota:{available:false,reason:'aggregate_quota_unavailable'}};
  if(u.pathname==='/ledger/status')return {profile_scope:'all',read_only:true,refresh_mode:'polling',status:'unavailable',reason:'Recorder health is profile-specific; select a profile.'};

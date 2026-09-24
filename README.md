@@ -130,14 +130,14 @@ Skills and context observations only cover events the recorder saw. The plugin d
 
 ## Use banked Codex resets
 
-The Codex card has a **Resets** badge and an **Auto use** option. These controls require the Codex CLI on the backend's executable path, a supported app-server response and a ChatGPT subscription credential that the plugin can verify against the selected profile's account. If the balance or account identity cannot be confirmed, spending is disabled.
+The Codex card shows **Auto use**, its checkbox, then a **Resets** badge with the banked balance. The same controls appear on the Codex provider page. They require the Codex CLI on the backend's executable path, a supported app-server response and a ChatGPT subscription credential that the plugin can verify against the selected profile's account. If the balance or account identity cannot be confirmed, spending is disabled.
 
 To spend a reset manually:
 
 1. Select the individual profile and open its Codex card on Subscriptions or the Codex provider page.
-2. Click **Resets** to inspect the balance and eligibility message. Use **Refresh balance** if needed.
-3. When Codex confirms an eligible exhausted limit, click **Use one reset**.
-4. Read the warning and choose **Confirm use** to spend it, or **Cancel** to leave the account unchanged.
+2. Read the **Resets** count. Its hint explains why a reset is not available when the count is zero, unknown or not eligible; clicking in those states does nothing.
+3. When the count is positive and Codex confirms an eligible exhausted limit, click the **Resets** badge to open the confirmation directly.
+4. Read the warning and choose **Confirm use** to spend one reset, or **Cancel** to leave the account unchanged.
 
 A rounded 0% allowance is not enough to enable redemption. The backend checks the account, balance and limit again before spending.
 

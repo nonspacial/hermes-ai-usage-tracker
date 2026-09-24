@@ -90,7 +90,8 @@ def run():
           const original=rest;rest=(path,options)=>path==='/ledger/profiles'?Promise.reject(new Error('Synthetic missing inventory route')):original(path,options);
         }''')
         picker.select_option('profile:infra')
-        expect(page.locator('tbody tr')).to_have_count(200)
+        # A new profile restores its own page, never all-profile rows.
+        expect(page.locator('tbody tr')).to_have_count(0)
         page.evaluate('window.scopeCalls=[]')
         picker.select_option('scope:all')
         expect(page.get_by_test_id('usage-stale')).to_contain_text('Synthetic missing inventory route')

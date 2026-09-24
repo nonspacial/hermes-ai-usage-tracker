@@ -190,7 +190,10 @@ class Store:
         with self.db() as c:
             return [tuple(r) for r in c.execute('SELECT started,id FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ?',params+[limit])]
 
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None):
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None,view=None,group=None):
+        from .projection import selected_fields, manifest
+        fields=selected_fields(view,group)
+        include=lambda name: fields is None or name in fields
         where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model,model_provider)
         with self.db() as c:
             # Keep totals, applied rates and request rows on one read snapshot.
@@ -201,28 +204,34 @@ class Store:
             from .session_cache_writes import materialise_summary
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)
-            applied_rates=sql_applied_rate_groups(c,where,params,summary_sql)
-            if _detail_ids is None:
-                detail_where,detail_params=where,params+[limit,offset]
-                paging=' LIMIT ? OFFSET ?'
-            else:
-                # TEMP membership avoids SQLite variable limits at the 2000-row API cap.
-                c.execute('CREATE TEMP TABLE read_detail_ids(id TEXT PRIMARY KEY)')
-                c.executemany('INSERT OR IGNORE INTO read_detail_ids VALUES(?)',((key,) for key in _detail_ids))
-                detail_where=where+' AND id IN (SELECT id FROM read_detail_ids)'
-                detail_params=params
-                paging=''
-            rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+detail_where+' ORDER BY started DESC,id DESC'+paging,detail_params)]
-            from .cache_progression import query_progression
-            read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
+            applied_rates=sql_applied_rate_groups(c,where,params,summary_sql) if include('applied_rate_groups') else None
+            rows=[]
+            if include('requests'):
+                if _detail_ids is None:
+                    detail_where,detail_params=where,params+[limit,offset]
+                    paging=' LIMIT ? OFFSET ?'
+                else:
+                    # TEMP membership avoids SQLite variable limits at the 2000-row API cap.
+                    c.execute('CREATE TEMP TABLE read_detail_ids(id TEXT PRIMARY KEY)')
+                    c.executemany('INSERT OR IGNORE INTO read_detail_ids VALUES(?)',((key,) for key in _detail_ids))
+                    detail_where=where+' AND id IN (SELECT id FROM read_detail_ids)'
+                    detail_params=params
+                    paging=''
+                rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+detail_where+' ORDER BY started DESC,id DESC'+paging,detail_params)]
+            read_progression, read_changes = None, {}
+            if include('cache_read_progression'):
+                from .cache_progression import query_progression
+                read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
             effective_model="COALESCE(NULLIF(json_extract(data,'$.response_model'),''),NULLIF(model,''),'unknown')"
-            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,"+effective_model+" AS model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,"+effective_model+",COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
+            groups=([dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,"+effective_model+" AS model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,"+effective_model+",COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)] if include('groups') else None)
             provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
-            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+effective_model+' AS model,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider,'+effective_model+' ORDER BY MAX(started) DESC,provider,model',params)]
+            model_groups=([dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+effective_model+' AS model,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider,'+effective_model+' ORDER BY MAX(started) DESC,provider,model',params)] if include('model_groups') else None)
             trend=sql_trend(c,where,params,start,end,summary_sql,trend_start=trend_start)
-            attribution=attribution_groups(c,where,params,summary_sql)
-            from .pricing import catalog_status
-            catalogs=catalog_status(c,provider)
+            attribution=attribution_groups(c,where,params,summary_sql,fields=fields)
+            if include('price_catalogs'):
+                from .pricing import catalog_status
+                catalogs=catalog_status(c,provider)
+            else: catalogs=None
             for row in rows:
                 row['execution_state']=c.execute('SELECT execution_state(?)',(jd(row),)).fetchone()[0]
                 if row['id'] in read_changes:row['cache_read_change']=read_changes[row['id']]
@@ -230,25 +239,29 @@ class Store:
                 "COALESCE(NULLIF(json_extract(data,'$.response_model'),''),NULLIF(model,''),'unknown')",
                 "COALESCE(NULLIF(json_extract(data,'$.model'),''),'unknown')")
             compression_count=c.execute('SELECT COUNT(*) FROM compressions WHERE '+compwhere,params).fetchone()[0]
-            comps=[json.loads(r[0]) for r in c.execute('SELECT data FROM compressions WHERE '+compwhere+' ORDER BY started DESC,id DESC LIMIT 1000',params)]
-            # Compression bill is derived from its linked requests, never counted twice.
-            for comp in comps:
-                aux=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE compression_id=?',(comp['id'],))]
-                comp['auxiliary']=summary(aux);comp['aux_request_ids']=[r['id'] for r in aux]
-            health=[dict(process=r['process'],updated=r['updated'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM health ORDER BY updated DESC')]
-            rates=[dict(id=r['id'],created=r['created'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM rates ORDER BY created DESC,id DESC LIMIT 500')]
+            comps=[]
+            if include('compressions'):
+                comps=[json.loads(r[0]) for r in c.execute('SELECT data FROM compressions WHERE '+compwhere+' ORDER BY started DESC,id DESC LIMIT 1000',params)]
+                # Compression bill is derived from its linked requests, never counted twice.
+                for comp in comps:
+                    aux=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE compression_id=?',(comp['id'],))]
+                    comp['auxiliary']=summary(aux);comp['aux_request_ids']=[r['id'] for r in aux]
+            health=[dict(process=r['process'],updated=r['updated'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM health ORDER BY updated DESC')] if include('health') else None
+            rates=[dict(id=r['id'],created=r['created'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM rates ORDER BY created DESC,id DESC LIMIT 500')] if include('rates') else None
             tests=[json.loads(r[0]) for r in c.execute('SELECT data FROM tests ORDER BY started DESC,id DESC LIMIT 100')]
             providers=[r[0] for r in c.execute('SELECT DISTINCT provider FROM requests ORDER BY provider')]
             seq=c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
-            quota=[dict(ts=r['ts'],**json.loads(r['data'])) for r in c.execute('SELECT ts,data FROM quota WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 200',(start,end))]
-            crossing_end=c.execute('SELECT COUNT(*) FROM requests WHERE '+where+' AND (ended IS NULL OR ended>=?)',params+[end]).fetchone()[0]
-            crossing=c.execute('SELECT COUNT(*) FROM requests WHERE started<? AND (ended IS NULL OR ended>=?)'+where[len('started>=? AND started<?'):],[start,start]+params[2:]).fetchone()[0]
-        return {'generated_at':time.time(),'seq':seq,'window':{'start':start,'end':end,'basis':'request/compaction start time; crossing requests are not split'},
+            quota=[dict(ts=r['ts'],**json.loads(r['data'])) for r in c.execute('SELECT ts,data FROM quota WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 200',(start,end))] if include('quota_observations') else None
+            crossing_end=c.execute('SELECT COUNT(*) FROM requests WHERE '+where+' AND (ended IS NULL OR ended>=?)',params+[end]).fetchone()[0] if include('crossing_end') else None
+            crossing=c.execute('SELECT COUNT(*) FROM requests WHERE started<? AND (ended IS NULL OR ended>=?)'+where[len('started>=? AND started<?'):],[start,start]+params[2:]).fetchone()[0] if include('crossing_start') else None
+        result={'generated_at':time.time(),'seq':seq,'window':{'start':start,'end':end,'basis':'request/compaction start time; crossing requests are not split'},
           **attribution,'summary':total,'requests':rows,'request_count':total['attempts'],'next_offset':offset+limit if offset+limit<total['attempts'] else None,
           'compressions':comps,'compression_count':compression_count,'compression_truncated':compression_count>1000,
           'groups':groups,'provider_groups':provider_groups,'model_groups':model_groups,'trend':trend,'price_catalogs':catalogs,
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
+        if fields is None:return result
+        return {**{key:result[key] for key in fields},'projection':manifest(fields)}
 
 def request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model='',model_provider=''):
     if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')
@@ -359,7 +372,8 @@ def _exprs():
     for k in ('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd'):
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost."+k+"')),'0') AS s_"+k,"COALESCE(SUM(json_extract(data,'$.cost."+k+"') IS NULL),0) AS sm_"+k]
     # Avoid Python/JSON calls for terminal history; inspect only open owners.
-    state="(CASE WHEN status IN ('abandoned_without_usage','abandoned_with_usage') THEN 'abandoned' WHEN status IN ('pending','usage_received') AND ended IS NULL THEN execution_state(data) ELSE 'closed' END)"
+    from .session_cache_writes import READ_STATE_SQL
+    state=READ_STATE_SQL
     return ','.join(cols).replace('execution_state(data)',state)
 SUMMARY_SQL=_exprs()
 
@@ -402,21 +416,24 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
     return {'unit':'minute' if step==60 else ('2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'))),'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
-def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL):
-    """Complete filtered-set rollups; a child is a subset, never an extra total."""
+def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL,*,fields=None):
+    """Complete filtered-set rollups; project only selected groups when opted in."""
+    include=lambda name: fields is None or name in fields
     role="COALESCE(json_extract(data,'$.agent_kind'),'unknown')"
     project="COALESCE(json_extract(data,'$.project_id'),'unattributed')"
     root="COALESCE(NULLIF(json_extract(data,'$.root_session_id'),''),NULLIF(session_id,''),'unattributed')"
     child="COALESCE(NULLIF(json_extract(data,'$.subagent_id'),''),NULLIF(session_id,''),'unattributed')"
     subs=sql_summary(c,where+" AND "+role+"='subagent'",params,summary_sql)
     subs['agents']=c.execute('SELECT COUNT(DISTINCT '+child+') FROM requests WHERE '+where+" AND "+role+"='subagent'",params).fetchone()[0]
-    roles=[dict(agent_kind=r['key'],**summary_from_sql(r)) for r in c.execute('SELECT '+role+' AS key,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY '+role,params)]
+    out={'subagent_summary':subs}
+    if include('agent_groups'):
+        out['agent_groups']=[dict(agent_kind=r['key'],**summary_from_sql(r)) for r in c.execute('SELECT '+role+' AS key,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY '+role,params)]
     extra=",COALESCE(SUM(CASE WHEN "+role+"='subagent' THEN json_extract(data,'$.usage.total_tokens') ELSE 0 END),0) AS subagent_tokens,COUNT(DISTINCT CASE WHEN "+role+"='subagent' THEN "+child+" END) AS subagents"
     configs=[('project_groups',project,",MAX(json_extract(data,'$.project_label')) AS label,MAX(json_extract(data,'$.project_path')) AS path,MAX(json_extract(data,'$.project_source')) AS basis",''),
       ('session_groups',root,",MAX(json_extract(data,'$.project_label')) AS project_label",''),
       ('subagent_groups',child,",MIN(session_id) AS session_id,MAX(json_extract(data,'$.parent_session_id')) AS parent_session_id,MAX(json_extract(data,'$.root_session_id')) AS root_session_id,MAX(json_extract(data,'$.agent_role')) AS agent_role,MAX(json_extract(data,'$.project_label')) AS project_label", " AND "+role+"='subagent'")]
-    out={'subagent_summary':subs,'agent_groups':roles}
     for name,expr,more,condition in configs:
+        if not include(name):continue
         rows=c.execute('SELECT '+expr+' AS key'+more+extra+','+summary_sql+' FROM requests WHERE '+where+condition+' GROUP BY '+expr+' ORDER BY MAX(started) DESC,key',params)
         out[name]=[dict(**{k:r[k] for k in r.keys() if k in ('key','label','path','basis','project_label','session_id','parent_session_id','root_session_id','agent_role','subagent_tokens','subagents')},**summary_from_sql(r)) for r in rows]
     out['project_options']=[dict(id=r[0],label=r[1] or 'Unattributed project',path=r[2],basis=r[3]) for r in c.execute('SELECT '+project+",MAX(json_extract(data,'$.project_label')),MAX(json_extract(data,'$.project_path')),MAX(json_extract(data,'$.project_source')) FROM requests GROUP BY "+project)]

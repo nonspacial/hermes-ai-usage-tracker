@@ -90,20 +90,22 @@ def add_routes(router,resolve_profile,server_home):
             raise HTTPException(503,'Recorder status temporarily unavailable') from exc
 
     @router.get('/ledger')
-    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,profile_scope:str='selected'):
+    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,profile_scope:str='selected',view:str|None=None,group:str|None=None):
         if offset<0 or not 1<=limit<=2000:raise HTTPException(400,'Invalid pagination.')
         if not math.isfinite(start) or start<0 or end is not None and (not math.isfinite(end) or end<start):
             raise HTTPException(400,'Invalid time window.')
         check_bucket(bucket_start,bucket_end)
         try:
+            from .projection import selected_fields
+            selected_fields(view,group)
             if scope(profile_scope):
                 return aggregate.ledger(analytics, aggregate.discover(server_home()), start=start,end=end,
                     provider=provider,session=session,offset=offset,limit=limit,test_id=test_id,agent=agent,
                     project=project,session_scope=session_scope,subagent=subagent,model=model,
-                    model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end)
+                    model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group)
             root=check_profile(profile)
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,
-                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end)
+                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group)
         except ValueError as exc:raise HTTPException(400,str(exc))
 
     @router.get('/ledger/skills')

@@ -237,7 +237,10 @@ def quota_unavailable():
             'note': 'Subscription quotas may share accounts across profiles and cannot be summed. No quota probes were performed.'}
 
 
-def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filters):
+def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=None, group=None, **filters):
+    from .projection import selected_fields, manifest
+    fields = selected_fields(view, group)
+    include = lambda name: fields is None or name in fields
     end = time.time() if end is None else end
     validate(start, end, offset, limit, 2000, filters)
     profiles, local = prepare(inventory, filters)
@@ -285,7 +288,7 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
                          local.get('agent', ''), local.get('project', ''),
                          local.get('session_scope', 'exact'), local.get('subagent', ''),
                          local.get('model', ''), local.get('model_provider', ''))
-                keys = reader._request_keys(*scope, limit=offset + limit)
+                keys = reader._request_keys(*scope, limit=offset + limit) if include('requests') else []
                 candidates.append((profile, status, reader, scope, keys))
             except (sqlite3.Error, OSError, json.JSONDecodeError):
                 status['status'] = 'unreadable'
@@ -307,7 +310,8 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
                     report = reader.read(lo, hi, provider, 0, limit, session, agent, project,
                         session_scope, subagent, model, model_provider,
                         trend_start=lo if local.get('test_id') or local.get('bucket_start') is not None else anchor,
-                        _detail_ids=selected.get(profile['profile_id'], ()))
+                        _detail_ids=selected.get(profile['profile_id'], ()) if include('requests') else None,
+                        view=view,group=group)
                     status['status'] = 'read'
                     reports.append((profile, report))
                 except (sqlite3.Error, OSError, json.JSONDecodeError):
@@ -326,26 +330,30 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
            'summary': merge_summaries([r['summary'] for r in data]) if data else None,
            'seq': None, 'profile_sequences': {p['profile_id']: r['seq'] for p, r in reports}}
     for field in ('request_count', 'compression_count', 'crossing_start', 'crossing_end'):
-        out[field] = sum(r[field] for r in data) if data else None
+        if include(field):out[field] = sum(r[field] for r in data) if data else None
     out['next_offset'] = offset + limit if out['request_count'] is not None and offset + limit < out['request_count'] else None
     for field, kind, stamp, cap in [('requests', 'request', 'started', limit),
             ('compressions', 'compression', 'started', 1000), ('tests', 'test', 'started', 100),
             ('rates', 'rate', 'created', 500), ('health', None, 'updated', None)]:
+        if not include(field):continue
         rows = [qualify(v, p, kind) for p, r in reports for v in r[field]]
         out[field] = ordered(rows, stamp, cap, numeric_id=field == 'rates')
-    out['compression_truncated'] = out['compression_count'] is not None and out['compression_count'] > len(out['compressions'])
+    if include('compression_truncated'):
+        out['compression_truncated'] = out['compression_count'] is not None and out['compression_count'] > len(out['compressions'])
     for field, kind, key in [('project_groups', 'project', 'key'), ('session_groups', 'session', 'key'),
             ('subagent_groups', 'subagent', 'key'), ('project_options', 'project', 'id')]:
-        out[field] = sorted([qualify(v, p, kind, key) for p, r in reports for v in r[field]], key=lambda v: v[key])
+        if include(field):out[field] = sorted([qualify(v, p, kind, key) for p, r in reports for v in r[field]], key=lambda v: v[key])
     # Global categorical groups have shared semantics, unlike profile-local IDs.
-    out['groups'] = sorted([qualify(v, p) for p, r in reports for v in r['groups']],
-                           key=lambda v: (v['provider'], v['model'], v['agent_kind'], v['task']))
+    if include('groups'):
+        out['groups'] = sorted([qualify(v, p) for p, r in reports for v in r['groups']],
+                               key=lambda v: (v['provider'], v['model'], v['agent_kind'], v['task']))
     for field, dimensions in [('provider_groups', ('provider',)), ('model_groups', ('provider', 'model')),
             ('agent_groups', ('agent_kind',)), ('applied_rate_groups', ('provider', 'model', 'service_tier', 'rate'))]:
-        out[field] = merge_groups(data, field, dimensions)
+        if include(field):out[field] = merge_groups(data, field, dimensions)
     out['subagent_summary'] = merge_summaries([r['subagent_summary'] for r in data]) if data else None
     out['providers'] = sorted({v for r in data for v in r['providers']})
-    out['price_catalogs'] = [qualify(v, p) for p, r in reports for v in r['price_catalogs']]
+    if include('price_catalogs'):
+        out['price_catalogs'] = [qualify(v, p) for p, r in reports for v in r['price_catalogs']]
     out['trend'] = {'unit': None, 'timezone': 'UTC', 'seconds': None, 'buckets': []}
     if data:
         out['trend'] = {k: v for k, v in data[0]['trend'].items() if k != 'buckets'}
@@ -355,16 +363,21 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
                 key = (bucket['start'], bucket['end'])
                 buckets.setdefault(key, []).append({k: v for k, v in bucket.items() if k not in ('start', 'end')})
         out['trend']['buckets'] = [dict(start=key[0], end=key[1], **merge_summaries(buckets[key])) for key in sorted(buckets)]
-    progression = [r['cache_read_progression'] for r in data]
-    out['cache_read_progression'] = None
-    if progression:
-        combined = deepcopy(progression[0])
-        for field in ('eligible_pairs', 'excluded_pairs'):
-            combined[field] = sum(r[field] for r in progression)
-        for field in ('positive_read_growth_tokens', 'read_drop_tokens'):
-            combined[field] = sum(r[field] or 0 for r in progression) if combined['eligible_pairs'] else None
-        combined['excluded_reasons'] = add_values([r['excluded_reasons'] for r in progression])
-        out['cache_read_progression'] = combined
+    if include('cache_read_progression'):
+        progression = [r['cache_read_progression'] for r in data]
+        out['cache_read_progression'] = None
+        if progression:
+            combined = deepcopy(progression[0])
+            for field in ('eligible_pairs', 'excluded_pairs'):
+                combined[field] = sum(r[field] for r in progression)
+            for field in ('positive_read_growth_tokens', 'read_drop_tokens'):
+                combined[field] = sum(r[field] or 0 for r in progression) if combined['eligible_pairs'] else None
+            combined['excluded_reasons'] = add_values([r['excluded_reasons'] for r in progression])
+            out['cache_read_progression'] = combined
+    if fields is not None:
+        out = {**{key:out[key] for key in fields if key in out},
+               **{key:out[key] for key in ('profile_scope', 'read_only', 'refresh_mode', 'analytics_revision', 'coverage', 'quota', 'profile_sequences')},
+               'projection':manifest(fields)}
     return out
 
 

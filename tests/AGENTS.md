@@ -11,7 +11,7 @@ Root owns test dependencies and preview generation; this directory owns backend 
 ## Local Contracts
 
 - Read root and nearest child instructions. Use synthetic isolated homes/SQLite, offline pricing and no account credentials or live exports. Do not turn marker scenarios into fabricated production timestamps.
-- Prefer executable behaviour tests over source-text regex. Assert provider/profile scope, response-model semantics, qualified aggregate identities, marker/bucket intersection, report/pagination parity and stale-response protection where applicable. A test name or partial run is not completion evidence.
+- Prefer executable behaviour tests over source-text regex. Assert provider/profile scope, response-model semantics, qualified aggregate identities, marker/bucket intersection, report/pagination parity and stale-response protection where applicable. `test_read_performance.py` compares complete selected/all-profile responses with the original unmaterialised SQL, counts fresh owner evaluations and benchmarks disposable requests; it does not read live ledgers or impose a flaky wall-clock threshold. `test_ledger_projection.py` compares every included projected field with the full fixture response, verifies omitted-field manifests, partial coverage, markers, empty/unknown data and hidden-stage nonexecution. A test name or partial run is not completion evidence.
 - Test commands must not implicitly install or restart Hermes; do not alter live ledger or account reset state.
 
 ## Work Guidance

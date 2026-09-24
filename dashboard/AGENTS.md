@@ -13,7 +13,7 @@ Expose the plugin manifest and Hermes-hosted quota/profile API alongside ledger 
 - Read root instructions and [ledger runtime](../ledger_runtime/AGENTS.md) for cross-boundary changes. The manifest name remains `ai-usage-tracker`; the label remains **AI usage +**.
 - Resolve only known local profiles; bind provider probes to the selected profile rather than borrowing a different profile's credentials. All-profile analytics never combines subscription allowance or permits per-account actions.
 - Preserve read-only analytics access and explicit action side effects. Dashboard opening should not create a live ledger; read routes must not start price workers. Authenticated quota, price refresh, marker or Codex reset operations must not be confused with offline read checks.
-- `GET /ledger` and related analytics routes must preserve scope/qualification, marker intersection and read-only aggregate semantics. Verify both backend response and UI consumption before claiming an end-to-end fix.
+- `GET /ledger` and related analytics routes must preserve scope/qualification, marker intersection and read-only aggregate semantics. Its absent-`view` response stays complete; validated opt-in view/group returns a versioned included/omitted manifest and only the active payload while retaining common header data. Verify both backend response and UI consumption before claiming an end-to-end fix.
 
 ## Work Guidance
 

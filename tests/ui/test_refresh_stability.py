@@ -28,6 +28,9 @@ def run():
         for width,height,tab in cases:
             page.locator('#root').evaluate('(e,s)=>{e.style.width=s[0]+"px";e.style.height=s[1]+"px"}',[width,height])
             page.get_by_role('navigation', name='Provider subpages').get_by_role('tab',name=tab,exact=True).click()
+            # Committed view projections have an explicit pending body; measure
+            # refresh stability only after that body's first response is mounted.
+            page.wait_for_function('''()=>!document.querySelector('[data-testid="ledger-view-pending"]')''')
             page.wait_for_timeout(200)
             result=page.evaluate('''async()=>{
                 const upper=document.querySelector('.au-upper'),summary=document.querySelector('[data-testid="recorded-summary"]');

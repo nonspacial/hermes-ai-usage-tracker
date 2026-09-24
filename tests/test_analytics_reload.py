@@ -100,6 +100,32 @@ def test_recorder_changes_require_restart(runtime):
     assert runtime.info()['revision'] == revision
 
 
+def test_projection_contract_change_requires_restart_without_mixed_view(runtime, tmp_path):
+    store = fixture_store(tmp_path)
+    before = runtime.read(store.root, 0, 3, view='requests')
+    assert 'requests' in before and 'price_catalogs' not in before
+    contract = runtime.folder / 'projection.py'
+    original = contract.read_text()
+    assert "('requests', 'cache_read_progression')" in original
+    contract.write_text(original.replace("('requests', 'cache_read_progression')",
+                                         "('price_catalogs', 'cache_read_progression')"))
+    assert runtime.info()['restart_required']
+    with pytest.raises(RestartRequired):
+        runtime.reload()
+    unchanged = runtime.read(store.root, 0, 3, view='requests')
+    assert unchanged['analytics_revision'] == before['analytics_revision']
+    assert unchanged['projection'] == before['projection']
+    assert 'requests' in unchanged and 'price_catalogs' not in unchanged
+    contract.write_text(original)
+    change_basis(runtime)
+    assert not runtime.info()['restart_required']
+    reloaded = runtime.reload()
+    after = runtime.read(store.root, 0, 3, view='requests')
+    assert after['analytics_revision'] == reloaded['revision'] != before['analytics_revision']
+    assert after['projection'] == before['projection']
+    assert 'requests' in after and 'price_catalogs' not in after
+
+
 def test_schema_changes_require_restart(runtime):
     path = runtime.folder / 'storage.py'
     path.write_text(path.read_text() + '\nSCHEMA += "CREATE TABLE unexpected(x);"\n')

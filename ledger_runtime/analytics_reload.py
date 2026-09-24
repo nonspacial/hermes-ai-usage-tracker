@@ -19,7 +19,7 @@ import time
 import types
 import uuid
 
-from . import accounting, pricing, ownership
+from . import accounting, pricing, ownership, projection
 from .storage import SCHEMA
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
@@ -78,7 +78,8 @@ class AnalyticsRuntime:
             sys.modules[prefix] = package
             generation['modules'].append(prefix)
             # Catalogue inspection is stable; its worker and fetch code are NOT reloaded.
-            for name, stable in [('pricing', pricing), ('accounting', accounting), ('ownership', ownership)]:
+            for name, stable in [('pricing', pricing), ('accounting', accounting),
+                                 ('ownership', ownership), ('projection', projection)]:
                 sys.modules[prefix + '.' + name] = stable
                 generation['modules'].append(prefix + '.' + name)
             for name, source in sources.items():
@@ -159,7 +160,9 @@ class AnalyticsRuntime:
                 if generation['retired'] and not generation['readers']:
                     self._discard(generation)
 
-    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None):
+    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None, view=None, group=None):
+        from .projection import selected_fields
+        selected_fields(view, group)
         with self.lease() as generation:
             root = Path(root).resolve()
             if not (root / 'usage-ledger' / 'events.sqlite3').is_file():
@@ -174,7 +177,7 @@ class AnalyticsRuntime:
                         connection.executescript(SCHEMA)
                     lo = max(args[0], bucket_start) if bucket_start is not None else args[0]
                     hi = min(args[1] if args[1] is not None else time.time(), bucket_end) if bucket_end is not None else args[1]
-                    result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:])
+                    result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:],view=view,group=group)
             else:
                 reader = self._reader(generation, root)
                 if test_id:
@@ -187,7 +190,7 @@ class AnalyticsRuntime:
                     end = args[1] if args[1] is not None else time.time()
                     lo, hi = max(args[0], bucket_start), min(end, bucket_end)
                     args = (lo, max(lo, hi), *args[2:])
-                result = reader.read(*args)
+                result = reader.read(*args,view=view,group=group)
             result['analytics_revision'] = generation['revision']
             return result
 

@@ -83,11 +83,10 @@ def run():
   print('PASS 24h/7d/30d/90d bidirectional filter sync, full 208-request totals, no pagination truncation')
   # Custom inputs are synchronized and can restore the window from this section.
   local.get_by_role('button',name='Custom',exact=True).click()
-  a=page.evaluate('new Date((now-3600)*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19)')
-  b=page.evaluate('new Date(now*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19)')
-  # Chromium canonicalises zero seconds away; Playwright fill checks exact value.
-  a=a[:-3] if a.endswith(':00') else a
-  b=b[:-3] if b.endswith(':00') else b
+  # Use committed half-hour grid bounds; invalid intermediate Custom edits must
+  # not display the prior window's rates beneath the new selection.
+  a=page.evaluate('new Date((Math.ceil(now/1800)*1800-3600)*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)')
+  b=page.evaluate('new Date(Math.ceil(now/1800)*1800*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)')
   filters.get_by_label('Cache window start',exact=True).fill(a)
   filters.get_by_label('Cache window end',exact=True).fill(b)
   expect(page.get_by_label('Window start',exact=True)).to_have_value(a)
