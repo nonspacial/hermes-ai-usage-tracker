@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import types
 import uuid
 
@@ -158,7 +159,7 @@ class AnalyticsRuntime:
                 if generation['retired'] and not generation['readers']:
                     self._discard(generation)
 
-    def read(self, root, *args, test_id=''):
+    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None):
         with self.lease() as generation:
             root = Path(root).resolve()
             if not (root / 'usage-ledger' / 'events.sqlite3').is_file():
@@ -171,11 +172,21 @@ class AnalyticsRuntime:
                     (empty / 'usage-ledger').mkdir()
                     with sqlite3.connect(empty / 'usage-ledger' / 'events.sqlite3') as connection:
                         connection.executescript(SCHEMA)
-                    result = self._reader(generation, empty).read(*args)
+                    lo = max(args[0], bucket_start) if bucket_start is not None else args[0]
+                    hi = min(args[1] if args[1] is not None else time.time(), bucket_end) if bucket_end is not None else args[1]
+                    result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:])
             else:
                 reader = self._reader(generation, root)
                 if test_id:
-                    args = (*reader.test_window(test_id), *args[2:])
+                    marker_start, marker_end = reader.test_window(test_id)
+                    lo = max(args[0], marker_start)
+                    hi = min(args[1] if args[1] is not None else time.time(),
+                             marker_end if marker_end is not None else float('inf'))
+                    args = (lo, max(lo, hi), *args[2:])
+                if bucket_start is not None:
+                    end = args[1] if args[1] is not None else time.time()
+                    lo, hi = max(args[0], bucket_start), min(end, bucket_end)
+                    args = (lo, max(lo, hi), *args[2:])
                 result = reader.read(*args)
             result['analytics_revision'] = generation['revision']
             return result

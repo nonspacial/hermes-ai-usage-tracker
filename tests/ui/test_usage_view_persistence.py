@@ -78,11 +78,20 @@ def run():
             # Custom bounds are restored as local input values, not rolling timestamps.
             page.get_by_role('group', name='Time window').get_by_role('button', name='Custom').click()
             page.get_by_label('Window start').fill('2026-09-01T09:30')
-            page.get_by_label('Window end').fill('2026-09-05T10:45')
+            page.get_by_label('Window end').fill('2026-09-05T10:30')
             page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));
                 ReactDOM.render(h(() => window.page(), {}), document.getElementById('root'))}''')
             expect(page.get_by_label('Window start')).to_have_value('2026-09-01T09:30')
-            expect(page.get_by_label('Window end')).to_have_value('2026-09-05T10:45')
+            expect(page.get_by_label('Window end')).to_have_value('2026-09-05T10:30')
+            # Old saved free-minute windows cannot bypass the new selectable
+            # range invariant or trigger an unconstrained ledger read.
+            page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));
+                const key='usage-view-v1:profile%3Ainfra';
+                window.demoStored[key]={...window.demoStored[key],period:'custom',
+                    customStart:'2026-09-01T09:31',customEnd:'2026-09-01T09:45'};
+                ReactDOM.render(h(() => window.page(), {}), document.getElementById('root'))}''')
+            expect(page.get_by_role('group',name='Time window').get_by_role('button',name='Past 24h')).to_have_attribute('aria-pressed','true')
+            expect(page.get_by_label('Window start')).to_have_count(0)
             # The empty All providers ID and the aggregate scope have separate records.
             tabs.get_by_role('tab', name='All providers').click()
             page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Requests').click()

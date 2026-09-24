@@ -56,7 +56,7 @@ async function fixtureAggregate(u){
   out.requests=rows.slice(offset,offset+limit);out.request_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
   for(const [field,kind,key] of [['project_groups','project','key'],['session_groups','session','key'],['subagent_groups','subagent','key'],['project_options','project','id'],['compressions','compression','id'],['tests','test','id'],['groups',null,'id']])out[field]=active.flatMap(p=>(base[field]||[]).map(r=>fixtureQualify(r,p,kind,key)));
   out.compression_count=active.length?out.compressions.length:null;
-  out.provider_groups=grouped(rows,['provider']);out.model_groups=grouped(rows,['provider','model']);out.applied_rate_groups=appliedRateGroups(rows);
+  out.provider_groups=grouped(rows,['provider']);out.model_groups=grouped(rows.map(r=>({...r,model:r.response_model||r.model||'unknown'})),['provider','model']);out.applied_rate_groups=appliedRateGroups(rows);
  }
  return out;
 }

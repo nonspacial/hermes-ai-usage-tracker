@@ -1,5 +1,6 @@
 """Offline browser coverage of the packaged timeline, using synthetic data only."""
 import os
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -30,7 +31,7 @@ def test_chart_interactions():
             expect(plot).to_be_visible()
             tooltip = plot.locator('title').text_content() or ''
             assert 'Left/Right arrow keys' in tooltip
-            assert 'Click and drag to zoom' in tooltip
+            assert '15 minutes' in tooltip and 'half-hour boundaries' in tooltip
 
             def calls():
                 return page.evaluate('window.demoCalls.filter(p=>p.startsWith("/ledger?"))')
@@ -130,26 +131,134 @@ def test_chart_interactions():
                 page.mouse.move(*position(b), steps=6)
                 selection = chart.locator('.au-plot-selection')
                 expect(selection).to_be_visible()
-                assert selection.evaluate('e=>getComputedStyle(e).fill') == 'rgb(167, 153, 239)'
+                assert selection.evaluate('e=>getComputedStyle(e).fill') == line_stroke()
+                assert selection.evaluate('e=>getComputedStyle(e).fillOpacity') == '0.3'
+                page.evaluate("document.documentElement.style.setProperty('--ui-accent', '#3b9f84')")
+                assert selection.evaluate('e=>getComputedStyle(e).fill') == line_stroke() == 'rgb(59, 159, 132)'
+                page.evaluate("document.documentElement.style.removeProperty('--ui-accent')")
                 assert len(calls()) == before, 'Do not fetch while dragging'
+                boundaries = [data['trend']['buckets'][0]['start'],
+                              *[bucket['end'] for bucket in data['trend']['buckets']]]
+                boundaries = [t for t in boundaries if t % 1800 == 0]
+                lo, hi = data['trend']['buckets'][0]['start'], data['trend']['buckets'][-1]['end']
+                nearest = lambda fraction: min(boundaries, key=lambda t: abs(t - (lo + fraction * (hi - lo))))
+                snapped = sorted((nearest(a), nearest(b)))
+                box = plot.bounding_box()
+                shade = selection.bounding_box()
+                assert box and shade
+                left = box['x'] + box['width'] * (snapped[0]-lo)/(hi-lo)
+                right = box['x'] + box['width'] * (snapped[1]-lo)/(hi-lo)
+                assert abs(shade['x']-left)<2 and abs(shade['x']+shade['width']-right)<2, (shade, left, right)
                 page.mouse.up()
                 expect(page.get_by_label('Window start', exact=True)).to_be_visible()
                 page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n', arg=before)
                 query = parse_qs(urlsplit(calls()[-1]).query)
-                lo = data['trend']['buckets'][0]['start']
-                hi = data['trend']['buckets'][-1]['end']
-                # Pointer-down coordinates are integer CSS pixels in Chromium.
-                box = plot.bounding_box()
-                assert box is not None
-                tolerance = (hi-lo) / box['width'] + 2
-                assert abs(float(query['start'][0]) - (lo + .2 * (hi-lo))) <= tolerance, (reverse, query, lo, hi)
-                assert abs(float(query['end'][0]) - (lo + .8 * (hi-lo))) <= tolerance, (reverse, query, lo, hi)
+                assert float(query['start'][0]) == snapped[0], (reverse, query, snapped)
+                assert float(query['end'][0]) == snapped[1], (reverse, query, snapped)
                 assert query['provider'] == ['openai-codex']
                 assert 'test_id' not in query
                 assert len(calls()) == before + 1, 'One completed drag, one report refresh'
                 expect(selection).to_have_count(0)
 
+            # Midpoint activation is measured in chart time, not arbitrary
+            # pointer pixels. Retreat cancels a previously visible preview.
+            page.get_by_role('group', name='Time window').get_by_role('button', name='Past hour', exact=True).click()
+            page.wait_for_function('window.chartData?.trend?.seconds === 120')
+            plot.scroll_into_view_if_needed()
+            expect(plot.locator('title')).to_contain_text('15 minutes')
+            data = page.evaluate('window.chartData')
+            first, last = data['trend']['buckets'][0]['start'], data['trend']['buckets'][-1]['end']
+            edges = [t for t in [first, *[b['end'] for b in data['trend']['buckets']]] if t % 1800 == 0]
+            for reverse in (False, True):
+                anchor = edges[-1] if reverse else edges[0]
+                fraction = (anchor-first)/(last-first)
+                direction = -1 if reverse else 1
+                before = len(calls())
+                page.mouse.move(*position(fraction));page.mouse.down()
+                page.mouse.move(*position(fraction+direction*890/(last-first)),steps=3)
+                expect(chart.locator('.au-plot-selection')).to_have_count(0)
+                page.mouse.move(*position(fraction+direction*910/(last-first)),steps=3)
+                expect(chart.locator('.au-plot-selection')).to_be_visible()
+                page.mouse.move(*position(fraction+direction*600/(last-first)),steps=3)
+                expect(chart.locator('.au-plot-selection')).to_have_count(0)
+                page.mouse.up()
+                assert len(calls()) == before, 'Backtracking before release must cancel'
+                page.mouse.move(*position(fraction));page.mouse.down()
+                page.mouse.move(*position(fraction+direction*910/(last-first)),steps=4)
+                expect(chart.locator('.au-plot-selection')).to_be_visible()
+                page.mouse.up()
+                page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n',arg=before)
+                query=parse_qs(urlsplit(calls()[-1]).query)
+                assert float(query['end'][0])-float(query['start'][0])==1800
+                assert float(query['start'][0])%1800==float(query['end'][0])%1800==0
+                assert page.evaluate('window.chartData.trend.seconds')==60
+                assert page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Minute', exact=True).count()==1
+                assert 'drag zoom is unavailable' in (plot.locator('title').text_content() or '')
+                before=len(calls())
+                page.mouse.move(*position(.1));page.mouse.down();page.mouse.move(*position(.9),steps=3);page.mouse.up()
+                assert len(calls())==before, 'At 30 minutes drag zoom is disabled'
+                page.get_by_role('group', name='Time window').get_by_role('button', name='Past hour', exact=True).click()
+                page.wait_for_function('window.chartData?.trend?.seconds === 120')
+                expect(plot.locator('title')).to_contain_text('15 minutes')
+                plot.scroll_into_view_if_needed()
+
+            # Clipped first/last boundaries must also be selectable, and both
+            # calendar resolutions use the returned bucket edges, not math on
+            # a synthetic fixed hour/day grid.
+            for label, seconds in (('Past 24h', 3600), ('7 days', 86400)):
+                page.evaluate('window.chartData=null')
+                page.get_by_role('group', name='Time window').get_by_role('button', name=label, exact=True).click()
+                page.wait_for_function('(step)=>window.chartData?.trend?.seconds === step', arg=seconds)
+                data = page.evaluate('window.chartData')
+                plot.scroll_into_view_if_needed()
+                before = len(calls())
+                page.mouse.move(*position(.01));page.mouse.down()
+                page.mouse.move(*position(.99), steps=6)
+                expect(chart.locator('.au-plot-selection')).to_be_visible()
+                page.mouse.up()
+                page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n', arg=before)
+                query = parse_qs(urlsplit(calls()[-1]).query)
+                boundaries = [data['trend']['buckets'][0]['start'],
+                              *[bucket['end'] for bucket in data['trend']['buckets']]]
+                boundaries = [t for t in boundaries if t % 1800 == 0]
+                lo, hi = data['trend']['buckets'][0]['start'], data['trend']['buckets'][-1]['end']
+                assert float(query['start'][0]) == min(boundaries, key=lambda t: abs(t-(lo+.01*(hi-lo))))
+                assert float(query['end'][0]) == min(boundaries, key=lambda t: abs(t-(lo+.99*(hi-lo))))
+
+            page.evaluate('window.chartData=null')
+            page.get_by_role('group', name='Time window').get_by_role('button', name='Past hour', exact=True).click()
+            plot.scroll_into_view_if_needed()
+            page.wait_for_function('window.chartData?.trend?.seconds === 120')
+            expect(chart.locator('.au-chart-title')).to_contain_text('2 minutes bucket')
+            before = len(calls())
+            x, y = position(0)
+            page.mouse.move(x+1,y);page.mouse.down();page.mouse.move(x+7,y);page.mouse.up()
+            assert len(calls()) == before, ('Two gestures snapping to one boundary cannot zoom',before,calls()[-2:])
+            assert chart.locator('.au-plot-selection').count() == 0
+
+            # Manual controls share the half-hour grid and do not query while
+            # a pasted/off-grid or shorter-than-half-hour interval is invalid.
+            page.get_by_role('group', name='Time window').get_by_role('button', name='Custom', exact=True).click()
+            beginning=page.get_by_label('Window start',exact=True)
+            ending=page.get_by_label('Window end',exact=True)
+            assert beginning.get_attribute('step')==ending.get_attribute('step')=='1800'
+            before=len(calls())
+            beginning.fill('2026-09-24T12:07')
+            ending.fill('2026-09-24T12:30')
+            expect(page.get_by_role('alert').filter(has_text='at least 30 minutes apart')).to_be_visible()
+            assert len(calls())==before
+            ending.fill('2026-09-24T12:00')
+            beginning.fill('2026-09-24T12:00')
+            assert len(calls())==before
+            ending.fill('2026-09-24T12:30')
+            page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n',arg=before)
+            query=parse_qs(urlsplit(calls()[-1]).query)
+            assert float(query['end'][0])-float(query['start'][0])==1800
+
             # Cancelled pointer gestures do not apply a time window.
+            page.evaluate('window.chartData=null')
+            page.get_by_role('group', name='Time window').get_by_role('button', name='Past hour', exact=True).click()
+            page.wait_for_function('window.chartData?.trend?.seconds === 120')
             plot.scroll_into_view_if_needed()
             before = len(calls())
             page.mouse.move(*position(.2))
@@ -160,6 +269,56 @@ def test_chart_interactions():
             page.mouse.up()
             expect(chart.locator('.au-plot-selection')).to_have_count(0)
             assert len(calls()) == before
+            # Fixture-only measurement markers retain their factual timestamps;
+            # the viewing inputs align without rewriting the test record.
+            page.get_by_role('button', name='Start test marker').click()
+            page.wait_for_function('savedTests.length > 0')
+            marker=page.evaluate('savedTests[0]')
+            expect(page.get_by_label('Window start',exact=True)).to_have_value(datetime.fromtimestamp(
+                (marker['started']//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
+            page.get_by_role('button', name='End test marker').click()
+            page.wait_for_function('savedTests[0].ended != null')
+            ended=page.evaluate('savedTests[0]')
+            assert ended['started']==marker['started'] and ended['ended']-ended['started']<1800
+            beginning=page.get_by_label('Window start',exact=True).input_value()
+            ending=page.get_by_label('Window end',exact=True).input_value()
+            assert (datetime.fromisoformat(ending)-datetime.fromisoformat(beginning)).total_seconds()>=1800
+            assert parse_qs(urlsplit(calls()[-1]).query).get('test_id')==[marker['id']]
+            # A saved marker whose real timestamps lie inside the aligned
+            # viewing inputs must survive chart zoom and manual Custom edits.
+            # An adjacent record in the aligned fringe is excluded until the
+            # user explicitly removes the visible marker filter.
+            page.evaluate('''() => {
+              const end=Math.floor(Date.now()/1800000)*1800-600;
+              const started=end-3*3600+73;
+              savedTests.unshift({id:'boundary-fixture',label:'Boundary fixture',started,ended:end});
+              const r={...events[0],id:'outside-marker-fixture',provider:'openai-codex',
+                started:Math.floor(started/1800)*1800+1,ended:Math.floor(started/1800)*1800+2};
+              events.push(r);window.demoChange++;for(const fn of window.demoSubscribers)fn({type:'changed',mode:'native-events'});
+            }''')
+            page.get_by_role('combobox', name='Saved tests').select_option('boundary-fixture')
+            page.wait_for_function('window.chartData?.window?.start === savedTests[0].started')
+            assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
+            plot.scroll_into_view_if_needed()
+            before=len(calls())
+            page.mouse.move(*position(.15));page.mouse.down()
+            page.mouse.move(*position(.75),steps=5)
+            expect(chart.locator('.au-plot-selection')).to_be_visible()
+            page.mouse.up()
+            page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n',arg=before)
+            query=parse_qs(urlsplit(calls()[-1]).query)
+            assert query['test_id']==['boundary-fixture']
+            assert page.get_by_role('button',name='Remove saved test marker filter').is_visible()
+            page.get_by_label('Window start',exact=True).fill(datetime.fromtimestamp(
+                (page.evaluate('savedTests[0].started')//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
+            page.get_by_label('Window end',exact=True).fill(datetime.fromtimestamp(
+                ((page.evaluate('savedTests[0].ended')+1799)//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
+            assert parse_qs(urlsplit(calls()[-1]).query)['test_id']==['boundary-fixture']
+            assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
+            page.get_by_role('button',name='Remove saved test marker filter').click()
+            page.wait_for_function('window.chartData?.requests?.some(r=>r.id==="outside-marker-fixture")')
+            assert 'test_id' not in parse_qs(urlsplit(calls()[-1]).query)
+            assert 'outside-marker-fixture' in [r['id'] for r in page.evaluate('window.chartData.requests')]
             assert not errors, errors
             assert not network, network
             print('PASS plot-only hover/focus, dual tooltip, click/jitter/keyboard, forward/reverse zoom, letterboxed SVG, cancellation and minute labels')

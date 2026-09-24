@@ -586,7 +586,7 @@ const ledgerCss = `
 .au-ledger table{border-collapse:collapse;font-size:.75rem;width:100%;text-align:left;white-space:nowrap}
 .au-ledger th,.au-ledger td{padding:10px 12px;border-bottom:1px solid var(--ui-stroke-secondary);vertical-align:top}
 .au-ledger th{background:var(--au-table-head-bg);color:var(--ui-text-secondary);font-weight:600}
-.au-ledger td:hover{background:var(--au-hover-bg)}
+
 .au-ledger pre{background:var(--au-surface-bg);white-space:pre-wrap;word-break:break-word;max-width:680px;font-size:.6875rem;max-height:400px;overflow:auto}
 .au-ledger .au-json-details{min-width:145px}
 .au-ledger .au-json-details>summary{cursor:pointer;white-space:nowrap}
@@ -686,7 +686,7 @@ const ledgerCss = `
 .au-ledger .au-plot-hit{fill:transparent;stroke:transparent;stroke-width:1;vector-effect:non-scaling-stroke;cursor:crosshair;touch-action:none}
 .au-ledger .au-plot-hit:hover{stroke:var(--au-selected-bg)}
 .au-ledger .au-chart:focus .au-plot-hit{stroke:var(--ui-accent)}
-.au-ledger .au-plot-selection{fill:#a799ef;fill-opacity:.3;pointer-events:none}
+.au-ledger .au-plot-selection{fill:var(--ui-accent);fill-opacity:.3;pointer-events:none}
 .au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;margin:5px 0 10px}
 .au-ledger .au-axis{font-size:.6875rem;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
 .au-ledger .au-line{fill:none;stroke:var(--ui-accent);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.au-ledger .au-area{fill:var(--ui-accent);opacity:.10}
@@ -708,7 +708,7 @@ const ledgerCss = `
  background-color:var(--au-selected-bg);border-color:var(--ui-accent,#a799ef);
  color:var(--ui-accent,#a799ef);box-shadow:inset 0 -2px 0 var(--ui-accent,#a799ef)
 }
-.au-ledger button:hover:not(:disabled):not([aria-selected="true"]):not([aria-pressed="true"]):not([aria-checked="true"]){background-color:var(--au-hover-bg)}
+
 .au-ledger button:focus-visible,.au-ledger select:focus-visible,.au-ledger input:focus-visible,.au-ledger summary:focus-visible{outline:2px solid var(--ui-accent,#a799ef);outline-offset:3px}
 .au-ledger .au-provider-select,.au-ledger .au-mode-select,.au-ledger .au-period-select{border-color:var(--ui-accent,#a799ef)}
 .au-ledger .au-section-summary{margin:12px 0 18px}
@@ -771,6 +771,8 @@ const ledgerCss = `
 .au-ledger .au-provider-limits .border button{background:transparent;border:0;padding:0 4px}
 .au-ledger .au-provider-quota-status{display:flex;align-items:center;gap:10px;min-height:44px;color:var(--ui-text-tertiary)}
 .au-ledger .au-drill{background:transparent;border:0;text-align:left;padding:0;color:var(--ui-accent);max-width:260px;white-space:normal;overflow-wrap:anywhere}
+.au-ledger button.au-drill:hover,.au-ledger button.au-drill:focus-visible{background:transparent;color:var(--ui-accent);text-decoration:underline;text-underline-offset:3px}
+.au-ledger button.au-drill:focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
 .au-ledger .au-drill small{display:block;color:var(--ui-text-tertiary);font-size:.625rem}
 .au-ledger .au-request-navigation{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;margin:12px 0 16px;padding:0;min-width:0}
 .au-ledger .au-return-actions{display:flex;align-items:center;justify-content:flex-end;gap:18px;flex-wrap:nowrap;flex:none;margin-left:auto}
@@ -816,6 +818,11 @@ const ledgerCss = `
 .au-ledger .au-table[data-layout="records"] .au-json-panel{width:100%;max-width:100%;min-width:0}
 .au-ledger .au-table[data-layout="records"] .au-drill{max-width:100%}
 .au-ledger .au-record-disclosure{display:none}
+.au-ledger .au-record-filter{display:none}
+.au-ledger .au-table[data-layout="records"] .au-record-filter{display:inline-block;max-width:100%;margin:0 0 6px;padding:0;border:0;background:transparent;color:var(--ui-accent);text-align:left;overflow-wrap:anywhere}
+.au-ledger .au-table[data-layout="records"] .au-record-filter:hover,.au-ledger .au-table[data-layout="records"] .au-record-filter:focus-visible{background:transparent;text-decoration:underline;text-underline-offset:3px}
+.au-ledger .au-table[data-layout="records"] .au-record-filter:focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
+.au-ledger .au-table[data-layout="records"] .au-record-filter+.au-record-disclosure{display:flex;width:100%;justify-content:flex-start}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] .au-record-disclosure{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;width:100%;border:0;background:transparent;text-align:left;padding:0;color:var(--ui-text-primary)}
 .au-record-identity{flex:1;min-width:100px;overflow-wrap:anywhere}
 .au-ledger .au-record-summary{display:inline-flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
@@ -1021,8 +1028,9 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
  const cells=(row,total=false,entry=null,key=null)=>row.map((value,i)=>h(total&&i===0?'th':'td',{
   key:i,role:total&&i===0?'rowheader':'cell',...(total&&i===0?{scope:'row'}:{}),
   className:(i===0?'au-record-heading ':headers[i]==='Details'?'au-record-details ':'')+(value===''?'au-record-empty':'')
- },i===0&&entry?h('button',{type:'button',className:'au-record-disclosure','aria-expanded':!!expanded[key],onClick:()=>setExpanded(old=>({...old,[key]:!old[key]}))},
-  h('span',{'aria-hidden':true},expanded[key]?'▾':'▸'),h('span',{className:'au-record-identity'},entry.identity),
+ },i===0&&entry?.onFilter?h('button',{type:'button',className:'au-record-filter',onClick:entry.onFilter,title:'Filter Overview to this '+entry.filterKind},entry.identity):null,
+ i===0&&entry?h('button',{type:'button',className:'au-record-disclosure','aria-label':(expanded[key]?'Collapse ':'Expand ')+(entry.disclosureLabel||String(typeof entry.identity==='string'?entry.identity:key)+' details'),'aria-expanded':!!expanded[key],onClick:()=>setExpanded(old=>({...old,[key]:!old[key]}))},
+  h('span',{'aria-hidden':true},expanded[key]?'▾':'▸'),entry.onFilter?null:h('span',{className:'au-record-identity'},entry.identity),
   entry.started?h('span',{className:'au-muted'},when(entry.started)):null,
   ...(entry.summary||[]).map((item,j)=>h('span',{key:j,className:'au-record-summary',title:item.title},
    h('span',{className:'au-record-summary-label'},item.label),h('strong',{},item.value))),
@@ -1124,18 +1132,33 @@ function UsageChart({data,mode,onSelectRange}){
  const [hover,setHover]=useState(null),points=data?.trend?.buckets||[],unit=data?.trend?.unit||'day',cost=mode==='Cost',vals=points.map(p=>valueFor(p,mode)),max=Math.max(1,...vals.filter(v=>v!=null)),top=max*1.15;
  const W=760,H=258,L=65,R=18,T=14,B=39,w=W-L-R,hg=H-T-B,plotStart=points[0]?.start||0,plotEnd=points[points.length-1]?.end||plotStart+1;
  const xx=i=>L+((points[i]?.start??plotStart)-plotStart)/Math.max(1,plotEnd-plotStart)*w,yy=v=>H-B-(v/top)*hg;
- const plotTime=x=>plotStart+(x-L)/w*(plotEnd-plotStart);
+ // Use real rendered bucket edges on the shared half-hour clock grid, not
+ // clipped off-grid endpoints or synthetic sample timestamps. Data buckets
+ // retain their finer resolution; shade and committed half-open bounds agree.
+ const boundaryTimes=[...new Set([points[0]?.start,...points.map(p=>p.end)].filter(t=>Number.isFinite(t)&&t%1800===0))];
+ const boundaryX=t=>L+(t-plotStart)/Math.max(1,plotEnd-plotStart)*w;
+ const nearestBoundary=x=>boundaryTimes.reduce((best,t)=>Math.abs(boundaryX(t)-x)<Math.abs(boundaryX(best)-x)?t:best,boundaryTimes[0]);
+ const minZoom=1800,canZoom=plotEnd-plotStart>minZoom&&boundaryTimes.length>=2;
+ const zoomRange=(start,end)=>{
+  if(!canZoom||start===end)return null;
+  if(Math.abs(end-start)>=minZoom)return [Math.min(start,end),Math.max(start,end)];
+  if(end>start){const next=boundaryTimes.find(t=>t>=start+minZoom);return next==null?null:[start,next]}
+  const previous=boundaryTimes.filter(t=>t<=start-minZoom).at(-1);
+  return previous==null?null:[previous,start];
+ };
  let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
  vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
  const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
- const move=e=>{const x=plotX(e),time=plotTime(x),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.x=x;d.moved=Math.abs(e.clientX-d.clientX)>=5;setSelection(d.moved?[d.start,x]:null)}};
+ const move=e=>{const x=plotX(e),time=plotStart+(x-L)/w*(plotEnd-plotStart),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.end=nearestBoundary(x);d.moved=Math.abs(e.clientX-d.clientX)>=5&&Math.abs(time-d.start)>=minZoom/2&&Math.abs(time-d.pointerTime)>=minZoom/2;
+  if(d.moved&&d.end===d.start){const i=boundaryTimes.indexOf(d.start);d.end=boundaryTimes[Math.max(0,Math.min(boundaryTimes.length-1,i+(time>d.start?1:-1)))];
+   if(d.end===d.start)d.end=boundaryTimes[i+(i===0?1:-1)];}
+  const range=d.moved?zoomRange(d.start,d.end):null;setSelection(range?range.map(boundaryX):null)}};
  const cancel=()=>{drag.current=null;setSelection(null)};
  const release=e=>{const d=drag.current;if(!d||d.id!==e.pointerId)return;move(e);cancel();if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);
-  if(!d.moved||!onSelectRange||!points.length)return;
-  const lo=Math.floor(plotTime(Math.min(d.start,d.x))),hi=Math.ceil(plotTime(Math.max(d.start,d.x)));
-  if(hi>lo)onSelectRange(lo,hi);
+  const range=d.moved?zoomRange(d.start,d.end):null;
+  if(range&&onSelectRange)onSelectRange(...range);
  };
  return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
@@ -1147,9 +1170,9 @@ function UsageChart({data,mode,onSelectRange}){
  active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null,
  selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
  h('rect',{key:'hit',className:'au-plot-hit',x:L,y:T,width:w,height:hg,
-  onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});const x=plotX(e);drag.current={id:e.pointerId,start:x,x,clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
+  onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});if(!canZoom)return;const x=plotX(e),start=nearestBoundary(x);drag.current={id:e.pointerId,start,end:start,pointerTime:plotStart+(x-L)/w*(plotEnd-plotStart),clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
   onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
-  h('title',{},'Click to interact with Left/Right arrow keys. Click and drag to zoom into a time range.'))),
+  h('title',{},'Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.')))),
  active?h('div',{className:'au-chart-tip',role:'status'},new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · ',cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens',' · '+count(active.attempts)+' requests',active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
@@ -1196,19 +1219,23 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
 }
 
 function Breakdown({data,mode,onDrill,group,setGroup}){
- const minuteBuckets=(data?.trend?.seconds||86400)<3600,timeName=minuteBuckets?'2 minutes':data?.trend?.unit==='hour'?'Hour':'Day';
+ const seconds=data?.trend?.seconds||86400,minuteBuckets=seconds<3600;
+ const timeName=seconds===60?'Minute':minuteBuckets?data?.trend?.unit||'2 minutes':data?.trend?.unit==='hour'?'Hour':'Day';
  // Only the time table is reversed; the shared chart keeps chronological buckets.
  // Other groups arrive ordered by their latest call across the full filtered set.
  const rows=group==='time'?[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
  const total=mode==='Cost'?Number(data.summary.known_cost_usd):data.summary.known.total_tokens;
  const grouping={model:'Model',time:timeName,project:'Project',session:'Session',subagent:'Subagents'};
  function name(g,drill=true){
-  if(group==='model')return h(drill?'div':'span',{},g.model,
-   h(drill?'div':'span',{className:'au-muted',...(!drill?{style:{display:'block'}}:{})},uiNames[g.provider]||g.provider));
-  if(group==='time')return new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(minuteBuckets?{hour:'numeric',minute:'2-digit'}:timeName==='Hour'?{hour:'numeric'}:{})});
+  const actionable=drill&&nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
+  if(group==='model')return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},g.model,
+   h('span',{className:'au-muted',style:{display:'block'}},uiNames[g.provider]||g.provider));
+  if(group==='time'){
+   const label=new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(minuteBuckets?{hour:'numeric',minute:'2-digit'}:timeName==='Hour'?{hour:'numeric'}:{})});
+   return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},label);
+  }
   const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
-  const drillable=nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)!==null;
-  return h(drill&&drillable?'button':'span',{className:'au-drill',title:g.path||g.key,...(drill&&drillable?{onClick:()=>onDrill(group,g)}:{})},label,
+  return h(actionable?'button':'span',{className:actionable?'au-drill':'',title:g.path||g.key,...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},label,
    group==='subagent'?h('small',{},(g.agent_role||'subagent')+' · parent '+(originalId(g,'parent_session_id')||'unknown')):group==='session'?h('small',{},g.project_label||'Project unavailable'):h('small',{},g.basis?.includes('named_project')?'Named project':g.basis?.includes('working_directory')?'Working directory':g.basis?.includes('repository')?'Repository':'Metadata unavailable'));
  }
  const detail=group==='project'||group==='session'||group==='subagent';
@@ -1217,7 +1244,7 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
   return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
-  identity:name(g,false),summary:[
+  identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC'}):readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
    {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
    {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
   ]
@@ -1226,31 +1253,39 @@ function Breakdown({data,mode,onDrill,group,setGroup}){
 
 // Request drill-downs are reversible local navigation. These fields narrow the
 // current provider/time window; they never change or clear the ledger itself.
-const EMPTY_REQUEST_FILTERS={agent:'',project:'',session:'',sessionScope:'family',subagentId:''};
+const EMPTY_REQUEST_FILTERS={agent:'',project:'',session:'',sessionScope:'family',subagentId:'',model:'',modelProvider:'',bucketStart:null,bucketEnd:null};
 function requestPageKey(context,filters){
- return JSON.stringify([context,filters.agent,filters.project,filters.session,filters.sessionScope,filters.subagentId]);
+ return JSON.stringify([context,filters.agent,filters.project,filters.session,filters.sessionScope,filters.subagentId,filters.model,filters.modelProvider,filters.bucketStart,filters.bucketEnd]);
 }
 function nextDrillFilters(current,kind,row){
  const key=row?.key;
- if(!key||!['project','session','subagent'].includes(kind))return null;
+ if(kind==='model')return row?.provider&&row?.model&&row.model!=='unknown'?{...current,model:row.model,modelProvider:row.provider}:null;
+ if(kind==='time'){
+  if(!Number.isFinite(row?.start)||!Number.isFinite(row?.end)||row.end<=row.start)return null;
+  const lo=Math.max(current.bucketStart??0,row.start),hi=Math.min(current.bucketEnd??Infinity,row.end);
+  return hi>lo?{...current,bucketStart:lo,bucketEnd:hi}:null;
+ }
+ if(!key||!['project','session','subagent'].includes(kind)||originalId(row,'key')==='unattributed')return null;
  if(kind==='project')return {...current,project:key,session:'',subagentId:''};
- if(kind==='session')return originalId(row,'key')==='unattributed'?null:{...current,session:key,sessionScope:'family',subagentId:''};
+ if(kind==='session')return {...current,session:key,sessionScope:'family',subagentId:''};
  return {...current,subagentId:key,session:'',agent:'subagent'};
 }
-function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,identityLabels}){
- const {agent,project,session,sessionScope,subagentId}=filters;
- if(!history.length&&!agent&&!project&&!session&&!subagentId)return null;
+function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,identityLabels,overview=false}){
+ const {agent,project,session,sessionScope,subagentId,model,modelProvider,bucketStart,bucketEnd}=filters;
+ if(!history.length&&!agent&&!project&&!session&&!subagentId&&!model&&bucketStart==null)return null;
  const chips=[];
  const chip=(field,label,value)=>chips.push(h('button',{key:field,type:'button',className:'au-scope-chip',title:value,'aria-label':'Remove '+field+' filter',onClick:()=>onRemove(field)},h('span',{},label),h('span',{'aria-hidden':true},'×')));
  if(project){const match=(projects||[]).find(p=>p.id===project);chip('project','Project: '+(match?.label||project)+provenance(match),match?.path||project)}
  if(agent)chip('agent',({primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed agents'})[agent]||agent,agent);
  if(session)chip('session','Session: '+(identityLabels?.get(session)||session)+(sessionScope==='family'?' + descendants':''),session);
  if(subagentId)chip('subagent','Subagent: '+(identityLabels?.get(subagentId)||subagentId),subagentId);
+ if(model)chip('model','Model: '+model+' · '+(uiNames[modelProvider]||modelProvider),model);
+ if(bucketStart!=null)chip('bucket','Time: '+new Date(bucketStart*1000).toLocaleString()+' – '+new Date(bucketEnd*1000).toLocaleString(),String(bucketStart));
  const previous=history[history.length-1];
- return h('nav',{className:'au-request-navigation','aria-label':'Request list navigation','data-testid':'request-navigation'},
+ return h('nav',{className:'au-request-navigation','aria-label':'Usage filter navigation','data-testid':'request-navigation'},
   chips.length?h('div',{className:'au-active-scopes',role:'group','aria-label':'Active request filters'},...chips):null,
   h('div',{className:'au-return-actions'},
-   h('button',{type:'button',className:'au-return-button','data-testid':'request-show-all',onClick:onShowAll,title:'Clear agent, project and session filters. Keep the current provider and time window.'},'Show all requests'),
+   h('button',{type:'button',className:'au-return-button','data-testid':'request-show-all',onClick:onShowAll,title:'Clear identity and time-bucket filters. Keep the current provider and selected time window.'},overview?'Clear selection':'Show all requests'),
    previous?h('button',{type:'button',className:'au-return-button','data-testid':'request-back',onClick:onBack,title:previous.tab==='Overview'?'Return to the previous breakdown':'Return to the previous request list','aria-label':'Back to previous view'},
     h('svg',{className:'au-back-icon',viewBox:'0 0 16 16',width:14,height:14,fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true,focusable:'false'},h('path',{d:'M7 4 3 8l4 4M3 8h10'})),
     h('span',{className:'au-return-label'},'Back')):null));
@@ -1261,7 +1296,7 @@ function RequestView({data,more,back,offset,onDrill,details}){
   r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),h('span',{title:r.supplemental_valuation?'Retrospective API-equivalent estimate using rates observed '+when(r.supplemental_valuation.observed_at)+'; original saved cost is in Details. Not a historical charge.':'Saved request cost estimate'},money(r.cost?.total_usd),r.supplemental_valuation?' †':''),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
   table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
-   (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
+   (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),disclosureLabel:'request '+r.id+' details',started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
  !rows.length?h('p',{className:'au-muted'},'No matching requests.'):null,
   h('div',{className:'au-toolbar'},offset>0?h('button',{onClick:back},'Previous requests'):null,data.next_offset!=null?h('button',{onClick:more},'Next requests'):null),
  h('p',{className:'au-muted'},`Showing ${data.requests.length?offset+1:0}–${offset+data.requests.length} of ${data.request_count} requests.`))
@@ -1281,7 +1316,7 @@ function CompressionView({data,mode,setMode,details}){
  h('div',{className:'au-toolbar'},h('select',{value:mode,onChange:e=>setMode(e.target.value),'aria-label':'Compression type'},...['all','compression','micro_compaction'].map(v=>h('option',{key:v,value:v},v.replaceAll('_',' ')))),
  h('button',{onClick:()=>downloadFile('compression-events.json',JSON.stringify(data.compressions,null,2),'application/json')},'Export compression JSON')),
  h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id),
-  visible.map(c=>({identity:readable(c,c.session_id?'session_id':'session_after'),started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
+  visible.map(c=>({identity:readable(c,c.session_id?'session_id':'session_after'),disclosureLabel:'compression '+c.id+' details',started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
  !rows.length?h('p',{className:'au-muted'},'No compression events in this window.'):null,
  data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null)
 }
@@ -1292,8 +1327,8 @@ function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,w
  return h('div',{className:'au-cache-window','data-testid':'cache-window-filters'},
   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Cache time window'},...Object.entries(choices).map(([value,label])=>h('button',{key:value,type:'button','aria-pressed':period===value,onClick:()=>onPeriod(value)},label))),
   h('select',{className:'au-period-select','aria-label':'Cache time window',value:period,onChange:e=>onPeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([value,label])=>h('option',{key:value,value},label))),
-  period==='custom'?h('input',{type:'datetime-local',step:1,value:startValue,'aria-label':'Cache window start',onChange:e=>onStart(e.target.value)}):null,
-  period==='custom'?h('input',{type:'datetime-local',step:1,value:endValue,'aria-label':'Cache window end',onChange:e=>onEnd(e.target.value)}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:startValue,'aria-label':'Cache window start',onChange:e=>onStart(e.target.value)}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',onChange:e=>onEnd(e.target.value)}):null,
   h('span',{className:'au-muted au-window-label'},window?new Date(window.start*1000).toLocaleString()+' — '+new Date(window.end*1000).toLocaleString():''));
 }
 function cacheCostValue(s){
@@ -1378,28 +1413,51 @@ const viewScope=selected=>isAllProfiles(selected)?'aggregate:all':selected?'prof
 const PERIODS=['1h','24h','7d','30d','90d','all','custom'];
 const GROUPS=['model','time','project','session','subagent'];
 const SKILL_VIEWS=['Frequency','Context footprint','Session timeline'];
+const HALF_HOUR=1800;
+const validHalfHour=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:(00|30)$/.test(value)&&
+ Number.isFinite(Date.parse(value))&&Date.parse(value)/1000%HALF_HOUR===0;
+const validCustomWindow=(start,end)=>validHalfHour(start)&&validHalfHour(end)&&Date.parse(end)-Date.parse(start)>=HALF_HOUR*1000;
+const localHalfHour=(seconds,round=Math.floor)=>{
+ const epoch=round(seconds/HALF_HOUR)*HALF_HOUR,date=new Date(epoch*1000);
+ return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
+};
+const markerWindow=(started,ended)=>{
+ const start=localHalfHour(started);
+ const stop=Math.max(Math.ceil(ended/HALF_HOUR)*HALF_HOUR,Date.parse(start)/1000+HALF_HOUR);
+ return [start,localHalfHour(stop)];
+};
 const safeId=value=>typeof value==='string'&&value.length<=160&&!/[\x00-\x1f]/.test(value)?value:'';
 const option=(value,choices,fallback)=>choices.includes(value)?value:fallback;
 function readView(profile){
- const defaults={provider:QUOTA_HOME,tab:'Overview',mode:'Tokens',period:'24h',customStart:'',customEnd:'',
+ const defaults={provider:QUOTA_HOME,tab:'Overview',mode:'Tokens',period:'24h',customStart:'',customEnd:'',chartBounds:null,
   filterTest:'',compMode:'all',group:'model',filters:{...EMPTY_REQUEST_FILTERS},skillsView:'Frequency',skillsModel:'',skillsSkill:''};
  // An implicit server profile is not stable across backend/profile changes.
  if(!profile)return defaults;
  let raw;try{raw=storage?.get(VIEW_KEY+encodeURIComponent(profile),null)}catch{return defaults}
  if(!raw||typeof raw!=='object'||Array.isArray(raw)||raw.version!==1||raw.profile!==profile)return defaults;
  const filters=raw.filters&&typeof raw.filters==='object'&&!Array.isArray(raw.filters)?raw.filters:{};
- const datetime=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?$/.test(value)&&!Number.isNaN(Date.parse(value))?value:'';
+ const datetime=value=>validHalfHour(value)?value:'';
  const period=option(raw.period,PERIODS,'24h');
  const customStart=period==='custom'?datetime(raw.customStart):'';
  const customEnd=period==='custom'?datetime(raw.customEnd):'';
+ const exact=raw.chartBounds;
+ const chartBounds=period==='custom'&&customStart&&customEnd&&Number.isFinite(exact?.start)&&Number.isFinite(exact?.end)&&
+  validCustomWindow(customStart,customEnd)&&exact.start===Date.parse(customStart)/1000&&
+  exact.end===Date.parse(customEnd)/1000?{start:exact.start,end:exact.end}:null;
+ const restoredPeriod=period==='custom'&&!validCustomWindow(customStart,customEnd)&&!(raw.filterTest&&customStart&&!customEnd)?'24h':period;
+ const model=safeId(filters.model),modelProvider=safeId(filters.modelProvider);
+ const bucketStart=Number.isFinite(filters.bucketStart)&&filters.bucketStart>=0?filters.bucketStart:null;
+ const bucketEnd=bucketStart!=null&&Number.isFinite(filters.bucketEnd)&&filters.bucketEnd>bucketStart?filters.bucketEnd:null;
  return {...defaults,
   provider:raw.provider===''?'':raw.provider===QUOTA_HOME?QUOTA_HOME:safeId(raw.provider)||QUOTA_HOME,
-  tab:option(raw.tab,PROVIDER_SUBPAGES,'Overview'),mode:option(raw.mode,['Tokens','Cost'],'Tokens'),period,
-  customStart,customEnd:customStart&&customEnd&&Date.parse(customEnd)<Date.parse(customStart)?'':customEnd,
-  filterTest:safeId(raw.filterTest),compMode:option(raw.compMode,['all','compression','micro_compaction'],'all'),
+  tab:option(raw.tab,PROVIDER_SUBPAGES,'Overview'),mode:option(raw.mode,['Tokens','Cost'],'Tokens'),period:restoredPeriod,
+  customStart:restoredPeriod==='custom'?customStart:'',customEnd:restoredPeriod==='custom'?customEnd:'',chartBounds:restoredPeriod==='custom'?chartBounds:null,
+  filterTest:restoredPeriod==='custom'?safeId(raw.filterTest):'',compMode:option(raw.compMode,['all','compression','micro_compaction'],'all'),
   group:option(raw.group,GROUPS,'model'),
   filters:{agent:option(filters.agent,['','primary','subagent','unknown'],''),project:safeId(filters.project),
-   session:safeId(filters.session),sessionScope:option(filters.sessionScope,['family','exact'],'family'),subagentId:safeId(filters.subagentId)},
+   session:safeId(filters.session),sessionScope:option(filters.sessionScope,['family','exact'],'family'),subagentId:safeId(filters.subagentId),
+   model:model&&modelProvider&&(!raw.provider||raw.provider===QUOTA_HOME||raw.provider===modelProvider)?model:'',modelProvider:model&&modelProvider&&(!raw.provider||raw.provider===QUOTA_HOME||raw.provider===modelProvider)?modelProvider:'',
+   bucketStart:bucketEnd!=null?bucketStart:null,bucketEnd},
   skillsView:option(raw.skillsView,SKILL_VIEWS,'Frequency'),skillsModel:safeId(raw.skillsModel),skillsSkill:safeId(raw.skillsSkill)};
 }
 function saveView(profile,view){
@@ -1688,7 +1746,7 @@ function SkillsUsageView({params,scope,onSession,profile,windowSeconds,view,setV
  const [offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
  const [scopeOwner]=useState(()=>({scope}));
  useEffect(()=>{if(scopeOwner.scope!==scope){scopeOwner.scope=scope;setModel('');setSkill('');setOffset(0);setSnapshotId('')}},[scope]);
- const p=new URLSearchParams(params);p.set('model',model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
+ const p=new URLSearchParams(params);p.set('model',p.get('model')||model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
  const path='/ledger/skills?'+p,key=path;
  const query=useQuery({...readOptions(profile),queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,path),_skillsScope:key})});
  const [retained]=useState(()=>({scope:null,data:null}));
@@ -1727,7 +1785,7 @@ function SkillsUsageView({params,scope,onSession,profile,windowSeconds,view,setV
  return h('section',{'data-testid':'skills-usage','aria-label':'Skills usage'},
   h(Coverage,{data}),
   h('div',{className:'au-toolbar'},h('div',{className:'au-segment',role:'group','aria-label':'Skills view'},...['Frequency','Context footprint','Session timeline'].map(v=>h('button',{key:v,'aria-pressed':view===v,onClick:()=>{setView(v);setOffset(0)}},v))),
-   h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:model,onChange:e=>{setModel(e.target.value);setOffset(0);setSnapshotId('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[])])].map(m=>h('option',{key:m,value:m},m))))),
+   h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:p.get('model')||'',disabled:!!new URLSearchParams(params).get('model'),onChange:e=>{setModel(e.target.value);setOffset(0);setSnapshotId('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[]),...(p.get('model')?[p.get('model')]:[])])].map(m=>h('option',{key:m,value:m},m))))),
 
   query.error?h('div',{className:'au-notice',role:'alert'},'Skills history unavailable. Newly installed recorder/API code requires a backend and producer restart. ',h('button',{onClick:()=>query.refetch()},'Retry skills history')):null,
   !data?h('p',{className:'au-muted',role:'status'},query.error?'No history shown for this selection.':'Loading skills history…'):h('div',{},
@@ -1777,19 +1835,26 @@ function UsagePageScope({selected}){
  useEffect(()=>{
   if(restoringProvider&&catalogueReady){setProvider(provider);setRestoringProvider(false)}
  },[restoringProvider,catalogueReady,provider]);
- const [displayMode,setDisplayMode]=useState(saved.mode),[period,setPeriod]=useState(saved.period),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(saved.customStart),[customEnd,setCustomEnd]=useState(saved.customEnd),[filterTest,setFilterTest]=useState(saved.filterTest),[err,setErr]=useState(''),[compMode,setCompMode]=useState(saved.compMode),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
+ const [displayMode,setDisplayMode]=useState(saved.mode),[period,setPeriod]=useState(saved.period),[anchor,setAnchor]=useState(()=>Date.now()/1000),[customStart,setCustomStart]=useState(saved.customStart),[customEnd,setCustomEnd]=useState(saved.customEnd),[chartBounds,setChartBounds]=useState(saved.chartBounds),[filterTest,setFilterTest]=useState(saved.filterTest),[err,setErr]=useState(''),[compMode,setCompMode]=useState(saved.compMode),[testId,setTestId]=useState(''),[busy,setBusy]=useState(false)
  const [requestFilters,setRequestFilters]=useState(()=>saved.filters);
- const {agent,project,session,sessionScope,subagentId}=requestFilters;
+ const {agent,project,session,sessionScope,subagentId,model,modelProvider,bucketStart,bucketEnd}=requestFilters;
  const [breakdownGroup,setBreakdownGroup]=useState(saved.group);
  const [skillsView,setSkillsView]=useState(saved.skillsView),[skillsModel,setSkillsModel]=useState(saved.skillsModel),[skillsSkill,setSkillsSkill]=useState(saved.skillsSkill);
- useEffect(()=>{if(restoringProvider&&!catalogueReady)return;saveView(viewScope(selected),{provider,tab,mode:displayMode,period,customStart,customEnd,filterTest,
+ useEffect(()=>{if(restoringProvider&&!catalogueReady)return;saveView(viewScope(selected),{provider,tab,mode:displayMode,period,customStart,customEnd,chartBounds,filterTest,
   compMode,group:breakdownGroup,filters:requestFilters,skillsView,skillsModel,skillsSkill})},
-  [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
+  [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,chartBounds,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
  const [drillTrail,setDrillTrail]=useState({context:'',entries:[]});
+ const pendingFilterFocus=useRef('');
+ useEffect(()=>{
+  if(!pendingFilterFocus.current)return;
+  const field=pendingFilterFocus.current;
+  pendingFilterFocus.current='';
+  document.querySelector('.au-request-navigation [aria-label="Remove '+field+' filter"]')?.focus({preventScroll:true});
+ },[requestFilters]);
  const [requestPage,setRequestPage]=useState({key:'',offset:0});
  // The rolling clock is intentionally excluded: refreshing live totals must not
  // discard Back history. A changed provider/profile/test/window does invalidate it.
- const navigationContext=JSON.stringify([selected,provider,period,customStart,customEnd,filterTest]);
+ const navigationContext=JSON.stringify([selected,provider,period,customStart,customEnd,chartBounds,filterTest]);
  const pageKey=requestPageKey(navigationContext,requestFilters);
  const offset=requestPage.key===pageKey?requestPage.offset:0;
  const setOffset=value=>setRequestPage({key:pageKey,offset:Math.max(0,value)});
@@ -1801,12 +1866,23 @@ function UsagePageScope({selected}){
   setRequestPage({key:requestPageKey(navigationContext,next),offset:0});
  }
  function clearRequestFilters(){editRequestFilters(EMPTY_REQUEST_FILTERS)}
+ function changeProvider(next){
+  if(next===provider)return;
+  // Project/session/subagent/model and bucket identities come from the old
+  // provider's rows. Agent scope is a broad, provider-independent choice.
+  setRequestFilters({...EMPTY_REQUEST_FILTERS,agent:requestFilters.agent});
+  setSkillsModel('');setSkillsSkill('');
+  setDrillTrail({context:'',entries:[]});setRequestPage({key:'',offset:0});
+  setProvider(next);
+ }
  function showAllRequests(){detailEntries.clear();clearRequestFilters();setTab('Requests')}
  function removeRequestFilter(field){
   if(field==='session')editRequestFilters({session:'',sessionScope:'family'});
   else if(field==='subagent')editRequestFilters({subagentId:''});
   else if(field==='agent')editRequestFilters({agent:'',subagentId:''});
   else if(field==='project')editRequestFilters({project:''});
+  else if(field==='model')editRequestFilters({model:'',modelProvider:''});
+  else if(field==='bucket')editRequestFilters({bucketStart:null,bucketEnd:null});
  }
  function returnFromDrill(){
   const previous=drillHistory[drillHistory.length-1];if(!previous)return;
@@ -1817,11 +1893,13 @@ function UsagePageScope({selected}){
  const isQuota=provider===QUOTA_HOME;
  const ranges={'1h':3600,'24h':86400,'7d':604800,'30d':2592000,'90d':7776000,all:0}
  const initialStart=period==='custom'?(customStart?new Date(customStart).getTime()/1000:0):(ranges[period]?anchor-ranges[period]:0)
- const start=Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
- const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest)
+ const customValid=period!=='custom'||validCustomWindow(customStart,customEnd)||!!(filterTest&&validHalfHour(customStart)&&!customEnd);
+ const start=chartBounds&&period==='custom'?chartBounds.start:Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=chartBounds&&period==='custom'?chartBounds.end:period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
+ const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'200',offset:String(offset),session,session_scope:sessionScope,agent,project,subagent:subagentId,model,model_provider:modelProvider});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest);
+ if(bucketStart!=null&&bucketEnd!=null){params.set('bucket_start',String(bucketStart));params.set('bucket_end',String(bucketEnd))}
  const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
  const windowSeconds=period!=='custom'?ranges[period]:0;
- const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:readScope,enabled:!isQuota,windowSeconds});
+ const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:readScope,enabled:!isQuota&&customValid,windowSeconds});
  const connection=useRecorderHealth({profile:selected,enabled:!isQuota,onHint:ledger.hint,readError:ledger.error,changeLimited:ledger.checkLimited});
  useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
@@ -1888,20 +1966,20 @@ function UsagePageScope({selected}){
    downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,stored_accounting:r.stored_accounting||null,supplemental_valuation:r.supplemental_valuation||null,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
- async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(new Date(d.started*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setCustomEnd('')}else{setCustomEnd(new Date(d.ended*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19));setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
- function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const local=x=>new Date(x*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,19);setCustomStart(local(t.started));setCustomEnd(t.ended?local(t.ended):'')}
- function changePeriod(v){setPeriod(v);setFilterTest('');setAnchor(Date.now()/1000)}
+ async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});setChartBounds(null);if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else{const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
+ function chooseTest(id){const t=data.tests.find(t=>t.id===id);if(!t)return;setChartBounds(null);setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const bounds=t.ended?markerWindow(t.started,t.ended):[localHalfHour(t.started),''];setCustomStart(bounds[0]);setCustomEnd(bounds[1])}
+ function changePeriod(v){if(v===period)return;setPeriod(v);setChartBounds(null);setFilterTest('');setAnchor(Date.now()/1000);if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null})}
  function selectChartRange(lo,hi){
-  const local=t=>{const date=new Date(t*1000);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,19)};
-  setCustomStart(local(lo));setCustomEnd(local(hi));setFilterTest('');setPeriod('custom');
+  setCustomStart(localHalfHour(lo));setCustomEnd(localHalfHour(hi));setChartBounds({start:lo,end:hi});setPeriod('custom');if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null});
  }
  function drill(kind,g){
   const next=nextDrillFilters(requestFilters,kind,g);if(!next)return;
   const nextKey=requestPageKey(navigationContext,next);
-  if(tab==='Requests'&&nextKey===pageKey)return; // No duplicate self-navigation.
+  if(nextKey===pageKey)return; // No duplicate self-navigation.
   const previous={filters:{...requestFilters},tab,group:breakdownGroup,offset};
+  if(document.activeElement?.classList.contains('au-record-filter'))pendingFilterFocus.current=kind==='time'?'bucket':kind==='subagent'?'subagent':kind;
   setDrillTrail({context:navigationContext,entries:[...drillHistory,previous].slice(-50)});
-  setRequestFilters(next);setRequestPage({key:nextKey,offset:0});setTab('Requests');
+  setRequestFilters(next);setRequestPage({key:nextKey,offset:0});if(tab!=='Overview')setTab('Requests');
  }
  const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
  const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
@@ -1911,12 +1989,12 @@ function UsagePageScope({selected}){
  // The original quota page is a sibling of provider pages, not of their subpages.
  const mainNav=h('div',{'data-testid':'main-navigation'},
   h('nav',{className:'au-tabs au-main-tabs au-provider-tabs','aria-label':'Providers'},
-   h('div',{role:'tablist','aria-label':'Provider pages',style:{display:'contents'},onKeyDown:tabKeys},...mainItems.map(item=>h('button',{key:item.id||'all',id:mainId(item.id),role:'tab','aria-selected':provider===item.id,'aria-controls':'au-main-panel',tabIndex:provider===item.id?0:-1,onClick:()=>setProvider(item.id)},item.label)))),
-  h('select',{className:'au-provider-select','aria-label':'Main page',value:provider,onChange:e=>setProvider(e.target.value)},...mainItems.map(item=>h('option',{key:item.id||'all',value:item.id},item.label))));
+   h('div',{role:'tablist','aria-label':'Provider pages',style:{display:'contents'},onKeyDown:tabKeys},...mainItems.map(item=>h('button',{key:item.id||'all',id:mainId(item.id),role:'tab','aria-selected':provider===item.id,'aria-controls':'au-main-panel',tabIndex:provider===item.id?0:-1,onClick:()=>changeProvider(item.id)},item.label)))),
+   h('select',{className:'au-provider-select','aria-label':'Main page',value:provider,onChange:e=>changeProvider(e.target.value)},...mainItems.map(item=>h('option',{key:item.id||'all',value:item.id},item.label))));
  const subNav=h('nav',{className:'au-tabs au-subpage-tabs','aria-label':'Provider subpages','data-testid':'provider-subnavigation'},
   h('div',{role:'tablist','aria-label':'Provider subpages',style:{display:'contents'},onKeyDown:tabKeys},...PROVIDER_SUBPAGES.map(v=>h('button',{key:v,id:subId(v),role:'tab','aria-selected':tab===v,'aria-controls':'au-subpage-panel',tabIndex:tab===v?0:-1,onClick:()=>setTab(v)},v))));
  if(isQuota)return h(ScrollArea,{className:'h-full'},h('div',{className:'au-ledger p-4'},h('style',{},ledgerCss),pageHeader,mainNav,
-  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota:quotaCurrent&&Array.isArray(quota.data.providers)?quota:{...quota,data:null,error:catalogueReady?quota.error||new Error('Provider catalogue unavailable for this profile.'):null},selected,hiddenIds,showHidden,onNavigate:setProvider}))))
+  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(QUOTA_HOME)},h(QuotaHome,{quota:quotaCurrent&&Array.isArray(quota.data.providers)?quota:{...quota,data:null,error:catalogueReady?quota.error||new Error('Provider catalogue unavailable for this profile.'):null},selected,hiddenIds,showHidden,onNavigate:changeProvider}))))
  let body=null
  if(data?.summary){
    if(tab==='Overview')body=h(Breakdown,{data,mode:displayMode,onDrill:drill,group:breakdownGroup,setGroup:setBreakdownGroup})
@@ -1940,14 +2018,16 @@ function UsagePageScope({selected}){
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
    h('span',{className:'au-muted au-window-label'},data?new Date(data.window.start*1000).toLocaleString()+' — '+new Date(data.window.end*1000).toLocaleString():'')),
   h('div',{className:'au-toolbar au-filters'},
-  period==='custom'?h('input',{type:'datetime-local',step:1,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setFilterTest('')}}):null,
-  period==='custom'?h('input',{type:'datetime-local',step:1,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setFilterTest('')}}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}):null,
+  filterTest?h('button',{type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
+  period==='custom'&&!customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart. No data is requested until valid.'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
   h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(data?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
   h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
   session?h('select',{'aria-label':'Session scope',value:sessionScope,onChange:e=>editRequestFilters({sessionScope:e.target.value})},h('option',{value:'family'},'Session + descendants'),h('option',{value:'exact'},'This session only')):null,
   subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+(identityLabels.get(subagentId)||subagentId.slice(-14))+' ×'):null,
-  (project||agent||session||subagentId)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
+  (project||agent||session||subagentId||model||bucketStart!=null)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
   !aggregate&&h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
   h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
   data?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...data.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
@@ -1955,10 +2035,10 @@ function UsagePageScope({selected}){
   h(Summary,{data,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+offset,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
-  tab==='Requests'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:showAllRequests,onRemove:removeRequestFilter}):null,
+  tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:data?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
   err?notice(err):null,
   ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
-  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setFilterTest('')},onEnd:v=>{setCustomEnd(v);setFilterTest('')},window:data?.window}):null,
+  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setChartBounds(null)},onEnd:v=>{setCustomEnd(v);setChartBounds(null)},window:data?.window}):null,
   body||h('p',{className:'au-muted'},data?.summary===null?'Recorded usage unavailable for this selection.':'Waiting for ledger…'))))
 }
 

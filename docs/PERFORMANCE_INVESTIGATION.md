@@ -1,0 +1,9 @@
+# Pending investigation: slow period changes
+
+**Status:** a diagnostic question, not an established defect root cause or performance guarantee. Changing a period has appeared slow; no evidence here proves a stuck view or minute-scale live root cause. The **Online** recorder badge tests connection/capture health, not analytics speed (`ANALYTICS_RELOAD.md`). Refresh on the active read can enqueue a follow-up read and lengthen apparent wait; distinguish that from backend query duration or actual deadlock.
+
+The Overview candidate changes range resolution, read predicates and query scope for identity/time filtering; its implementer-reported functional suite and offline browser scripts do **not** measure production period-change latency or confirm an optimisation. Performance work and independent diagnosis remain pending; do not attribute a live minute-scale wait to these paths without measurements.
+
+A synthetic repeated fixture with roughly 27,000 `execution_state` rows and 1,200 request rows exposed nontrivial SQL/read cost; this is **synthetic**, not a representative live latency distribution or proof that these rows explain any user's delay. Older isolated memory measurements in `docs/READ_MEMORY.md` explicitly have limited latency comparability and must not be repackaged as new timing evidence.
+
+Next diagnostic pass: instrument request start/end, read/snapshot/SQL phases, profile fan-in, frontend request ordering and post-refresh follow-up separately in an isolated fixture. Repeat with control/candidate and distinguish cold/warm runs, ledger cardinality and query plan; record raw elapsed times and relevant resource limits without exposing live account or ledger contents. Only then decide on a bounded change and fixture-based regression. Do not change production runtime based on this hypothesis alone.

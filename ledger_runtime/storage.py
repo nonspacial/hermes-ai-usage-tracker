@@ -184,14 +184,14 @@ class Store:
         with self.db() as c:row=c.execute('SELECT started,ended FROM tests WHERE id=?',(key,)).fetchone()
         if not row:raise ValueError('Unknown test marker.')
         return row['started'],row['ended']
-    def _request_keys(self,start,end,provider='',session='',agent='',project='',session_scope='exact',subagent='',*,limit):
+    def _request_keys(self,start,end,provider='',session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,limit):
         """Payload-free prefix from the same immutable snapshot used by read."""
-        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent)
+        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model,model_provider)
         with self.db() as c:
             return [tuple(r) for r in c.execute('SELECT started,id FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ?',params+[limit])]
 
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',*,trend_start=None,_detail_ids=None):
-        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent)
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None):
+        where,params,end=request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model,model_provider)
         with self.db() as c:
             # Keep totals, applied rates and request rows on one read snapshot.
             c.execute('BEGIN')
@@ -215,9 +215,10 @@ class Store:
             rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM requests WHERE '+detail_where+' ORDER BY started DESC,id DESC'+paging,detail_params)]
             from .cache_progression import query_progression
             read_progression, read_changes = query_progression(c,where,params,start,end,{r['id'] for r in rows})
-            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,model,COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
+            effective_model="COALESCE(NULLIF(json_extract(data,'$.response_model'),''),NULLIF(model,''),'unknown')"
+            groups=[dict(provider=row['provider'],model=row['model'],agent_kind=row['agent_kind'],task=row['task'],**summary_from_sql(row)) for row in c.execute("SELECT provider,"+effective_model+" AS model,COALESCE(json_extract(data,'$.agent_kind'),'unknown') AS agent_kind,task,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,"+effective_model+",COALESCE(json_extract(data,'$.agent_kind'),'unknown'),task ORDER BY MAX(started) DESC,provider,model,agent_kind,task",params)]
             provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
-            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute("SELECT provider,COALESCE(json_extract(data,'$.response_model'),model) AS model,"+summary_sql+" FROM requests WHERE "+where+" GROUP BY provider,COALESCE(json_extract(data,'$.response_model'),model) ORDER BY MAX(started) DESC,provider,model",params)]
+            model_groups=[dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+effective_model+' AS model,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider,'+effective_model+' ORDER BY MAX(started) DESC,provider,model',params)]
             trend=sql_trend(c,where,params,start,end,summary_sql,trend_start=trend_start)
             attribution=attribution_groups(c,where,params,summary_sql)
             from .pricing import catalog_status
@@ -225,7 +226,9 @@ class Store:
             for row in rows:
                 row['execution_state']=c.execute('SELECT execution_state(?)',(jd(row),)).fetchone()[0]
                 if row['id'] in read_changes:row['cache_read_change']=read_changes[row['id']]
-            compwhere=where.replace('requests.data','compressions.data')
+            compwhere=where.replace('requests.data','compressions.data').replace(
+                "COALESCE(NULLIF(json_extract(data,'$.response_model'),''),NULLIF(model,''),'unknown')",
+                "COALESCE(NULLIF(json_extract(data,'$.model'),''),'unknown')")
             compression_count=c.execute('SELECT COUNT(*) FROM compressions WHERE '+compwhere,params).fetchone()[0]
             comps=[json.loads(r[0]) for r in c.execute('SELECT data FROM compressions WHERE '+compwhere+' ORDER BY started DESC,id DESC LIMIT 1000',params)]
             # Compression bill is derived from its linked requests, never counted twice.
@@ -247,13 +250,17 @@ class Store:
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
 
-def request_predicate(start,end,provider,session,agent,project,session_scope,subagent):
+def request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model='',model_provider=''):
     if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')
     if session_scope not in ('exact','family'):raise ValueError('Invalid session scope.')
     end=time.time() if end is None else end
     if start<0 or end<start: raise ValueError('Invalid time window.')
     where='started>=? AND started<?';params=[start,end]
     if provider: where+=' AND provider=?';params.append(provider)
+    if model_provider: where+=' AND provider=?';params.append(model_provider)
+    if model:
+        where+=" AND COALESCE(NULLIF(json_extract(data,'$.response_model'),''),NULLIF(model,''),'unknown')=?"
+        params.append(model)
     if session:
         if session_scope=='family':
             where+=" AND (session_id=? OR EXISTS (SELECT 1 FROM json_each(requests.data,'$.session_lineage') WHERE value=?))";params.extend([session,session])
@@ -384,14 +391,15 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
         first=c.execute('SELECT MIN(started) FROM requests WHERE '+where,params).fetchone()[0]
         start=first if first is not None else max(0,end-86400)
     # Allow short windows above one hour: rolling start and server end are sampled separately.
-    step=120 if end-start<=7200 else (3600 if end-start<=172800 else 86400)
+    duration=end-start
+    step=60 if duration<=1800 else (120 if duration<=7200 else (3600 if duration<=172800 else 86400))
     if (end-start)/step>400:step=86400*max(1,int((end-start)/86400/400)+1)
     lo=int(start//step)*step
     rows={int(row['bucket']):summary_from_sql(row) for row in c.execute(
       'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
     blank=summary([])
     buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank)) for t in range(lo,int(end)+1,step) if t<end]
-    return {'unit':'2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days')),'timezone':'UTC','seconds':step,'buckets':buckets}
+    return {'unit':'minute' if step==60 else ('2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'))),'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
 def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL):

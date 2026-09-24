@@ -244,7 +244,7 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
     reports, statuses, ready = [], [], []
     # One generation for the entire fan-in. No Store constructor or worker.
     with runtime.lease() as generation, ExitStack() as snapshots:
-        anchor = start if start else None
+        anchor = max(start, filters['bucket_start']) if filters.get('bucket_start') is not None else (start if start else None)
         for profile in profiles:
             status = {k: profile[k] for k in ('profile_id', 'name', 'aliases')}
             statuses.append(status)
@@ -260,7 +260,7 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
                 reader = runtime._reader(generation, copied_root)
                 with reader.db() as c:
                     first = c.execute('SELECT MIN(started) FROM requests WHERE started>=? AND started<?', (start, end)).fetchone()[0]
-                if first is not None and start == 0:
+                if first is not None and start == 0 and filters.get('bucket_start') is None:
                     anchor = min(anchor, first) if anchor is not None else first
                 ready.append((profile, status, reader))
             except (sqlite3.Error, OSError) as exc:
@@ -274,11 +274,17 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
             try:
                 lo, hi = start, end
                 if local.get('test_id'):
-                    lo, test_end = reader.test_window(local['test_id'])
-                    hi = end if test_end is None else test_end
+                    test_start, test_end = reader.test_window(local['test_id'])
+                    lo = max(lo, test_start)
+                    hi = min(hi, test_end) if test_end is not None else hi
+                if local.get('bucket_start') is not None:
+                    lo = max(lo, local['bucket_start'])
+                    hi = min(hi, local['bucket_end'])
+                hi = max(lo, hi)
                 scope = (lo, hi, local.get('provider', ''), local.get('session', ''),
                          local.get('agent', ''), local.get('project', ''),
-                         local.get('session_scope', 'exact'), local.get('subagent', ''))
+                         local.get('session_scope', 'exact'), local.get('subagent', ''),
+                         local.get('model', ''), local.get('model_provider', ''))
                 keys = reader._request_keys(*scope, limit=offset + limit)
                 candidates.append((profile, status, reader, scope, keys))
             except (sqlite3.Error, OSError, json.JSONDecodeError):
@@ -297,9 +303,10 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
             failed = set()
             for profile, status, reader, scope, _ in candidates:
                 try:
-                    lo, hi, provider, session, agent, project, session_scope, subagent = scope
+                    lo, hi, provider, session, agent, project, session_scope, subagent, model, model_provider = scope
                     report = reader.read(lo, hi, provider, 0, limit, session, agent, project,
-                        session_scope, subagent, trend_start=lo if local.get('test_id') else anchor,
+                        session_scope, subagent, model, model_provider,
+                        trend_start=lo if local.get('test_id') or local.get('bucket_start') is not None else anchor,
                         _detail_ids=selected.get(profile['profile_id'], ()))
                     status['status'] = 'read'
                     reports.append((profile, report))
@@ -314,7 +321,7 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, **filt
     data = [r for _, r in reports]
     out = {'profile_scope': 'all', 'read_only': True, 'refresh_mode': 'polling',
            'generated_at': time.time(), 'analytics_revision': revision,
-           'window': data[0]['window'] if local.get('test_id') and data else {'start': start, 'end': end},
+           'window': data[0]['window'] if (local.get('test_id') or local.get('bucket_start') is not None) and data else {'start': start, 'end': end},
            'coverage': coverage(inventory, statuses), 'quota': quota_unavailable(), 'quota_observations': [],
            'summary': merge_summaries([r['summary'] for r in data]) if data else None,
            'seq': None, 'profile_sequences': {p['profile_id']: r['seq'] for p, r in reports}}
@@ -391,7 +398,7 @@ def skills(inventory, *, start=0, end=None, offset=0, limit=200, **filters):
     data = [r for _, r in reports]
     out = {'version': 1, 'profile_scope': 'all', 'read_only': True, 'refresh_mode': 'polling',
            'generated_at': time.time(), 'coverage': coverage(inventory, statuses),
-           'window': data[0]['window'] if local.get('test_id') and data else {'start': start, 'end': end},
+           'window': data[0]['window'] if (local.get('test_id') or local.get('bucket_start') is not None) and data else {'start': start, 'end': end},
            'summary': add_values([r['summary'] for r in data]) if data else None,
            'model_options': sorted({v for r in data for v in r['model_options']})}
     for field in ('event_count', 'snapshot_count'):

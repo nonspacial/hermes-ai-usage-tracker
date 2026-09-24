@@ -280,7 +280,8 @@ def compression_result(item, agent, result):
 
 
 def read(root, *, start: float=0, end=None, provider='', session='', session_scope='exact', agent='', project='',
-         subagent='', model='', skill='', offset=0, limit=200, test_id='', _detail_limit=None):
+         subagent='', model='', model_provider='', bucket_start=None, bucket_end=None,
+         skill='', offset=0, limit=200, test_id='', _detail_limit=None):
     """A coherent, read-only report, with full-period (not page) aggregates."""
     end = time.time() if end is None else end
     if number(start) is None or number(end) is None or end < start:
@@ -308,8 +309,12 @@ def read(root, *, start: float=0, end=None, provider='', session='', session_sco
             row = c.execute('SELECT started,ended FROM tests WHERE id=?', (test_id,)).fetchone() if 'tests' in tables else None
             if not row:
                 raise ValueError('Unknown test marker.')
-            start, end = row[0], row[1] if row[1] is not None else end
-            out['window'] = {'start': start, 'end': end}
+            start = max(start, row[0])
+            end = min(end, row[1]) if row[1] is not None else end
+        if bucket_start is not None:
+            start, end = max(start, bucket_start), min(end, bucket_end)
+        end = max(start, end)
+        out['window'] = {'start': start, 'end': end}
         if 'skill_events' not in tables:
             return out
         since = c.execute('SELECT MIN(ts) FROM skill_events').fetchone()[0]
@@ -324,6 +329,10 @@ def read(root, *, start: float=0, end=None, provider='', session='', session_sco
             if value:
                 where += ' AND ' + column + '=?'
                 params.append(value)
+        if model_provider:
+            where += ' AND provider=?'
+            params.append(model_provider)
+
         if session:
             where += ' AND (session_id=?'
             params.append(session)

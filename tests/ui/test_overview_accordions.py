@@ -35,17 +35,17 @@ def run():
             assert headers[1:5] == ['Cost · API estimate', 'Share', 'Processed tokens', 'Sessions']
             assert table.locator('tbody tr').first.locator('td').nth(1).is_visible()
             if label == 'Model':
-                expect(table.locator('tbody tr').first.locator('td').first.locator('.au-field-value > div > .au-muted')).to_be_visible()
+                expect(table.locator('tbody tr').first.locator('td').first.locator('.au-field-value > button.au-drill > .au-muted')).to_be_visible()
             pane.evaluate('(e)=>e.style.width="390px"')
             expect(table).to_have_attribute('data-layout', 'records')
             rows = table.locator('tbody tr')
             first = rows.first
             button = first.locator('.au-record-disclosure')
             expect(button).to_have_attribute('aria-expanded', 'false')
-            assert first.locator('.au-record-identity').inner_text().strip()
+            identity = first.locator('.au-record-filter') if first.locator('.au-record-filter').count() else first.locator('.au-record-identity')
+            assert identity.inner_text().strip()
             if label == 'Model':
-                identity = first.locator('.au-record-identity')
-                assert identity.evaluate('(e)=>e.querySelector("div, button") === null')
+                assert identity.evaluate('(e)=>e.querySelector("button") === null')
                 assert identity.locator('.au-muted').inner_text().strip()
             summaries = button.locator('.au-record-summary')
             assert summaries.count() == 2
@@ -98,10 +98,12 @@ def run():
         expect(drilled_row).to_have_attribute('data-expanded', 'true')
         picker = page.get_by_role('combobox', name='Hermes profile', exact=True)
         picker.select_option('profile:default')
+        page.get_by_role('tab', name='All providers', exact=True).click()
         group.get_by_role('button', name='Project', exact=True).click()
         pane.evaluate('(e)=>e.style.width="390px"')
         expect(page.locator('.au-breakdown tbody tr').first.locator('.au-record-disclosure')).to_be_visible()
         picker.select_option('scope:all')
+        page.get_by_role('tab', name='All providers', exact=True).click()
         expect(page.get_by_test_id('profile-coverage')).to_contain_text('complete')
         pane = page.locator('.au-ledger')
         pane.evaluate('(e)=>e.style.width="390px"')
@@ -112,6 +114,7 @@ def run():
         aggregate.locator('.au-record-disclosure').first.click()
         expect(aggregate.locator('tbody tr').first).to_have_attribute('data-expanded', 'true')
         picker.select_option('profile:infra')
+        page.get_by_role('tab', name='All providers', exact=True).click()
         pane = page.locator('.au-ledger')
         pane.evaluate('(e)=>e.style.width="390px"')
         expect(page.locator('.au-breakdown .au-table')).to_have_attribute('data-layout', 'records')
@@ -140,7 +143,7 @@ def run():
         }''')
         pane.evaluate('(e)=>e.style.width="390px"')
         table = page.locator('.au-breakdown .au-table')
-        expect(table.locator('tbody tr').first.locator('.au-record-identity')).to_contain_text('zero-model')
+        expect(table.locator('tbody tr').first.locator('.au-record-filter')).to_contain_text('zero-model')
         rows = table.locator('tbody tr')
         for index, expected in enumerate(('$0.00', '— *', '$1.25 *')):
             button = rows.nth(index).locator('.au-record-disclosure')

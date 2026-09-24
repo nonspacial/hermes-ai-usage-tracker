@@ -83,22 +83,23 @@ def run():
         page.get_by_role('tab', name='All providers', exact=True).click()
         for scope, copies in [('profile:default', 1), ('scope:all', 2)]:
             picker.select_option(scope)
+            page.get_by_role('tab', name='All providers', exact=True).click()
             page.get_by_role('tab', name='Overview', exact=True).click()
             page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Session', exact=True).click()
             missing = page.locator('.au-breakdown tbody tr').filter(has_text='unattributed')
             expect(missing).to_have_count(copies)
-            expect(missing.locator('button')).to_have_count(0)
+            expect(missing.locator('button.au-drill, button.au-record-filter')).to_have_count(0)
             missing.first.locator('td').first.click()
             expect(page.get_by_role('textbox', name='Session ID', exact=True)).to_have_value('')
             expect(page.get_by_role('tab', name='Overview', exact=True)).to_have_attribute('aria-selected', 'true')
-            real = page.locator('.au-breakdown tbody button').filter(has_text='real-session').first
+            real = page.locator('.au-breakdown tbody button.au-drill').filter(has_text='real-session').first
             key = real.get_attribute('title')
             assert key
             assert key.startswith('ap1.') if copies == 2 else key == 'real-session'
             real.click()
             expect(page.get_by_role('textbox', name='Session ID', exact=True)).to_have_value(key)
             page.wait_for_function('(key) => sentinelCalls.some(c => c.session === key)', arg=key)
-            page.get_by_role('button', name='Show all requests', exact=True).click()
+            page.get_by_role('button', name='Clear selection', exact=True).click()
             page.get_by_role('tab', name='Compressions', exact=True).click()
             table = page.get_by_test_id('compression-table')
             expect(table.get_by_text('Superseded by another compaction', exact=True)).to_have_count(copies)

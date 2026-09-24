@@ -1,6 +1,6 @@
 """Namespace-relative API routes attached to the user's original quota router."""
 from __future__ import annotations
-import asyncio, csv, io, json, os, socket, sqlite3, time, uuid
+import asyncio, csv, io, json, math, os, socket, sqlite3, time, uuid
 from contextlib import closing
 from pathlib import Path
 from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -60,6 +60,13 @@ def add_routes(router,resolve_profile,server_home):
         if error:raise HTTPException(404,error)
         s=Store(root or server_home());start_worker(s);return s
 
+    def check_bucket(bucket_start, bucket_end):
+        if (bucket_start is None) != (bucket_end is None):
+            raise HTTPException(400, 'Both bucket bounds are required.')
+        if bucket_start is not None and (not math.isfinite(bucket_start) or not math.isfinite(bucket_end)
+                                         or bucket_start < 0 or bucket_end <= bucket_start):
+            raise HTTPException(400, 'Invalid time bucket.')
+
     @router.get('/ledger/status')
     def recorder_status(profile:str='',profile_scope:str='selected'):
         if scope(profile_scope):
@@ -83,30 +90,39 @@ def add_routes(router,resolve_profile,server_home):
             raise HTTPException(503,'Recorder status temporarily unavailable') from exc
 
     @router.get('/ledger')
-    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',profile_scope:str='selected'):
+    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,profile_scope:str='selected'):
         if offset<0 or not 1<=limit<=2000:raise HTTPException(400,'Invalid pagination.')
+        if not math.isfinite(start) or start<0 or end is not None and (not math.isfinite(end) or end<start):
+            raise HTTPException(400,'Invalid time window.')
+        check_bucket(bucket_start,bucket_end)
         try:
             if scope(profile_scope):
                 return aggregate.ledger(analytics, aggregate.discover(server_home()), start=start,end=end,
                     provider=provider,session=session,offset=offset,limit=limit,test_id=test_id,agent=agent,
-                    project=project,session_scope=session_scope,subagent=subagent)
+                    project=project,session_scope=session_scope,subagent=subagent,model=model,
+                    model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end)
             root=check_profile(profile)
-            return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,test_id=test_id)
+            return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,
+                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end)
         except ValueError as exc:raise HTTPException(400,str(exc))
 
     @router.get('/ledger/skills')
     def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',
                      session_scope:str='exact',agent:str='',project:str='',subagent:str='',test_id:str='',
-                     model:str='',skill:str='',offset:int=0,limit:int=200,profile_scope:str='selected'):
+                     model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,
+                     skill:str='',offset:int=0,limit:int=200,profile_scope:str='selected'):
         from .skills import read
+        check_bucket(bucket_start,bucket_end)
         try:
             if scope(profile_scope):
                 return aggregate.skills(aggregate.discover(server_home()), start=start,end=end,provider=provider,
                     session=session,session_scope=session_scope,agent=agent,project=project,subagent=subagent,
-                    test_id=test_id,model=model,skill=skill,offset=offset,limit=limit)
+                    test_id=test_id,model=model,model_provider=model_provider,bucket_start=bucket_start,
+                    bucket_end=bucket_end,skill=skill,offset=offset,limit=limit)
             root=check_profile(profile)
             return read(root,start=start,end=end,provider=provider,session=session,session_scope=session_scope,
-                        agent=agent,project=project,subagent=subagent,test_id=test_id,model=model,skill=skill,
+                        agent=agent,project=project,subagent=subagent,test_id=test_id,model=model,
+                        model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,skill=skill,
                         offset=offset,limit=limit)
         except ValueError as exc:raise HTTPException(400,str(exc)) from exc
         except (sqlite3.Error,OSError):raise HTTPException(503,'Skills observations temporarily unavailable.')

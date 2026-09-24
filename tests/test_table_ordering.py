@@ -14,7 +14,7 @@ def add(store, key, started, group):
 
 def assert_groups(data, order):
     for name, key, prefix in (
-        ('groups', 'model', 'model-'),
+        ('groups', 'model', 'returned-'),
         ('model_groups', 'model', 'returned-'),
         ('provider_groups', 'provider', 'provider-'),
         ('project_groups', 'key', 'project-'),
