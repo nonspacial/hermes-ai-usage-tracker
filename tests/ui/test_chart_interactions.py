@@ -43,12 +43,31 @@ def test_chart_interactions():
             def stroke():
                 return plot.evaluate('e=>getComputedStyle(e).stroke')
 
+            def mixed_stroke(token, weight):
+                # Resolve the host tokens in the rendered SVG, not against CSS text.
+                return plot.evaluate('''(e, args) => {
+                    const probe = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                    e.parentNode.appendChild(probe);
+                    probe.style.stroke = `color-mix(in srgb,var(${args[0]}) ${args[1]}%,var(--au-surface-bg))`;
+                    const result = getComputedStyle(probe).stroke;
+                    probe.remove();
+                    return result;
+                }''', [token, weight])
+
+            assert plot.evaluate('e=>getComputedStyle(e).strokeWidth') == '1px'
+            assert plot.evaluate('e=>getComputedStyle(e).vectorEffect') == 'non-scaling-stroke'
             page.mouse.move(*position(.3))
-            assert stroke() == 'rgba(255, 255, 255, 0.5)'
+            hover_stroke = stroke()
+            assert hover_stroke == mixed_stroke('--ui-text-tertiary', 70)
+            assert hover_stroke != 'rgb(255, 255, 255)'
             before = len(calls())
             page.mouse.click(*position(.3))
             expect(chart).to_be_focused()
-            assert stroke() == 'rgb(255, 255, 255)'
+            focus_stroke = stroke()
+            assert focus_stroke == mixed_stroke('--ui-accent', 55)
+            assert focus_stroke != hover_stroke
+            assert focus_stroke != 'rgb(255, 255, 255)'
+            print(f'Computed plot strokes: hover={hover_stroke}, focus={focus_stroke}, width=1px, vector-effect=non-scaling-stroke')
             tip = chart.locator('.au-chart-tip').inner_text()
             chart.press('ArrowRight')
             assert chart.locator('.au-chart-tip').inner_text() != tip
@@ -60,6 +79,27 @@ def test_chart_interactions():
             page.mouse.move(x + 2, y)
             page.mouse.up()
             assert len(calls()) == before
+
+            # Host palette changes update both strokes in place, without remounting.
+            page.evaluate("document.documentElement.style.setProperty('--ui-accent', '#6f549d')")
+            assert stroke() == mixed_stroke('--ui-accent', 55)
+            assert stroke() != focus_stroke
+            page.evaluate("document.documentElement.style.removeProperty('--ui-accent')")
+            assert stroke() == focus_stroke
+            chart.locator('.au-chart-title').click()
+            expect(chart).not_to_be_focused()
+            page.mouse.move(*position(.3))
+            assert stroke() == hover_stroke
+            page.evaluate('''() => {
+                document.documentElement.style.setProperty('--ui-text-tertiary', '#88829a');
+                document.documentElement.style.setProperty('--ui-bg-chrome', '#eeedf5');
+            }''')
+            assert stroke() == mixed_stroke('--ui-text-tertiary', 70)
+            assert stroke() != hover_stroke
+            page.evaluate("document.documentElement.style.removeProperty('--ui-text-tertiary'); document.documentElement.style.removeProperty('--ui-bg-chrome')")
+            assert stroke() == hover_stroke
+            page.mouse.click(*position(.3))
+            expect(chart).to_be_focused()
 
             # Non-focusable content and the chart title must both dismiss focus.
             for outside in (page.locator('.au-hero-total'), chart.locator('.au-chart-title')):

@@ -1227,9 +1227,9 @@ const ledgerCss = `
 .au-ledger .au-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ui-accent);margin:0 8px 1px 0}
 .au-ledger .au-chart{min-width:0}.au-ledger .au-chart svg{display:block;width:100%;min-height:160px;outline-offset:4px}
 .au-ledger .au-chart:focus{outline:none}
-.au-ledger .au-plot-hit{fill:transparent;stroke:transparent;stroke-width:1.5;vector-effect:non-scaling-stroke;cursor:crosshair;touch-action:none}
-.au-ledger .au-plot-hit:hover{stroke:rgba(255,255,255,.5)}
-.au-ledger .au-chart:focus .au-plot-hit{stroke:#fff}
+.au-ledger .au-plot-hit{fill:transparent;stroke:transparent;stroke-width:1;vector-effect:non-scaling-stroke;cursor:crosshair;touch-action:none}
+.au-ledger .au-plot-hit:hover{stroke:color-mix(in srgb,var(--ui-text-tertiary) 70%,var(--au-surface-bg))}
+.au-ledger .au-chart:focus .au-plot-hit{stroke:color-mix(in srgb,var(--ui-accent) 55%,var(--au-surface-bg))}
 .au-ledger .au-plot-selection{fill:#a799ef;fill-opacity:.3;pointer-events:none}
 .au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;margin:5px 0 10px}
 .au-ledger .au-axis{font-size:.6875rem;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
