@@ -1512,6 +1512,239 @@ function ProviderLimits({quota,providerId,label,selected,hiddenIds=[]}){
 // The SDK socket has reconnect/backoff built in. REST stays available on OAuth
 // remotes, where the SDK socket is a no-op. This never restarts a gateway.
 const CONNECTION_QUERY_OPTIONS={retry:3,retryDelay:attempt=>Math.min(1000*2**attempt,30000),refetchInterval:15000,refetchIntervalInBackground:true,refetchOnReconnect:true};
+// Projected reports only. These are UTF-16 serialized-payload budgets, not a
+// JavaScript heap cap: metadata, pending reads and the parsed active view are
+// outside the cache budget. No plugin storage or CSV payload is retained here.
+const LEDGER_CACHE_LIMIT=8*1024*1024, LEDGER_ENTRY_LIMIT=2*1024*1024;
+const LEDGER_CACHE_TTL=5*60*1000, LEDGER_CACHE_COUNT=12;
+const ledgerMemory=new Map();
+let ledgerMemoryBytes=0, ledgerMemoryGeneration=0, ledgerMemoryConnection=null, pluginRegistered=false;
+function clearLedgerMemory(){ledgerMemory.clear();ledgerMemoryBytes=0;ledgerMemoryGeneration++}
+function ledgerMemoryKey(connection,profile,path,windowSeconds){
+ const [route,query]=path.split('?'),p=new URLSearchParams(query);
+ // Rolling starts are sampled for every read. Revisit only the same *period*
+ // and factual filters; the old bounds are displayed as old until replacement.
+ if(windowSeconds)p.delete('start');
+ return JSON.stringify([connection,host.state.profile?.get?.()||'',pickerValue(profile),route,
+  [...p.entries()].sort(([a,x],[b,y])=>a.localeCompare(b)||x.localeCompare(y)),windowSeconds]);
+}
+// The hint's coverage identifies inventory; its opaque change_token does not
+// validate accounting. Require complete discovery and unambiguous selected
+// identity. A failed/malformed check never authorises replay of another scope.
+function ledgerInventoryKey(result,profile){
+ const coverage=result?.coverage,rows=coverage?.profiles;
+ if(!Array.isArray(rows)||!rows.length||coverage?.discovery?.status!=='complete'||
+    !['complete','partial','unavailable'].includes(coverage.status))return null;
+ const normalized=[];
+ for(const row of rows){
+  if(typeof row?.profile_id!=='string'||!row.profile_id||typeof row.name!=='string'||
+     !row.name||!Array.isArray(row.aliases)||row.aliases.some(a=>typeof a!=='string')||
+     !['available','unavailable'].includes(row.status))return null;
+  normalized.push([row.profile_id,row.name,[...row.aliases].sort(),row.status,row.reason||null]);
+ }
+ if(!isAllProfiles(profile)&&(rows.length!==1||
+    ![rows[0].name,...rows[0].aliases].includes(profile)))return null;
+ if(new Set(rows.map(row=>row.profile_id)).size!==rows.length)return null;
+ return JSON.stringify(normalized.sort((a,b)=>a[0].localeCompare(b[0])));
+}
+function cachedLedger(key,revision,inventory,now=Date.now()){
+ const item=ledgerMemory.get(key);
+ if(!item)return null;
+ if(item.revision!==revision||item.inventory!==inventory||!inventory||
+    now-item.received>LEDGER_CACHE_TTL||now<item.received){
+  ledgerMemory.delete(key);ledgerMemoryBytes-=item.size;return null;
+ }
+ ledgerMemory.delete(key);ledgerMemory.set(key,item);
+ try{return {...item,data:JSON.parse(item.payload)}}catch{
+  ledgerMemory.delete(key);ledgerMemoryBytes-=item.size;return null;
+ }
+}
+function rememberLedger(key,response,revision,inventory,now=Date.now(),generation=ledgerMemoryGeneration){
+ if(generation!==ledgerMemoryGeneration||!revision||!inventory||response?.analytics_revision!==revision||
+    response?.projection?.version!==1||!response?.window||!response?.projection?.included)return false;
+ let payload;
+ try{payload=JSON.stringify(response)}catch{return false}
+ if(typeof payload!=='string')return false;
+ const size=payload.length*2;
+ if(size>LEDGER_ENTRY_LIMIT)return false;
+ const previous=ledgerMemory.get(key);
+ if(previous){ledgerMemoryBytes-=previous.size;ledgerMemory.delete(key)}
+ ledgerMemory.set(key,{payload,revision,inventory,received:now,size});ledgerMemoryBytes+=size;
+ for(const [id,item] of ledgerMemory){
+  if(now-item.received>LEDGER_CACHE_TTL){ledgerMemory.delete(id);ledgerMemoryBytes-=item.size}
+ }
+ while(ledgerMemory.size>LEDGER_CACHE_COUNT||ledgerMemoryBytes>LEDGER_CACHE_LIMIT){
+  const first=ledgerMemory.keys().next().value,item=ledgerMemory.get(first);
+  ledgerMemory.delete(first);ledgerMemoryBytes-=item.size;
+ }
+ return true;
+}
+// A resume receipt is never persisted separately from its budgeted serialized
+// snapshot. The coordinator's small active-flight reference dies on disposal;
+// an evicted/expired cache entry cannot authorize a later POST.
+function resumeBaseline(response,received){
+ const receipt=response?.incremental,window=response?.window;
+ if(receipt?.version!==1||typeof receipt.resume_token!=='string'||!receipt.resume_token||
+    !Number.isFinite(window?.start)||!Number.isFinite(window?.end)||
+    window.start<=0||window.end<=window.start||typeof response?.analytics_revision!=='string')return null;
+ return {token:receipt.resume_token,start:window.start,end:window.end,
+  revision:response.analytics_revision,received};
+}
+function resumePath(readPath,baseline,rolling){
+ const [route,search]=readPath.split('?'),query=new URLSearchParams(search);
+ const start=Number(query.get('start'));
+ if(!Number.isFinite(start)||start<=0)return null;
+ const shift=start-baseline.start;
+ if(rolling){
+  if(shift<0||shift>3600||baseline.end-baseline.start<86400||
+     baseline.end-baseline.start>86460)return null;
+  query.set('end',String(baseline.end+shift));
+ }else{
+  const end=Number(query.get('end'));
+  if(start!==baseline.start||end!==baseline.end)return null;
+  query.set('end',String(baseline.end));
+ }
+ return {path:route+'/refresh?'+query,start,end:Number(query.get('end'))};
+}
+// Mirror projection.py's v1 manifest for the only two resumable views. The
+// manifest has no view/group labels: its exact field partition is the scope
+// evidence, alongside the signed receipt and the requested window.
+const OVERVIEW_COMMON=['generated_at','seq','window','summary','request_count','next_offset',
+ 'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
+const OVERVIEW_OTHER=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
+ 'compressions','compression_truncated','groups','model_groups','project_groups',
+ 'session_groups','subagent_groups','agent_groups','health','rates','quota_observations',
+ 'crossing_start','crossing_end'];
+const isObject=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+const isCount=value=>Number.isSafeInteger(value)&&value>=0;
+function validOverviewSummary(row){
+ if(!isObject(row)||!['sessions','attempts','pending','unresolved','abandoned',
+  'missing_usage','partial_breakdown','aggregate_records','priced_requests',
+  'unpriced_requests','supplemental_requests'].every(key=>isCount(row[key]))||
+  typeof row.known_cost_usd!=='string'||
+  (row.cache_hit_rate!==null&&(!Number.isFinite(row.cache_hit_rate)||row.cache_hit_rate<0))||
+  !isObject(row.known)||!isObject(row.missing_fields)||
+  !isObject(row.missing_reasons)||!isObject(row.cost_components)||
+  !isObject(row.cost_missing_fields)||!isObject(row.savings)||
+  !isObject(row.savings_missing)||!isObject(row.session_cache_writes))return false;
+ const metrics=['input_tokens','output_tokens','cache_read_tokens','cache_write_tokens',
+  'reasoning_tokens','prompt_tokens','total_tokens'];
+ const buckets=['input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'];
+ const savings=['cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd'];
+ const reasons=['awaiting_usage','unresolved_execution','abandoned_execution',
+  'unverified_accounting','ended_without_usage','unreported_field'];
+ return metrics.every(key=>Number.isFinite(row.known[key])&&row.known[key]>=0&&
+  isCount(row.missing_fields[key])&&isObject(row.missing_reasons[key])&&
+  reasons.every(reason=>isCount(row.missing_reasons[key][reason])))&&
+  buckets.every(key=>typeof row.cost_components[key]==='string'&&isCount(row.cost_missing_fields[key]))&&
+  savings.every(key=>typeof row.savings[key]==='string'&&isCount(row.savings_missing[key]))&&
+  ['tokens','compared_requests','baseline_requests','missing_requests'].every(key=>
+   isCount(row.session_cache_writes[key]))&&
+  typeof row.session_cache_writes.basis==='string'&&
+  typeof row.session_cache_writes.method==='string';
+}
+// Validate the *consumed* Overview DTO at the REST boundary, including GET.
+// The counts are complete filtered-set partitions; cost, sessions, and known
+// token subtotals are not additive here (distinctness/coverage/rounding differ).
+const optionalText=value=>value==null||typeof value==='string';
+const identityText=value=>typeof value==='string';
+function exactAttempts(rows,total){
+ let attempts=0;
+ for(const row of rows){attempts+=row.attempts;if(!Number.isSafeInteger(attempts))return false}
+ return attempts===total;
+}
+// GET bounds describe the backend's factual intersection, not the aligned
+// Custom inputs. A selected marker must be found in the returned marker facts;
+// never infer its timestamp from the display grid or an old cached response.
+function overviewGetBounds(path){
+ const q=new URLSearchParams(path.split('?')[1]);
+ const numeric=key=>q.has(key)?Number(q.get(key)):null;
+ return {start:numeric('start'),end:numeric('end'),
+  bucketStart:numeric('bucket_start'),bucketEnd:numeric('bucket_end'),testId:q.get('test_id')||''};
+}
+function validOverviewWindow(dto,expected,refresh){
+ const window=dto.window;
+ if(!isObject(window)||!Number.isFinite(window.start)||!Number.isFinite(window.end)||
+    window.end<window.start||typeof window.basis!=='string')return false;
+ if(refresh)return window.start===expected?.start&&window.end===expected?.end;
+ if(!Number.isFinite(expected?.start)||expected.start<0||
+    expected.end!==null&&(!Number.isFinite(expected.end)||expected.end<expected.start)||
+    (expected.bucketStart===null)!==(expected.bucketEnd===null)||
+    expected.bucketStart!==null&&(!Number.isFinite(expected.bucketStart)||
+     !Number.isFinite(expected.bucketEnd)||expected.bucketStart<0||
+     expected.bucketEnd<=expected.bucketStart))return false;
+ const marker=expected.testId?dto.tests?.find(row=>row?.id===expected.testId):null;
+ if(expected.testId&&(!marker||!Number.isFinite(marker.started)||
+    marker.ended!=null&&(!Number.isFinite(marker.ended)||marker.ended<marker.started)))return false;
+ const lo=Math.max(expected.start,expected.bucketStart??0,marker?.started??0);
+ // An omitted end is resolved by the server. Its precise wall-clock value is
+ // unavailable to this client, but a finite response cannot exceed explicit
+ // bucket/marker ends or precede the outer start.
+ const hi=Math.min(expected.end??Infinity,expected.bucketEnd??Infinity,marker?.ended??Infinity);
+ if(window.start!==lo)return false;
+ if(expected.end===null&&expected.bucketEnd===null&&marker?.ended==null)
+  return window.end>=lo;
+ if(expected.end===null){
+  // The server may resolve now before the explicit upper bound.
+  return window.end>=lo&&window.end<=Math.max(lo,hi);
+ }
+ return window.end===Math.max(lo,hi);
+}
+function validOverviewDto(dto,group,expected,revision,refresh=false){
+ const breakdown={time:null,model:'model_groups',project:'project_groups',
+  session:'session_groups',subagent:'subagent_groups'};
+ if(!isObject(dto)||!Object.hasOwn(breakdown,group))return false;
+ const included=[...OVERVIEW_COMMON,...breakdown[group]?[breakdown[group]]:[]].sort();
+ const omitted=OVERVIEW_OTHER.filter(field=>!included.includes(field)).sort();
+ const exact=(actual,fields)=>Array.isArray(actual)&&actual.length===fields.length&&
+  actual.every((field,index)=>field===fields[index]);
+ if(refresh||dto.projection!==undefined){
+  if(!isObject(dto.projection)||dto.projection.version!==1||
+     !exact(dto.projection.included,included)||!exact(dto.projection.omitted,omitted)||
+     included.some(field=>!Object.hasOwn(dto,field))||
+     omitted.some(field=>Object.hasOwn(dto,field)))return false;
+ }
+ const window=dto.window,receipt=dto.incremental,trend=dto.trend;
+ if(!validOverviewWindow(dto,expected,refresh)||
+    !Number.isFinite(dto.generated_at)||!isCount(dto.seq)||
+    !validOverviewSummary(dto.summary)||dto.request_count!==dto.summary.attempts||
+    (dto.next_offset!==null&&!isCount(dto.next_offset))||!isCount(dto.compression_count)||
+    !validOverviewSummary(dto.subagent_summary)||!isCount(dto.subagent_summary.agents)||
+    dto.subagent_summary.attempts>dto.summary.attempts||
+    !Array.isArray(dto.project_options)||!dto.project_options.every(row=>
+     isObject(row)&&identityText(row.id)&&identityText(row.label)&&
+     optionalText(row.path)&&optionalText(row.basis)&&optionalText(row.profile))||
+    !Array.isArray(dto.providers)||!dto.providers.every(identityText)||
+    !Array.isArray(dto.tests)||!dto.tests.every(row=>isObject(row)&&
+     identityText(row.id)&&identityText(row.label)&&Number.isFinite(row.started)&&
+     (row.ended==null||Number.isFinite(row.ended)&&row.ended>=row.started)&&
+     optionalText(row.profile))||
+    !Array.isArray(dto.provider_groups)||!dto.provider_groups.every(row=>
+     isObject(row)&&identityText(row.provider)&&validOverviewSummary(row))||
+    !isObject(trend)||typeof trend.unit!=='string'||trend.timezone!=='UTC'||
+    !Number.isFinite(trend.seconds)||trend.seconds<=0||!Array.isArray(trend.buckets)||
+    !trend.buckets.every(row=>isObject(row)&&Number.isFinite(row.start)&&
+     Number.isFinite(row.end)&&row.start>=window.start&&row.end<=window.end&&
+     (row.end>row.start||window.start===window.end&&row.start===window.start&&
+      row.end===window.end&&row.attempts===0)&&validOverviewSummary(row))||
+    (breakdown[group]&&(!Array.isArray(dto[breakdown[group]])||
+     !dto[breakdown[group]].every(row=>isObject(row)&&validOverviewSummary(row)&&
+      (group==='model'?identityText(row.provider)&&identityText(row.model):
+       identityText(row.key)&&isCount(row.subagents)&&Number.isFinite(row.subagent_tokens)&&
+       (group==='project'?optionalText(row.label)&&optionalText(row.path)&&optionalText(row.basis):
+        group==='session'?optionalText(row.project_label):
+         ['session_id','parent_session_id','root_session_id','agent_role','project_label']
+          .every(key=>optionalText(row[key])))))))||
+    !exactAttempts(dto.provider_groups,dto.summary.attempts)||
+    !exactAttempts(trend.buckets,dto.summary.attempts)||
+    (breakdown[group]&&!exactAttempts(dto[breakdown[group]],
+     group==='subagent'?dto.subagent_summary.attempts:dto.summary.attempts)))return false;
+ if(refresh)return dto.analytics_revision===revision&&typeof revision==='string'&&!!revision&&
+  isObject(receipt)&&receipt.version===1&&['snapshot','delta'].includes(receipt.mode)&&
+  isCount(receipt.revision)&&typeof receipt.resume_token==='string'&&!!receipt.resume_token&&
+  window.end===expected.end;
+ return true;
+}
 const pendingLedgerReads=new Map();
 function sharedLedgerRead(path,options,identity=path){
  // Full-window analytics can exceed a minute; recorder probes stay short.
@@ -1524,29 +1757,45 @@ function sharedLedgerRead(path,options,identity=path){
 let liveLedgerOwnerId=0;
 // The token is a filesystem hint, not a database revision. Only a full REST
 // response publishes accounting; a hint never modifies totals or event rows.
-function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis}){
- let alive=true,active=false,dirty=false,manual=false,token=null,checking=false;
- let unsupported=false,failures=0,checkFailures=0,flight=0,followup=null,retry=null;
- const now=()=>clock.now?.()??Date.now();
- let lastFallback=now();
- const identity='live:'+ ++liveLedgerOwnerId;
- const scope=isAllProfiles(profile)?'all':'selected';
- const tokenPath='/ledger/change-token?'+new URLSearchParams(isAllProfiles(profile)?{profile_scope:'all'}:{profile_scope:'selected',profile:profile||''});
- const current=()=>alive;
+function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis,connection=null}){
+  let alive=true,active=false,dirty=false,manual=false,token=null,checking=false;
+  let unsupported=false,failures=0,checkFailures=0,followup=null,retry=null;
+  const now=()=>clock.now?.()??Date.now();
+  let lastFallback=now();
+  // A disposed coordinator never donates its unresolved response to a new
+  // owner, even on a rapid return to the same view/connection/read generation.
+  const flightScope=++liveLedgerOwnerId;
+  const scope=isAllProfiles(profile)?'all':'selected';
+  const memoryGeneration=ledgerMemoryGeneration;
+  const query=new URLSearchParams(path.split('?')[1]);
+  const memoryKey=connection===null||query.get('test_id')?
+   null:ledgerMemoryKey(connection,profile,path,windowSeconds);
+  // Only the two journal-backed selected-profile projections can resume. A
+  // mutable saved marker or all-profile inventory must always use a full GET.
+  const validateOverview=!isAllProfiles(profile)&&query.get('view')==='overview'&&
+   ['time','model','project','session','subagent'].includes(query.get('group'));
+  const canResume=!!memoryKey&&['time','model'].includes(query.get('group'))&&validateOverview&&
+   !query.has('test_id')&&!query.has('bucket_start')&&!query.has('bucket_end')&&
+   (!windowSeconds||windowSeconds===86400&&
+   !query.has('end'));
+  let baseline=null,refreshUnavailable=false;
+  const tokenPath='/ledger/change-token?'+new URLSearchParams(isAllProfiles(profile)?{profile_scope:'all'}:{profile_scope:'selected',profile:profile||''});
+ const current=()=>alive&&memoryGeneration===ledgerMemoryGeneration&&
+  (connection===null||ledgerMemoryConnection===connection);
  const clear=()=>{clock.clearTimeout(followup);clock.clearTimeout(retry);followup=retry=null};
  const check=async()=>{
-  if(!alive||unsupported||checking)return null;
+  if(!current()||unsupported||checking)return null;
   checking=true;
   try{
    const result=await rest(tokenPath,{timeoutMs:8000});
-   if(!alive)return null;
+   if(!current())return null;
    if(result?.version!==1||result?.profile_scope!==scope||result?.read_only!==true||
       result?.token_kind!=='opaque-filesystem-hint'||typeof result?.change_token!=='string'||
       result?.capabilities?.change_check!==true)throw new Error('Unsupported change-check response');
    if(checkFailures){checkFailures=0;publish({checkLimited:false})}
-   return result.change_token;
+   return result;
   }catch(error){
-   if(alive){
+   if(current()){
     checkFailures++;
     if(error.status===404||error.status===405||/Unsupported change-check response/.test(String(error.message)))unsupported=true;
     if(unsupported||checkFailures>=3)publish({checkLimited:true});
@@ -1558,21 +1807,92 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   if(!alive||active||followup)return;
   followup=clock.setTimeout(()=>{followup=null;start()},delay);
  };
+ let loaded=false,lastRevision=null,lastInventory=null;
  async function start(){
-  if(!alive||active)return;
+  if(!current()||active)return;
   clear();active=true;dirty=false;
   publish({fetching:true,manual});
-  let before=null,after=null,failed=false;
+  let before=null,after=null,failed=false,revision=null;
   try{
-   // A busy check must not be used as evidence that a read acknowledged a hint.
+   // A hint is a cheap inventory/change check, never a revision or proof that
+   // an aged result is current. Fail closed for cache eligibility.
    before=await check();
-   const response=await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,identity+':'+ ++flight);
+   if(!current())return;
+   const beforeInventory=ledgerInventoryKey(before,profile);
+   // Validate the backend generation before showing any prior response. The
+   // filesystem hint does not authenticate this cache or its accounting.
+   if(memoryKey&&memoryGeneration===ledgerMemoryGeneration){
+    try{
+     const info=await rest('/ledger/analytics?'+new URLSearchParams(isAllProfiles(profile)?
+      {profile_scope:'all'}:{profile_scope:'selected',profile:profile||''}),{timeoutMs:8000});
+     if(typeof info?.revision==='string'&&info.revision)revision=info.revision;
+    }catch(_){/* no cache without a verified revision; full read still works */}
+    if(!current())return;
+    const identityValid=!!(revision&&beforeInventory);
+    publish({identityValid});
+    if((lastInventory&&beforeInventory&&beforeInventory!==lastInventory)||
+       (revision&&lastRevision&&revision!==lastRevision)||
+       (!loaded&&!identityValid))
+     publish({data:null,received:null,cached:false,invalidated:true});
+    if(!loaded&&identityValid){
+     const saved=cachedLedger(memoryKey,revision,beforeInventory,now());
+     if(saved&&(!validateOverview||validOverviewDto(saved.data,query.get('group'),
+      {...overviewGetBounds(path),start:saved.data.window.start,
+       end:windowSeconds===86400?null:overviewGetBounds(path).end},revision))){
+      lastRevision=revision;
+      if(canResume)baseline=resumeBaseline(saved.data,saved.received);
+      publish({data:saved.data,received:saved.received,cached:true,invalidated:false,fetching:true,manual});
+     }else if(saved){
+      const item=ledgerMemory.get(memoryKey);
+      if(item){ledgerMemory.delete(memoryKey);ledgerMemoryBytes-=item.size}
+     }
+    }
+   }
+   loaded=true;
+   const readPath=rollingPath(path,windowSeconds);
+   const entry=memoryKey&&ledgerMemory.get(memoryKey);
+   if(!entry||entry.received!==baseline?.received||now()-entry.received>LEDGER_CACHE_TTL||
+      entry.revision!==revision||entry.inventory!==beforeInventory||
+      baseline.revision!==revision)baseline=null;
+   const resume=canResume&&!refreshUnavailable&&baseline&&
+    resumePath(readPath,baseline,windowSeconds===86400);
+   let response=null;
+   if(resume){
+    try{
+     const candidate=await rest(resume.path,{method:'POST',body:{resume_token:baseline.token},timeoutMs:120000});
+     // A malformed/foreign response is not a new snapshot. Fetch once instead;
+     // never apply arithmetic to the old DTO or publish partial totals.
+     if(!validOverviewDto(candidate,query.get('group'),resume,baseline.revision,true))
+      throw new Error('Invalid incremental refresh response');
+     response=candidate;
+    }catch(error){
+     if(error?.status===404||error?.status===405||error?.status===501)refreshUnavailable=true;
+     baseline=null;
+    }
+   }
+   if(!current())return;
+   if(!response){
+    response=await sharedLedgerRead(readPath,undefined,
+     JSON.stringify(['ledger',flightScope,readPath,memoryGeneration]));
+    if(validateOverview){
+     if(!validOverviewDto(response,query.get('group'),overviewGetBounds(readPath),revision))
+      throw new Error('Invalid Overview ledger response');
+    }
+   }
    after=await check();
    if(!current())return;
-   if(before!==null&&after!==null&&before!==after)dirty=true;
+   if(before!==null&&after!==null&&before.change_token!==after.change_token)dirty=true;
    // A token observed only after the read cannot certify this response.
-   if(before!==null&&after===before)token=after;
-   publish({data:response,error:null,fetching:false,manual});
+   if(before!==null&&after?.change_token===before.change_token)token=after.change_token;
+   const received=now();
+   if(revision&&response?.analytics_revision&&response.analytics_revision!==revision)dirty=true;
+   lastRevision=response?.analytics_revision||null;
+   lastInventory=beforeInventory;
+   const admitted=!!(memoryKey&&revision&&beforeInventory&&before?.change_token===after?.change_token&&
+      beforeInventory===ledgerInventoryKey(after,profile)&&
+      rememberLedger(memoryKey,response,revision,beforeInventory,received,memoryGeneration));
+   baseline=canResume&&admitted?resumeBaseline(response,received):null;
+   publish({data:response,error:null,received,cached:false,invalidated:false,fetching:false,manual});
    failures=0;
   }catch(error){
    if(!current())return;
@@ -1581,7 +1901,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    manual=false;
   }finally{
    active=false;
-   if(!alive)return;
+   if(!current())return;
    if(dirty){
     // Release the shared flight before starting a fresh read. Bursts collapse
     // into one follow-up, including a hint delivered during the post-read check.
@@ -1603,40 +1923,68 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    lastFallback=now();
    const recovered=await check();
    if(!alive)return;
-   if(recovered!==null){if(token!==recovered)hint();return}
+   if(recovered!==null){if(token!==recovered.change_token)hint();return}
    if(!windowSeconds&&document.visibilityState!=='hidden')hint();
    return;
   }
   const next=await check();
   if(!alive||next===null)return;
-  if(token===null){token=next;hint();return}
-  if(next!==token)hint();
+  if(token===null){token=next.change_token;hint();return}
+  if(next.change_token!==token)hint();
  }
  function refresh(){if(!alive)return;manual=true;publish({manual:true});hint()}
  function dispose(){alive=false;clear()}
  return {start,hint,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
 }
+const $missingConnection=atom(null);
 function useLiveLedger({profile,path,view,enabled,windowSeconds}){
- const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
- const [owner]=useState(()=>({key:null,epoch:0,coordinator:null}));
- const key=JSON.stringify([pickerValue(profile),view,path,windowSeconds]);
- if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.epoch++;owner.coordinator=null}
+  const connection=useValue(host.state.connectionId||$missingConnection);
+  const hostProfile=useValue(host.state.profile||$missingConnection);
+  // The installed SDK exposes the actual registry connection ID. Legacy SDKs
+  // without it get fresh reads, never potentially cross-server cached values.
+  if(ledgerMemoryConnection!==connection){clearLedgerMemory();ledgerMemoryConnection=connection}
+  const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
+  const [owner]=useState(()=>({key:null,epoch:0,coordinator:null}));
+  const key=JSON.stringify([connection,hostProfile,pickerValue(profile),view,path,windowSeconds]);
+  if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.epoch++;owner.coordinator=null}
+  useEffect(()=>{
+   if(!enabled)return;
+   const epoch=owner.epoch;
+   const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,connection,publish:patch=>{
+    if(owner.key===key&&owner.epoch===epoch)setState(previous=>({...previous.view===key&&previous.epoch===epoch?previous:{data:null,error:null,manual:false,checkLimited:false},...patch,view:key,epoch}));
+   }});
+   owner.coordinator=coordinator;
+   coordinator.start();
+   const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
+   // A filesystem hint can miss mutations; force bounded reconciliation even
+   // with unchanged metadata. Rolling bounds also expire every minute.
+   const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')coordinator.hint()},windowSeconds?60000:300000);
+   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();coordinator.hint()}};
+   document.addEventListener('visibilitychange',visible);
+   return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
+  },[key,enabled]);
+  const current=state.view===key&&state.epoch===owner.epoch?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
+  return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
+}
+function LedgerFreshness({data,cached,received,fetching,error}){
+ const [ageNow,setAgeNow]=useState(()=>Date.now());
  useEffect(()=>{
-  if(!enabled)return;
-  const epoch=owner.epoch;
-  const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,publish:patch=>{
-   if(owner.key===key&&owner.epoch===epoch)setState(previous=>({...previous.view===key&&previous.epoch===epoch?previous:{data:null,error:null,manual:false,checkLimited:false},...patch,view:key,epoch}));
-  }});
-  owner.coordinator=coordinator;
-  coordinator.start();
-  const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
-  const expiry=windowSeconds?setInterval(()=>{if(document.visibilityState!=='hidden')coordinator.hint()},60000):null;
-  const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();if(windowSeconds)coordinator.hint()}};
-  document.addEventListener('visibilitychange',visible);
-  return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
- },[key,enabled]);
- const current=state.view===key&&state.epoch===owner.epoch?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
- return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
+  let timer=null;
+  const visibility=()=>{
+   if(timer!==null){clearInterval(timer);timer=null}
+   if(document.visibilityState==='visible'){
+    setAgeNow(Date.now());timer=setInterval(()=>setAgeNow(Date.now()),5000);
+   }
+  };
+  document.addEventListener('visibilitychange',visibility);
+  visibility();
+  return()=>{if(timer!==null)clearInterval(timer);document.removeEventListener('visibilitychange',visibility)};
+ },[]);
+ return h('span',{role:'status','data-testid':'ledger-freshness','aria-live':'off'},
+  ' · ',cached?'Cached snapshot':'Snapshot',
+  ' · generated '+new Date((data.generated_at||data.window?.end||0)*1000).toLocaleString(),
+  ' · '+Math.max(0,Math.floor((ageNow-(received||ageNow))/1000))+'s since received',
+  fetching?' · Updating…':error?' · Update failed':'');
 }
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
@@ -1898,7 +2246,8 @@ function UsagePageScope({selected}){
  const projectionView=({'Overview':'overview','Requests':'requests','Cache & costs':'cache','Compressions':'compressions','Models & tasks':'models','Skills usage':'skills'})[tab];
  params.set('view',projectionView);
  if(projectionView==='overview')params.set('group',breakdownGroup);
- const readScope=JSON.stringify([navigationContext,requestFilters,offset]);
+ const readScope=JSON.stringify([useValue(host.state.connectionId||$missingConnection),
+  useValue(host.state.profile||$missingConnection),navigationContext,requestFilters,offset]);
  const projectionScope=JSON.stringify([readScope,projectionView,projectionView==='overview'?breakdownGroup:null]);
  const windowSeconds=period!=='custom'?ranges[period]:0;
  const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:projectionScope,enabled:!isQuota&&customValid,windowSeconds});
@@ -1932,11 +2281,12 @@ function UsagePageScope({selected}){
  // A committed selection starts a new flight even when returning to a view
  // visited earlier. Only same-view background refresh may retain its body.
  if(ledgerCache.scope!==projectionScope){ledgerCache.scope=projectionScope;ledgerCache.data=null}
+ if(ledger.invalidated){ledgerCache.data=null;ledgerCache.header=null;ledgerCache.headerScope=''}
  if(currentData){ledgerCache.data=currentData;ledgerCache.headerScope=readScope;ledgerCache.header=currentData}
  const data=currentData||(ledgerCache.scope===projectionScope?ledgerCache.data:null);
  // Only shared header fields may bridge a committed tab/group selection. Never
  // render a previous breakdown or detail payload beneath the new tab label.
- const headerData=data||(ledgerCache.headerScope===readScope?ledgerCache.header:null);
+ const headerData=data||(ledger.identityValid&&ledgerCache.headerScope===readScope?ledgerCache.header:null);
  const providers=quotaCurrent&&Array.isArray(quota.data.providers)?quota.data.providers:[];
  for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
   for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
@@ -2026,7 +2376,8 @@ function UsagePageScope({selected}){
    h('select',{className:'au-mode-select','aria-label':'Usage display',value:displayMode,onChange:e=>{setDisplayMode(e.target.value);}},...['Cost','Tokens'].map(v=>h('option',{key:v,value:v},v))),
    h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
-   h('span',{className:'au-muted au-window-label'},headerData?new Date(headerData.window.start*1000).toLocaleString()+' — '+new Date(headerData.window.end*1000).toLocaleString():'')),
+   h('span',{className:'au-muted au-window-label'},headerData?new Date(headerData.window.start*1000).toLocaleString()+' — '+new Date(headerData.window.end*1000).toLocaleString():'',
+    data?.window?h(LedgerFreshness,{data,cached:ledger.cached,received:ledger.received,fetching:ledger.fetching,error:ledger.error}):null)),
   h('div',{className:'au-toolbar au-filters'},
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}):null,
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}):null,
@@ -2106,6 +2457,10 @@ export default {
   id: ID,
   name: 'AI usage +',
   register(ctx) {
+    // The host loads a new JS module on hot reload. A repeated register on
+    // the same module (offline harness) must not kill its mounted readers.
+    if(!pluginRegistered){clearLedgerMemory();ledgerMemoryConnection=null;pluginRegistered=true}
+    ctx.onDispose?.(()=>{clearLedgerMemory();pendingLedgerReads.clear();discoveredProfiles=null});
     rest = ctx.rest
     socket = ctx.socket
     storage = ctx.storage

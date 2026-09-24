@@ -6,7 +6,7 @@ Own project-specific design contracts, investigation notes and reference evidenc
 
 ## Ownership
 
-Root owns user-facing README and top-level technical references. This directory owns [Overview interaction contract](OVERVIEW_INTERACTION_CONTRACT.md), [measured performance investigation](PERFORMANCE_INVESTIGATION.md), prior planning/evidence files and images. The Overview contract records independent acceptance of the uninstalled repository candidate; it does not establish installed or live behaviour. Existing historical evidence must not be relabelled as current run proof.
+Root owns user-facing README and top-level technical references. This directory owns [Overview interaction contract](OVERVIEW_INTERACTION_CONTRACT.md), [measured performance investigation](PERFORMANCE_INVESTIGATION.md), [incremental backend DTO contract](INCREMENTAL_ANALYTICS_CONTRACT.md), [offline delivery runbook](OFFLINE_DELIVERY.md), prior planning/evidence files and images. The Overview contract records independent acceptance of the uninstalled repository candidate; it does not establish installed or live behaviour. Existing historical evidence must not be relabelled as current run proof.
 
 ## Local Contracts
 

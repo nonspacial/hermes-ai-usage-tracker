@@ -237,7 +237,7 @@ def quota_unavailable():
             'note': 'Subscription quotas may share accounts across profiles and cannot be summed. No quota probes were performed.'}
 
 
-def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=None, group=None, **filters):
+def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200, view=None, group=None, **filters):
     from .projection import selected_fields, manifest
     fields = selected_fields(view, group)
     include = lambda name: fields is None or name in fields
@@ -276,8 +276,9 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=N
         for profile, status, reader in ready:
             try:
                 lo, hi = start, end
+                selected_test = None
                 if local.get('test_id'):
-                    test_start, test_end = reader.test_window(local['test_id'])
+                    test_start, test_end, selected_test = reader.test_window(local['test_id'],include_data=True)
                     lo = max(lo, test_start)
                     hi = min(hi, test_end) if test_end is not None else hi
                 if local.get('bucket_start') is not None:
@@ -289,7 +290,7 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=N
                          local.get('session_scope', 'exact'), local.get('subagent', ''),
                          local.get('model', ''), local.get('model_provider', ''))
                 keys = reader._request_keys(*scope, limit=offset + limit) if include('requests') else []
-                candidates.append((profile, status, reader, scope, keys))
+                candidates.append((profile, status, reader, scope, keys, selected_test))
             except (sqlite3.Error, OSError, json.JSONDecodeError):
                 status['status'] = 'unreadable'
         # Merge scalar keys only. Never retain/qualify per-profile JSON prefixes.
@@ -297,21 +298,21 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=N
         # these same copied roots and generation, not newly sampled live sources.
         while candidates:
             winners = sorted(((stamp or 0, str(key), p['profile_id'])
-                              for p, _, _, _, keys in candidates for stamp, key in keys),
+                              for p, _, _, _, keys, _ in candidates for stamp, key in keys),
                              reverse=True)[offset:offset + limit]
             selected = {}
             for _, key, pid in winners:
                 selected.setdefault(pid, []).append(key)
             reports = []
             failed = set()
-            for profile, status, reader, scope, _ in candidates:
+            for profile, status, reader, scope, _, selected_test in candidates:
                 try:
                     lo, hi, provider, session, agent, project, session_scope, subagent, model, model_provider = scope
                     report = reader.read(lo, hi, provider, 0, limit, session, agent, project,
                         session_scope, subagent, model, model_provider,
                         trend_start=lo if local.get('test_id') or local.get('bucket_start') is not None else anchor,
                         _detail_ids=selected.get(profile['profile_id'], ()) if include('requests') else None,
-                        view=view,group=group)
+                        view=view,group=group,_selected_test=selected_test)
                     status['status'] = 'read'
                     reports.append((profile, report))
                 except (sqlite3.Error, OSError, json.JSONDecodeError):
@@ -338,6 +339,16 @@ def ledger(runtime, inventory, *, start=0, end=None, offset=0, limit=200, view=N
         if not include(field):continue
         rows = [qualify(v, p, kind) for p, r in reports for v in r[field]]
         out[field] = ordered(rows, stamp, cap, numeric_id=field == 'rates')
+    if local.get('test_id') and include('tests'):
+        # Global recency can exclude a marker even if it survived its own
+        # profile's prefix. Only the decoded profile's factual marker qualifies.
+        for profile, report in reports:
+            marker_fact = next((t for t in report['tests'] if t['id'] == local['test_id']), None)
+            if marker_fact is not None:
+                fact = qualify(marker_fact, profile, 'test')
+                if not any(t['id'] == fact['id'] for t in out['tests']):
+                    out['tests'].append(fact)
+                break
     if include('compression_truncated'):
         out['compression_truncated'] = out['compression_count'] is not None and out['compression_count'] > len(out['compressions'])
     for field, kind, key in [('project_groups', 'project', 'key'), ('session_groups', 'session', 'key'),

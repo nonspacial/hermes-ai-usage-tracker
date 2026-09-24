@@ -96,7 +96,7 @@ On Skills usage, select a slice of the frequency pie or an entry in its legend t
 
 In narrow panes, some tables become collapsed records. Expand a record to see its fields. Widen the pane if you prefer the table layout.
 
-Usage refreshes automatically while the pane is open. Click **Refresh** for an immediate update. If a read fails, the last successful result can remain visible with a stale-data warning; do not mistake it for a fresh result.
+Usage refreshes automatically while the pane is open. Click **Refresh** for an immediate update. A previously opened view may appear straight away from a bounded, temporary Desktop-memory snapshot: its actual generation time, window and age are shown with **Updating** until a new complete response replaces it. On a newly instrumented ledger, eligible selected-profile Overview **Hour** or **Model** refreshes can request that complete response using a signed resume token and narrow backend changed-bucket reads, including moving 24h windows; the pane never adds totals itself. A backend snapshot fallback, missing/rejected token, old ledger, changed scope, other views and All profiles use full reads. It is not current accounting or a replacement for a read. First use of a view still loads normally; changing profiles, connections or filters cannot reuse another scope's body. Memory is discarded on Desktop quit/plugin reload. If a read fails, the last successful result remains visible with an explicit update-failed warning; do not mistake it for a fresh result. Long-window first reads can still be slow. The filesystem change check is a hint, not a ledger revision; periodic reconciliation remains necessary. CSV export always makes fresh full paginated reads. This is repository-candidate behaviour, **not installed yet**; existing ledgers remain on full reads unless an operator separately approves and performs the offline migration described in the [incremental contract](docs/INCREMENTAL_ANALYTICS_CONTRACT.md). No automatic schema upgrade occurs.
 
 ## Understand the numbers
 
@@ -208,6 +208,8 @@ All profiles combines local profiles only. It does not collect ledgers from othe
 ## Technical reference
 
 For details beyond day-to-day use, read [provider capture limitations](COMPATIBILITY.md), [skills recording](SKILLS_USAGE.md), [project attribution](PROJECT_ATTRIBUTION.md) and [recorder lifecycle](RECORDER_LIFECYCLE.md). Some reference documents retain historical release notes; those sections are not descriptions of the current interface.
+
+The accepted repository candidate is **not installed**. Its gated two-profile handoff (offline database migration, pinned installation, readback and rollback) is in [offline delivery](docs/OFFLINE_DELIVERY.md); it must not be applied while producers are active.
 
 The original plugin documentation is in [UPSTREAM_README.md](UPSTREAM_README.md). [IMPORT_NOTES.md](IMPORT_NOTES.md) records this fork's import history.
 

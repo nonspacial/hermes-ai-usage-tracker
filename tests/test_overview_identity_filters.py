@@ -193,6 +193,69 @@ def test_marker_fractional_boundaries_survive_aligned_zoom_and_manual_window(tmp
             'before', 'inside', 'after'}
 
 
+def test_old_selected_marker_fact_survives_recent_cap_without_cross_profile_leak(tmp_path):
+    fixture(tmp_path, [request('within', 20)], [], [], marker=(10.25, 40.75))
+    other = tmp_path / 'profiles' / 'other'
+    fixture(other, [request('other-only', 75)], [], [], marker=(70.25, 90.75))
+    for root in (tmp_path, other):
+        with sqlite3.connect(root / 'usage-ledger' / 'events.sqlite3') as conn:
+            for n in range(101):
+                key = f'new-{n:03}'
+                data = {'id': key, 'started': 100 + n, 'ended': 101 + n, 'label': key}
+                conn.execute('INSERT INTO tests VALUES(?,?,?,?,?)',
+                             (key, data['started'], data['ended'], key, json.dumps(data)))
+    def resolve(name):
+        return (other if name == 'other' else tmp_path, name or 'default', None)
+    router = APIRouter()
+    add_routes(router, resolve, lambda: tmp_path)
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        base = dict(start=0, end=250, view='overview', group='time')
+        plain = client.get('/ledger', params=base)
+        assert plain.status_code == 200
+        assert [t['id'] for t in plain.json()['tests']] == [f'new-{n:03}' for n in range(100, 0, -1)]
+        legacy = client.get('/ledger', params={'start': 0, 'end': 250})
+        assert legacy.status_code == 200
+        assert legacy.json()['tests'] == plain.json()['tests']
+        scoped = client.get('/ledger', params={**base, 'test_id': 'window'})
+        assert scoped.status_code == 200, scoped.text
+        data = scoped.json()
+        assert (data['window']['start'], data['window']['end']) == (10.25, 40.75)
+        assert data['summary']['attempts'] == 1
+        assert data['tests'][:-1] == plain.json()['tests']
+        assert data['tests'][-1] == {'id': 'window', 'started': 10.25, 'ended': 40.75}
+        assert len(data['tests']) == len({t['id'] for t in data['tests']}) == 101
+        # A recent marker is not appended twice; an unknown marker is refused.
+        recent = client.get('/ledger', params={**base, 'test_id': 'new-100'}).json()
+        assert recent['tests'] == plain.json()['tests']
+        assert client.get('/ledger', params={**base, 'test_id': 'missing'}).status_code == 400
+
+        inventory = aggregate.discover(tmp_path)
+        pid = next(p['profile_id'] for p in inventory['profiles'] if p['name'] == 'default')
+        qualified = aggregate.opaque(pid, 'test', 'window')
+        all_scoped = client.get('/ledger', params={**base, 'profile_scope': 'all', 'test_id': qualified})
+        assert all_scoped.status_code == 200, all_scoped.text
+        all_data = all_scoped.json()
+        assert all_data['coverage']['selected_profiles'] == 1
+        assert (all_data['window']['start'], all_data['window']['end']) == (10.25, 40.75)
+        assert len(all_data['tests']) == len({t['id'] for t in all_data['tests']}) == 101
+        assert all_data['tests'][-1]['id'] == qualified
+        assert all_data['tests'][-1]['profile_id'] == pid
+        assert all_data['tests'][-1]['original_ids']['id'] == 'window'
+        assert all(t['profile_id'] == pid for t in all_data['tests'])
+        # Qualified filters select just this profile, even when another
+        # profile contains the same raw marker ID.
+        recent_qualified = aggregate.opaque(pid, 'test', 'new-100')
+        global_recent = client.get('/ledger', params={**base, 'profile_scope': 'all',
+                                                     'test_id': recent_qualified}).json()
+        assert len(global_recent['tests']) == len({t['id'] for t in global_recent['tests']}) == 100
+        assert global_recent['tests'][0]['id'] == recent_qualified
+        assert all(t['profile_id'] == pid for t in global_recent['tests'])
+        assert (global_recent['window']['start'], global_recent['window']['end']) == (200, 201)
+        assert client.get('/ledger', params={**base, 'profile_scope': 'all', 'test_id': 'window'}).status_code == 400
+
+
 @pytest.mark.parametrize(('duration', 'step', 'unit'), [
     (1799, 60, 'minute'), (1800, 60, 'minute'),
     (1800.1, 120, '2 minutes'), (3600, 120, '2 minutes'),

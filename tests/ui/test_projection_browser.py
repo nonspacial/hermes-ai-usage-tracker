@@ -55,14 +55,18 @@ def run():
         page.get_by_role('tab', name='Overview', exact=True).click()
         page.wait_for_function('heldViews.length>=4')
         page.get_by_role('tab', name='Requests', exact=True).click()
-        expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Requests')
-        expect(page.get_by_test_id('request-list')).to_have_count(0)
+        # A previously served view now restores only its exact labelled snapshot
+        # while a genuine new read is held; the older Overview completion is inert.
+        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+        expect(page.get_by_test_id('request-list')).to_be_visible()
         expect(page.get_by_test_id('usage-totals')).to_be_visible()
         page.wait_for_function('heldViews.length>=5')
         page.evaluate('heldViews[3].deliver()')
-        expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Requests')
-        page.evaluate('heldViews[4].deliver();window.holdProjection=false')
         expect(page.get_by_test_id('request-list')).to_be_visible()
+        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        page.evaluate('heldViews[4].deliver();window.holdProjection=false')
+        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
         request_query = page.evaluate("Object.fromEntries(new URL(projectionPaths.at(-1),'https://offline').searchParams)")
         assert request_query['view'] == 'requests' and 'group' not in request_query
         # Unlike a new commitment, a routine same-view refresh retains the

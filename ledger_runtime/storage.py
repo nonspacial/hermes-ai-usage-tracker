@@ -52,11 +52,35 @@ class Store:
         self.folder=self.root/'usage-ledger'
         self.folder.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.path=self.folder/'events.sqlite3'
-        with self.db() as c:
-            c.execute('PRAGMA journal_mode=WAL')
-            c.executescript(SCHEMA)
-            from .skills import SCHEMA as SKILLS_SCHEMA
-            c.executescript(SKILLS_SCHEMA)
+        # Existing ledgers are never migrated implicitly. Check for the base
+        # table *under the writer lock*, not file existence: two processes can
+        # observe the same just-created empty SQLite file before either seeds it.
+        for attempt in range(3):
+            try:
+                with LOCK,self.db() as c:
+                    c.execute('PRAGMA journal_mode=WAL')
+                    c.execute('BEGIN IMMEDIATE')
+                    fresh=not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='requests'").fetchone()
+                    from .skills import SCHEMA as SKILLS_SCHEMA
+                    # executescript() would COMMIT before the first DDL. Parse
+                    # complete statements, including any future compound DDL,
+                    # while retaining this one writer transaction.
+                    statement=''
+                    for line in (SCHEMA+SKILLS_SCHEMA).splitlines(keepends=True):
+                        statement+=line
+                        if sqlite3.complete_statement(statement):
+                            c.execute(statement)
+                            statement=''
+                    if statement.strip():
+                        raise ValueError('Incomplete ledger schema statement.')
+                    if fresh:
+                        from .incremental import install
+                        install(c)
+                break
+            except sqlite3.OperationalError as exc:
+                if 'locked' not in str(exc).lower() or attempt==2:
+                    raise
+                time.sleep(.05*(attempt+1))
         try: os.chmod(self.path,0o600)
         except OSError: pass
         from .pricing import seed
@@ -180,9 +204,10 @@ class Store:
             else: raise ValueError('Action must be start or stop.')
             self.event(c,'test_'+action,key,data)
         notify(self.folder);return data
-    def test_window(self,key):
-        with self.db() as c:row=c.execute('SELECT started,ended FROM tests WHERE id=?',(key,)).fetchone()
+    def test_window(self,key,*,include_data=False):
+        with self.db() as c:row=c.execute('SELECT started,ended,data FROM tests WHERE id=?',(key,)).fetchone()
         if not row:raise ValueError('Unknown test marker.')
+        if include_data:return row['started'],row['ended'],json.loads(row['data'])
         return row['started'],row['ended']
     def _request_keys(self,start,end,provider='',session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,limit):
         """Payload-free prefix from the same immutable snapshot used by read."""
@@ -190,7 +215,7 @@ class Store:
         with self.db() as c:
             return [tuple(r) for r in c.execute('SELECT started,id FROM requests WHERE '+where+' ORDER BY started DESC,id DESC LIMIT ?',params+[limit])]
 
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None,view=None,group=None):
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None,view=None,group=None,_delta_seed=False,_validate_costs=False,_selected_test=None):
         from .projection import selected_fields, manifest
         fields=selected_fields(view,group)
         include=lambda name: fields is None or name in fields
@@ -198,6 +223,8 @@ class Store:
         with self.db() as c:
             # Keep totals, applied rates and request rows on one read snapshot.
             c.execute('BEGIN')
+            from .incremental import watermark
+            revision = watermark(c) if view is not None else None
             legacy_read_view(c,where,params)
             from .session_cache_writes import project as project_session_writes
             project_session_writes(c,where,params,end)
@@ -227,6 +254,55 @@ class Store:
             provider_groups=[dict(provider=row['provider'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider ORDER BY MAX(started) DESC,provider',params)]
             model_groups=([dict(provider=row['provider'],model=row['model'],**summary_from_sql(row)) for row in c.execute('SELECT provider,'+effective_model+' AS model,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY provider,'+effective_model+' ORDER BY MAX(started) DESC,provider,model',params)] if include('model_groups') else None)
             trend=sql_trend(c,where,params,start,end,summary_sql,trend_start=trend_start)
+            delta_seed=None
+            precise=None
+            if (_delta_seed or _validate_costs) and revision is not None and view=='overview' and group in ('time','model'):
+                # Decimal(28) legacy sums can round. Group reassociation is
+                # safe only when every partial sum fits in that context.
+                from .incremental import safe_cost
+                precise=(total['attempts']<=100000 and all(
+                    safe_cost(json.loads(r[0])) for r in
+                    c.execute('SELECT data FROM requests WHERE '+where,params)))
+            if _delta_seed and precise:
+                step=trend['seconds']
+                # Same projected SQL and read transaction as public totals.
+                by_provider={}
+                group_count=0
+                for r in c.execute('SELECT CAST(started / ? AS INTEGER) * ? AS bucket,provider,'+summary_sql+
+                                   ' FROM requests WHERE '+where+' GROUP BY bucket,provider',
+                                   [step,step]+params):
+                    group_count+=1
+                    if group_count>2048 or not isinstance(r['provider'],str):
+                        by_provider=None
+                        break
+                    by_provider.setdefault(int(r['bucket']),{})[r['provider']]=summary_from_sql(r)
+                if by_provider is not None:
+                    role="COALESCE(json_extract(data,'$.agent_kind'),'unknown')"
+                    by_subagent={}
+                    for r in c.execute('SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+
+                                       ' FROM requests WHERE '+where+' AND '+role+"='subagent' GROUP BY bucket",
+                                       [step,step]+params):
+                        by_subagent[int(r['bucket'])]=summary_from_sql(r)
+                        if len(by_subagent)>400:
+                            by_subagent=None
+                            break
+                    if by_subagent is not None:
+                        delta_seed={'provider':by_provider,'subagent':by_subagent}
+                        if group=='model':
+                            by_model={}
+                            for r in c.execute('SELECT CAST(started / ? AS INTEGER) * ? AS bucket,provider,'+
+                                               effective_model+' AS model,'+summary_sql+
+                                               ' FROM requests WHERE '+where+' GROUP BY bucket,provider,'+effective_model,
+                                               [step,step]+params):
+                                group_count+=1
+                                if group_count>4096:
+                                    delta_seed=None
+                                    break
+                                by_model.setdefault(int(r['bucket']),{})[(r['provider'],r['model'])]=summary_from_sql(r)
+                            if delta_seed is not None:
+                                # JSON object keys must be strings for signed tokens.
+                                delta_seed['model']={bucket:{json.dumps(key):value for key,value in groups.items()}
+                                                     for bucket,groups in by_model.items()}
             attribution=attribution_groups(c,where,params,summary_sql,fields=fields)
             if include('price_catalogs'):
                 from .pricing import catalog_status
@@ -249,6 +325,11 @@ class Store:
             health=[dict(process=r['process'],updated=r['updated'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM health ORDER BY updated DESC')] if include('health') else None
             rates=[dict(id=r['id'],created=r['created'],**json.loads(r['data'])) for r in c.execute('SELECT * FROM rates ORDER BY created DESC,id DESC LIMIT 500')] if include('rates') else None
             tests=[json.loads(r[0]) for r in c.execute('SELECT data FROM tests ORDER BY started DESC,id DESC LIMIT 100')]
+            # The caller's point lookup is against this same copied ledger. Keep
+            # the ordinary recent prefix intact; expose its factual selection
+            # once even if it is older than the bounded list.
+            if _selected_test is not None and not any(t['id']==_selected_test['id'] for t in tests):
+                tests.append(_selected_test)
             providers=[r[0] for r in c.execute('SELECT DISTINCT provider FROM requests ORDER BY provider')]
             seq=c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
             quota=[dict(ts=r['ts'],**json.loads(r['data'])) for r in c.execute('SELECT ts,data FROM quota WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 200',(start,end))] if include('quota_observations') else None
@@ -261,7 +342,14 @@ class Store:
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
         if fields is None:return result
-        return {**{key:result[key] for key in fields},'projection':manifest(fields)}
+        projected={**{key:result[key] for key in fields},'projection':manifest(fields)}
+        if revision is not None:
+            projected['incremental']={'version':1,'revision':revision,'mode':'snapshot'}
+        if delta_seed is not None:
+            projected['_delta_seed']=delta_seed
+        if _validate_costs:
+            projected['_delta_cost_safe']=bool(precise)
+        return projected
 
 def request_predicate(start,end,provider,session,agent,project,session_scope,subagent,model='',model_provider=''):
     if agent not in ('','primary','subagent','unknown'):raise ValueError('Invalid agent filter.')

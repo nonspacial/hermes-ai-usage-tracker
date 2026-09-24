@@ -13,8 +13,30 @@ const fixtureGroups={model:'model_groups',time:null,project:'project_groups',
 const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
  cache:['price_catalogs','applied_rate_groups'],compressions:['compressions','compression_truncated'],
  models:['groups'],skills:[]};
+function fixtureOverviewSummary(row){
+ const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];
+ return {...row,unresolved:row.unresolved||0,abandoned:row.abandoned||0,
+  supplemental_requests:row.supplemental_requests||0,
+  known_cost_usd:String(row.known_cost_usd),
+  missing_reasons:Object.fromEntries(Object.entries(row.missing_fields).map(([key,n])=>
+   [key,Object.fromEntries(reasons.map(reason=>[reason,reason==='unreported_field'?n:0]))])),
+  cost_components:Object.fromEntries(Object.entries(row.cost_components).map(([key,n])=>[key,String(n)])),
+  savings:Object.fromEntries(Object.entries(row.savings).map(([key,n])=>[key,String(n)]))};
+}
 function fixtureProject(full,p){
  const view=p.get('view'),group=p.get('group');
+ if(view==='overview'&&Object.hasOwn(fixtureGroups,group)&&full.summary){
+  // The synthetic base predates the backend wire summary; keep only the
+  // projected fixture's consumed shape aligned with the real API.
+  full={...full,window:{...full.window,basis:'synthetic request starts'},
+   summary:fixtureOverviewSummary(full.summary),
+   subagent_summary:fixtureOverviewSummary(full.subagent_summary),
+   provider_groups:full.provider_groups.map(fixtureOverviewSummary),
+   model_groups:full.model_groups.map(fixtureOverviewSummary),
+   ...(fixtureGroups[group]?{[fixtureGroups[group]]:full[fixtureGroups[group]].map(fixtureOverviewSummary)}:{}),
+   trend:{...full.trend,buckets:full.trend.buckets.map(row=>({
+    ...fixtureOverviewSummary(row),start:row.start,end:row.end}))}};
+ }
  if(view===null){if(group!==null)throw new Error('Group requires a view');return full}
  if(!Object.hasOwn(fixtureViews,view)||view==='overview'&&!Object.hasOwn(fixtureGroups,group)||
     view!=='overview'&&group!==null)throw new Error('Invalid projection');
@@ -66,7 +88,7 @@ async function fixtureAggregate(u){
  const coverage=fixtureCoverage(profiles),active=profiles.filter(p=>coverage.profiles.find(c=>c.profile_id===p.profile_id).status==='read');
  // Call only the in-memory fixture function, never a route or network transport.
  const base=await baseDemoRest(u.pathname+'?'+local);
- const out={...base,profile_scope:'all',read_only:true,refresh_mode:'polling',seq:null,profile_sequences:Object.fromEntries(active.map(p=>[p.profile_id,window.fixtureSequence||events.length])),coverage};
+ const out={...base,profile_scope:'all',read_only:true,refresh_mode:'polling',analytics_revision:window.demoAnalyticsRevision||'synthetic-analytics-initial',seq:null,profile_sequences:Object.fromEntries(active.map(p=>[p.profile_id,window.fixtureSequence||events.length])),coverage};
  const offset=Number(p.get('offset')||0),limit=Number(p.get('limit')||200);
  const ordered=(rows,stamp)=>rows.sort((a,b)=>b[stamp]-a[stamp]||String(b.original_ids?.id).localeCompare(String(a.original_ids?.id))||b.profile_id.localeCompare(a.profile_id));
  if(u.pathname==='/ledger/skills'){
@@ -105,11 +127,22 @@ demoRest=async function(path,options={}){
   return {...record};
  }
  window.scopeCalls.push({path,method:options.method||'GET',at:Date.now()});
+ if(u.pathname==='/ledger/change-token'){
+  const original=await baseDemoRest(path,options);
+  const selected=u.searchParams.get('profile_scope')!=='all';
+  const members=selected?fixtureProfiles.filter(p=>p.name===(u.searchParams.get('profile')||'infra')):fixtureProfiles.slice(0,2);
+  const rows=members.map(p=>({profile_id:p.profile_id,name:p.name,aliases:p.aliases,status:'available'}));
+  return {...original,coverage:{status:'complete',discovery:{status:'complete',errors:[]},profiles:rows}};
+ }
  if(u.pathname==='/ledger/profiles')return {profiles:fixtureProfiles,scope_options:[{label:'All profiles',profile_scope:'all'},...fixtureProfiles.map(p=>({label:p.name,profile:p.name,profile_scope:'selected'}))],default_profile_scope:'selected'};
  if(u.searchParams.get('profile_scope')!=='all'){
+  // Optional isolated in-process FastAPI bridge for the incremental browser
+  // check. Ordinary preview fixtures never call a backend or provider.
+  if(window.backendLedger&&['/ledger','/ledger/refresh'].includes(u.pathname))
+   return window.backendLedger({path,method:options.method||'GET',body:options.body});
   const result=await baseDemoRest(path,options);
   if(u.pathname!=='/ledger')return result;
-  return fixtureProject({...result,compression_truncated:false},u.searchParams);
+  return fixtureProject({...result,compression_truncated:false,analytics_revision:window.demoAnalyticsRevision||'synthetic-analytics-initial'},u.searchParams);
  }
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
  if(u.pathname==='/usage')return {profile_scope:'all',read_only:true,providers:[],quota:{available:false,reason:'aggregate_quota_unavailable'}};

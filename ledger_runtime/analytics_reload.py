@@ -9,6 +9,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 import ast
 import hashlib
+import hmac
+import base64
+import secrets
+import zlib
 import json
 from pathlib import Path
 import sqlite3
@@ -19,10 +23,12 @@ import time
 import types
 import uuid
 
-from . import accounting, pricing, ownership, projection
+from . import accounting, pricing, ownership, projection, incremental
 from .storage import SCHEMA
+from .read_snapshot import snapshot_root, signature
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
+MAX_RESUME_BYTES = 4 * 1024 * 1024
 READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
                     'sql_summary', 'sql_trend', 'attribution_groups',
                     'sql_applied_rate_groups', 'legacy_read_view', 'request_predicate'}
@@ -37,6 +43,7 @@ class AnalyticsRuntime:
         self.folder = Path(folder or Path(__file__).parent).resolve()
         self.lock = threading.RLock()
         self.reload_lock = threading.Lock()
+        self._resume_key = secrets.token_bytes(32)
         self.baseline = self._protected()
         self.current = self._build()
 
@@ -79,7 +86,8 @@ class AnalyticsRuntime:
             generation['modules'].append(prefix)
             # Catalogue inspection is stable; its worker and fetch code are NOT reloaded.
             for name, stable in [('pricing', pricing), ('accounting', accounting),
-                                 ('ownership', ownership), ('projection', projection)]:
+                                 ('ownership', ownership), ('projection', projection),
+                                 ('incremental', incremental)]:
                 sys.modules[prefix + '.' + name] = stable
                 generation['modules'].append(prefix + '.' + name)
             for name, source in sources.items():
@@ -160,11 +168,14 @@ class AnalyticsRuntime:
                 if generation['retired'] and not generation['readers']:
                     self._discard(generation)
 
-    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None, view=None, group=None):
+    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None, view=None, group=None, profile_key=''):
         from .projection import selected_fields
         selected_fields(view, group)
         with self.lease() as generation:
             root = Path(root).resolve()
+            source_generation=None
+            db_identity=None
+            source_file=root/'usage-ledger'/'events.sqlite3'
             if not (root / 'usage-ledger' / 'events.sqlite3').is_file():
                 if test_id:
                     raise ValueError('Unknown test marker.')
@@ -179,20 +190,118 @@ class AnalyticsRuntime:
                     hi = min(args[1] if args[1] is not None else time.time(), bucket_end) if bucket_end is not None else args[1]
                     result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:],view=view,group=group)
             else:
-                reader = self._reader(generation, root)
-                if test_id:
-                    marker_start, marker_end = reader.test_window(test_id)
-                    lo = max(args[0], marker_start)
-                    hi = min(args[1] if args[1] is not None else time.time(),
-                             marker_end if marker_end is not None else float('inf'))
-                    args = (lo, max(lo, hi), *args[2:])
-                if bucket_start is not None:
-                    end = args[1] if args[1] is not None else time.time()
-                    lo, hi = max(args[0], bucket_start), min(end, bucket_end)
-                    args = (lo, max(lo, hi), *args[2:])
-                result = reader.read(*args,view=view,group=group)
+                source_generation=signature(source_file)
+                with snapshot_root(root) as copied_root:
+                    reader = self._reader(generation, copied_root)
+                    selected_test = None
+                    if test_id:
+                        marker_start, marker_end, selected_test = reader.test_window(test_id,include_data=True)
+                        lo = max(args[0], marker_start)
+                        hi = min(args[1] if args[1] is not None else time.time(),
+                                 marker_end if marker_end is not None else float('inf'))
+                        args = (lo, max(lo, hi), *args[2:])
+                    if bucket_start is not None:
+                        end = args[1] if args[1] is not None else time.time()
+                        lo, hi = max(args[0], bucket_start), min(end, bucket_end)
+                        args = (lo, max(lo, hi), *args[2:])
+                    result = reader.read(*args,view=view,group=group,_selected_test=selected_test,
+                                         _delta_seed=(view=='overview' and group in ('time','model') and not test_id
+                                                      and bucket_start is None and len(args)>1
+                                                      and args[0]>0))
+                    from .incremental import identity
+                    with reader.db() as c:
+                        db_identity=identity(c)
+            seed=result.pop('_delta_seed',None)
+            # The read resolved an omitted end once; seal the exact SQL bound,
+            # not an absent query parameter or another sample of wall time.
+            if args[1] is None and seed is not None:
+                args=(args[0],result['window']['end'],*args[2:])
             result['analytics_revision'] = generation['revision']
+            if seed is not None and source_generation is not None and source_generation == signature(source_file):
+                token=self._seal(root,args,view,group,result,seed,db_identity,source_generation,profile_key)
+                if token:
+                    result['incremental']['resume_token']=token
             return result
+
+    def _seal(self,root,args,view,group,result,seed,db_identity,source_generation,profile_key=''):
+        body=json.dumps([str(root),profile_key,result['analytics_revision'],args,view,group,
+                         db_identity,source_generation,result,seed],
+                        separators=(',',':'),ensure_ascii=False,allow_nan=False).encode()
+        if len(body)>MAX_RESUME_BYTES:
+            return None
+        packed=zlib.compress(body,level=3)
+        digest=hmac.digest(self._resume_key,packed,'sha256')
+        token=base64.urlsafe_b64encode(digest+packed).decode()
+        return token if len(token)<=MAX_RESUME_BYTES else None
+
+    def _unseal(self,token):
+        if not isinstance(token,str) or len(token)>MAX_RESUME_BYTES:
+            raise ValueError('Invalid analytics resume token.')
+        try:
+            binary=base64.b64decode(token,altchars=b'-_',validate=True)
+            digest,packed=binary[:32],binary[32:]
+            if not hmac.compare_digest(digest,hmac.digest(self._resume_key,packed,'sha256')):
+                raise ValueError('Invalid analytics resume token.')
+            decompressor=zlib.decompressobj()
+            data=decompressor.decompress(packed,MAX_RESUME_BYTES+1)
+            if (len(data)>MAX_RESUME_BYTES or not decompressor.eof or
+                    decompressor.unused_data or decompressor.unconsumed_tail or
+                    decompressor.flush(1)):
+                raise ValueError('Invalid analytics resume token.')
+            return json.loads(data)
+        except (ValueError,TypeError,zlib.error) as exc:
+            raise ValueError('Invalid analytics resume token.') from exc
+
+    def refresh(self,root,*args,resume_token,view='overview',group='time',profile_key='',**options):
+        """Stateless signed resume; unsupported paths use the ordinary full read."""
+        if view!='overview' or group not in ('time','model') or any(options.values()) or len(args)!=12:
+            return self.read(root,*args,view=view,group=group,profile_key=profile_key,**options)
+        root=Path(root).resolve()
+        saved_root,saved_profile,revision,saved_args,saved_view,saved_group,db_identity,source_generation,base,seed=self._unseal(resume_token)
+        old_start,old_end=saved_args[:2]
+        start,end=args[:2]
+        shift=start-old_start if isinstance(start,(int,float)) and isinstance(old_start,(int,float)) else -1
+        old_width=old_end-old_start
+        rolling=(isinstance(end,(int,float)) and isinstance(old_end,(int,float)) and
+                 86400-.001<=old_width<=86460 and abs((end-start)-old_width)<.001 and
+                 0<shift<=3600 and abs((end-old_end)-shift)<.001)
+        same_bounds=(start==old_start and (end==old_end or end is None))
+        if same_bounds and end is None:
+            args=(start,old_end,*args[2:])
+        if saved_root!=str(root) or saved_profile!=profile_key or list(args[2:])!=saved_args[2:] or saved_view!=view or saved_group!=group or \
+                (not same_bounds and not rolling):
+            raise ValueError('Analytics resume scope does not match.')
+        source_file=root/'usage-ledger'/'events.sqlite3'
+        current_generation=signature(source_file)
+        # Identity alone is insufficient: an atomic replacement can copy the
+        # original identity and revision verbatim. Device + inode bind the file
+        # generation; checkpoint writes legitimately update ctime on that inode.
+        if (not current_generation or not source_generation or
+                current_generation[:2]!=tuple(source_generation[:2])):
+            return self.read(root,*args,view=view,group=group,profile_key=profile_key,**options)
+        with self.lease() as generation:
+            if revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None:
+                from .incremental_refresh import replace_buckets
+                with snapshot_root(root) as copied_root:
+                    if signature(source_file)!=current_generation:
+                        candidate=None
+                    else:
+                        reader=self._reader(generation,copied_root)
+                        from .incremental import identity
+                        with reader.db() as c:
+                            matches=identity(c)==db_identity
+                        candidate=(replace_buckets(reader,args,base,seed,base['incremental']['revision'],
+                                                   group=group) if matches else None)
+                if signature(source_file)!=current_generation:
+                    candidate=None
+                if candidate is not None:
+                    result,next_seed=candidate
+                    result['analytics_revision']=generation['revision']
+                    token=self._seal(root,args,view,group,result,next_seed,db_identity,current_generation,profile_key)
+                    if token:
+                        result['incremental']['resume_token']=token
+                        return result
+        return self.read(root,*args,view=view,group=group,profile_key=profile_key,**options)
 
     def info(self):
         try:

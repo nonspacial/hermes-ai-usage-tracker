@@ -105,8 +105,40 @@ def add_routes(router,resolve_profile,server_home):
                     model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group)
             root=check_profile(profile)
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,
-                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group)
+                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group,profile_key=profile)
         except ValueError as exc:raise HTTPException(400,str(exc))
+
+    @router.post('/ledger/refresh')
+    def refresh_ledger(body:dict,profile:str='',start:float=0,end:float|None=None,
+                       provider:str='',session:str='',offset:int=0,limit:int=200,
+                       agent:str='',project:str='',session_scope:str='exact',subagent:str='',
+                       model:str='',model_provider:str='',profile_scope:str='selected',
+                       view:str='overview',group:str='time',test_id:str='',
+                       bucket_start:float|None=None,bucket_end:float|None=None):
+        if offset<0 or not 1<=limit<=2000 or not math.isfinite(start) or start<0 or \
+                end is not None and (not math.isfinite(end) or end<start):
+            raise HTTPException(400,'Invalid analytics refresh window or pagination.')
+        check_bucket(bucket_start,bucket_end)
+        try:
+            from .projection import selected_fields
+            selected_fields(view,group)
+            if scope(profile_scope):
+                return aggregate.ledger(analytics,aggregate.discover(server_home()),start=start,end=end,
+                    provider=provider,session=session,offset=offset,limit=limit,test_id=test_id,
+                    agent=agent,project=project,session_scope=session_scope,subagent=subagent,
+                    model=model,model_provider=model_provider,bucket_start=bucket_start,
+                    bucket_end=bucket_end,view=view,group=group)
+            token=body.get('resume_token') if isinstance(body,dict) else None
+            root=check_profile(profile)
+            args=(start,end,provider,offset,limit,session,agent,project,session_scope,
+                  subagent,model,model_provider)
+            if not token:
+                return analytics.read(root,*args,test_id=test_id,bucket_start=bucket_start,
+                                      bucket_end=bucket_end,view=view,group=group,profile_key=profile)
+            return analytics.refresh(root,*args,resume_token=token,view=view,group=group,
+                                     test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,profile_key=profile)
+        except ValueError as exc:
+            raise HTTPException(400,str(exc)) from exc
 
     @router.get('/ledger/skills')
     def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',

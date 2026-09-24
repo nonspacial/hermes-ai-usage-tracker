@@ -10,7 +10,7 @@ def test_slow_analytics_reads_share_a_long_budget_but_status_stays_short():
     if not node:
         pytest.skip('Node required for shipped JavaScript helper')
     source = (Path(__file__).resolve().parents[1] / 'desktop/plugin.js').read_text()
-    helper = source[source.index('const pendingLedgerReads='):source.index('function RefreshMenu(')]
+    helper = source[source.index('const pendingLedgerReads='):source.index('// The token is a filesystem hint')]
     script = """
 const assert=require('node:assert/strict');
 let calls=0;
