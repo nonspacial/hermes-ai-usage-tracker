@@ -108,23 +108,22 @@ def run():
   assert page.get_by_role('textbox',name='Window end',exact=True).input_value()==end
   assert last_query()['test_id']=='navigation-test'
   print('PASS manual/empty filters remain escapable; chip removal preserves other filters; saved test boundaries remain unchanged')
-  # Populate more than two pages. Back must restore offset 200, not a filter
-  # reset effect forcing the user back to page one.
+  # Populate more than two batches. The scoped list starts with ten and appends ten.
   page.get_by_role('button',name='Past 24h',exact=True).click();settled()
   page.evaluate("""() => {const t=Date.now()/1000-60;for(let i=0;i<430;i++){
    const e=JSON.parse(JSON.stringify(events[0]));e.id='paging-'+i;e.started=t-i;e.ended=e.started+.1;
    e.session_id='demo-session-'+(i%5);Object.assign(e,demoContexts[e.session_id]);events.push(e);
   }window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})}""")
-  expect(rows()).to_have_count(200)
-  page.get_by_role('button',name='Next requests',exact=True).click();settled()
-  expect(listing).to_contain_text('Showing 201–400 of 437 requests.')
+  expect(rows()).to_have_count(10)
+  page.get_by_role('button',name='Load more',exact=True).click();settled()
+  expect(page.get_by_test_id('record-pagination')).to_contain_text('Showing 20 of 437 records')
   before=rows().first.inner_text()
   session_link('demo-session-2').click();settled()
-  assert rows().count()<200
+  assert rows().count()<=10
   # Same narrowed scope is a no-op, not an extra Back history entry.
   session_link('demo-session-2').click();settled()
   back.click();settled()
-  expect(listing).to_contain_text('Showing 201–400 of 437 requests.')
+  expect(page.get_by_test_id('record-pagination')).to_contain_text('Showing 10 of 437 records')
   assert rows().first.inner_text()==before and nav.count()==0
   page.get_by_test_id('provider-subpage').screenshot(path=str(ART/'request-list-restored.png'))
   # Scope stays reversible across background refreshes, but not stale providers.
@@ -136,7 +135,7 @@ def run():
   scope_is(provider='nous')
   main.get_by_role('tab',name='Codex',exact=True).click();settled()
   assert back.count()==0
-  print('PASS paginated Back restores page/rows; duplicate drill is a no-op; refresh preserves history; provider switch cannot revive stale history')
+  print('PASS paginated Back restores scope at first batch; duplicate drill is a no-op; refresh preserves history; provider switch cannot revive stale history')
   # Manual time changes also keep the selected timeframe rather than restoring
   # an old one through Back. The local Show all remains available.
   session_link('demo-session-2').click();settled()
@@ -149,7 +148,7 @@ def run():
   expect(back).to_be_visible();expect(show_all).to_be_visible()
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
   nav.scroll_into_view_if_needed();page.screenshot(path=str(ART/'request-mobile-back.png'))
-  show_all.click();settled();expect(rows()).to_have_count(200)
+  show_all.click();settled();expect(rows()).to_have_count(10)
   assert page.get_by_label('Main page',exact=True).input_value()=='openai-codex'
   assert page.get_by_role('combobox',name='Time window',exact=True).input_value()=='24h'
   assert not errors,errors;assert not network,network

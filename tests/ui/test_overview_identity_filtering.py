@@ -35,7 +35,7 @@ def run():
 
         def query(path='/ledger?'):
             return page.evaluate('''prefix => Object.fromEntries(
-                new URL(demoCalls.filter(value => value.startsWith(prefix)).at(-1),
+                new URL(scopeCalls.filter(call => call.path.startsWith(prefix)).at(-1).path,
                         'https://offline.test').searchParams)''', path)
 
         def clear():
@@ -50,7 +50,7 @@ def run():
             expect(sub.get_by_role('tab', name='Overview')).to_have_attribute('aria-selected', 'true')
             expect(nav).to_be_visible()
             args = query()
-            assert args['provider'] == '' and args['start'] and args['limit'] == '200'
+            assert args['provider'] == '' and args['start'] and args['limit'] == '10' and args['list_mode'] == 'page'
             assert page.get_by_test_id('recorded-summary').is_visible()
             assert page.get_by_test_id('usage-chart').is_visible()
             if grouping == 'Model':

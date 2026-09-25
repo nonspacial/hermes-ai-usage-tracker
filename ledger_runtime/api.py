@@ -91,8 +91,14 @@ def add_routes(router,resolve_profile,server_home):
             raise HTTPException(503,'Recorder status temporarily unavailable') from exc
 
     @router.get('/ledger')
-    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,profile_scope:str='selected',view:str|None=None,group:str|None=None):
+    def ledger(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',offset:int=0,limit:int=200,test_id:str='',agent:str='',project:str='',session_scope:str='exact',subagent:str='',model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,profile_scope:str='selected',view:str|None=None,group:str|None=None,list_mode:str='legacy',compression_kind:str=''):
         if offset<0 or not 1<=limit<=2000:raise HTTPException(400,'Invalid pagination.')
+        if list_mode not in ('legacy','page','all') or list_mode!='legacy' and (view is None or view in ('skills',)):
+            raise HTTPException(400,'Invalid record-list mode.')
+        if list_mode=='all' and offset:
+            raise HTTPException(400,'A frozen full report must start at zero.')
+        if compression_kind not in ('','compression','micro_compaction') or compression_kind and (view!='compressions' or list_mode=='legacy'):
+            raise HTTPException(400,'Invalid compression list filter.')
         if not math.isfinite(start) or start<0 or end is not None and (not math.isfinite(end) or end<start):
             raise HTTPException(400,'Invalid time window.')
         check_bucket(bucket_start,bucket_end)
@@ -103,10 +109,10 @@ def add_routes(router,resolve_profile,server_home):
                 return aggregate.ledger(analytics, aggregate.discover(server_home()), start=start,end=end,
                     provider=provider,session=session,offset=offset,limit=limit,test_id=test_id,agent=agent,
                     project=project,session_scope=session_scope,subagent=subagent,model=model,
-                    model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group)
+                    model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group,list_mode=list_mode,compression_kind=compression_kind)
             root=check_profile(profile)
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,
-                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group,profile_key=profile)
+                                  model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group,profile_key=profile,list_mode=list_mode,compression_kind=compression_kind)
         except ValueError as exc:raise HTTPException(400,str(exc))
         except SnapshotBusy as exc:raise HTTPException(503,'Selected analytics snapshot busy; retry shortly.') from exc
         except SnapshotUnavailable as exc:raise HTTPException(503,'Selected analytics snapshot unavailable; retry shortly.') from exc

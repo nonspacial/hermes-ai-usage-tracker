@@ -38,6 +38,17 @@ function fixtureProject(full,p){
     ...fixtureOverviewSummary(row),start:row.start,end:row.end}))}};
  }
  if(view===null){if(group!==null)throw new Error('Group requires a view');return full}
+ if(p.has('list_mode')){
+  const field=({requests:'requests',compressions:'compressions',cache:'applied_rate_groups',models:'groups',overview:fixtureGroups[group]||'list_rows'})[view];
+  if(field){
+   const all=p.get('list_mode')==='all',offset=all?0:Number(p.get('offset')||0),limit=all?20000:Number(p.get('limit')||10);
+   const rows=(field==='list_rows'?[...full.trend.buckets].reverse():full[field]).filter(row=>field!=='compressions'||!p.get('compression_kind')||row.kind===p.get('compression_kind'));
+   if(all&&rows.length>20000)throw new Error('Full record report exceeds the 20,000-row safety limit; narrow the window.');
+   full={...full,[field]:rows.slice(offset,offset+limit),list_count:rows.length,
+    list_next_offset:!all&&offset+limit<rows.length?offset+limit:null,
+    ...(p.get('profile_scope')==='all'?{list_provenance:'Per-profile copied snapshots; no simultaneous cross-profile instant.'}:{})};
+  }
+ }
  if(!Object.hasOwn(fixtureViews,view)||view==='overview'&&!Object.hasOwn(fixtureGroups,group)||
     view!=='overview'&&group!==null)throw new Error('Invalid projection');
  const included=[...new Set([...fixtureCommon,...fixtureViews[view],...(view==='overview'&&fixtureGroups[group]?[fixtureGroups[group]]:[])])].sort();
@@ -46,7 +57,9 @@ function fixtureProject(full,p){
  return {...Object.fromEntries(included.map(field=>[field,full[field]])),
   ...Object.fromEntries(['profile_scope','read_only','refresh_mode','analytics_revision','coverage','quota','profile_sequences']
    .filter(field=>Object.hasOwn(full,field)).map(field=>[field,full[field]])),
-  projection:{version:1,included,omitted}};
+  projection:{version:1,included,omitted},
+  ...(p.has('list_mode')?{list_count:full.list_count,list_next_offset:full.list_next_offset,
+    ...(full.list_rows?{list_rows:full.list_rows}:{}),...(full.list_provenance?{list_provenance:full.list_provenance}:{})}:{})};
 }
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
@@ -103,7 +116,7 @@ async function fixtureAggregate(u){
   const rows=ordered(active.flatMap(p=>base.requests.map(r=>fixtureQualify(r,p,'request'))),'started');
   out.summary=active.length?summarize(rows):null;
   out.subagent_summary=active.length?{...summarize(rows.filter(r=>r.agent_kind==='subagent')),agents:base.subagent_summary.agents*active.length}:null;
-  out.requests=rows.slice(offset,offset+limit);out.request_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
+  out.requests=p.has('list_mode')?rows:rows.slice(offset,offset+limit);out.request_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
   for(const [field,kind,key] of [['project_groups','project','key'],['session_groups','session','key'],['subagent_groups','subagent','key'],['project_options','project','id'],['compressions','compression','id'],['tests','test','id'],['groups',null,'id']])out[field]=active.flatMap(p=>(base[field]||[]).map(r=>fixtureQualify(r,p,kind,key)));
   out.compression_count=active.length?out.compressions.length:null;
   out.compression_truncated=false;
@@ -142,7 +155,9 @@ demoRest=async function(path,options={}){
   // check. Ordinary preview fixtures never call a backend or provider.
   if(window.backendLedger&&['/ledger','/ledger/refresh'].includes(u.pathname))
    return window.backendLedger({path,method:options.method||'GET',body:options.body});
-  const result=await baseDemoRest(path,options);
+  const source=new URL(path,'https://offline.test');
+  if(source.pathname==='/ledger'&&source.searchParams.has('list_mode')){source.searchParams.set('limit','20000');source.searchParams.set('offset','0')}
+  const result=await baseDemoRest(source.pathname==='/ledger'?source.pathname+source.search:path,options);
   if(u.pathname!=='/ledger')return result;
   return fixtureProject({...result,compression_truncated:false,analytics_revision:window.demoAnalyticsRevision||'synthetic-analytics-initial'},u.searchParams);
  }

@@ -103,6 +103,7 @@ class AnalyticsRuntime:
                 raise RestartRequired('Database schema changes require a backend restart.')
             generation['store_type'] = storage.Store
             generation['decimal_sum'] = storage.DecimalSum
+            generation['canonical_rate'] = storage.canonical_rate
             self._validate(generation)
             if any((self.folder / (name + '.py')).read_bytes() != source for name, source in sources.items()):
                 raise ValueError('Analytics files changed during validation; retry when editing finishes.')
@@ -126,6 +127,7 @@ class AnalyticsRuntime:
             connection = sqlite3.connect(reader.path.as_uri() + '?mode=ro', uri=True, timeout=2)
             connection.row_factory = sqlite3.Row
             connection.create_aggregate('decimal_sum', 1, generation['decimal_sum'])
+            connection.create_function('canonical_rate',1,generation['canonical_rate'],deterministic=True)
             ownership.register_sql(connection)
             try:
                 yield connection
@@ -168,7 +170,7 @@ class AnalyticsRuntime:
                 if generation['retired'] and not generation['readers']:
                     self._discard(generation)
 
-    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None, view=None, group=None, profile_key=''):
+    def read(self, root, *args, test_id='', bucket_start=None, bucket_end=None, view=None, group=None, profile_key='', list_mode='legacy', compression_kind=''):
         from .projection import selected_fields
         selected_fields(view, group)
         with self.lease() as generation:
@@ -188,7 +190,7 @@ class AnalyticsRuntime:
                         connection.executescript(SCHEMA)
                     lo = max(args[0], bucket_start) if bucket_start is not None else args[0]
                     hi = min(args[1] if args[1] is not None else time.time(), bucket_end) if bucket_end is not None else args[1]
-                    result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:],view=view,group=group)
+                    result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:],view=view,group=group,list_mode=list_mode,compression_kind=compression_kind)
             else:
                 source_generation=signature(source_file)
                 with selected_snapshot_root(root) as copied_root:
@@ -204,8 +206,8 @@ class AnalyticsRuntime:
                         end = args[1] if args[1] is not None else time.time()
                         lo, hi = max(args[0], bucket_start), min(end, bucket_end)
                         args = (lo, max(lo, hi), *args[2:])
-                    result = reader.read(*args,view=view,group=group,_selected_test=selected_test,
-                                         _delta_seed=(view=='overview' and group in ('time','model') and not test_id
+                    result = reader.read(*args,view=view,group=group,list_mode=list_mode,compression_kind=compression_kind,_selected_test=selected_test,
+                                         _delta_seed=(list_mode=='legacy' and view=='overview' and group in ('time','model') and not test_id
                                                       and bucket_start is None and len(args)>1
                                                       and args[0]>0))
                     from .incremental import identity

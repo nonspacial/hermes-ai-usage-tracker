@@ -37,7 +37,7 @@ The root owns plugin integration (`bootstrap.py`, `install.py`, `build_preview.p
 - [dashboard/AGENTS.md](dashboard/AGENTS.md): host dashboard manifest and API/profile boundary.
 - [ledger_runtime/AGENTS.md](ledger_runtime/AGENTS.md): recorder, storage, analytics, aggregation and read safety.
 - [tests/AGENTS.md](tests/AGENTS.md): isolated fixtures, backend verification, test ownership; indexes `tests/ui`.
-- [docs/AGENTS.md](docs/AGENTS.md): project-owned design contracts, investigation evidence, historical technical plans.
+- [docs/AGENTS.md](docs/AGENTS.md): project-owned design contracts (including lower record paging), investigation evidence, historical technical plans.
 - [catalog/AGENTS.md](catalog/AGENTS.md): plugin catalogue metadata and publication helpers.
 
 Root owns remaining top-level files, including installation, preview generation, release references and licensing. No separate child instruction is needed for `tests/fixtures` or `docs/images`: their nearest parent owns them.

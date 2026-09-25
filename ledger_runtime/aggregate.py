@@ -180,11 +180,32 @@ def merge_groups(reports, field, dimensions):
             groups.setdefault(key, []).append(row)
     result = []
     summary_keys = summary([]).keys()
-    for key in sorted(groups):
+    for key in groups:
         rows = groups[key]
         result.append({**{d: rows[0].get(d) for d in dimensions},
+                       'latest_started': max(r['latest_started'] for r in rows),
                        **merge_summaries([{k: r[k] for k in summary_keys} for r in rows])})
-    return result
+    return sorted(result, key=lambda r: (-r['latest_started'], tuple(json.dumps(r.get(d), sort_keys=True) for d in dimensions)))
+
+GROUP_FIELDS={'models':'groups','cache':'applied_rate_groups',
+              'overview':{'model':'model_groups','project':'project_groups',
+                          'session':'session_groups','subagent':'subagent_groups'}}
+LOCAL_GROUPS={'groups','project_groups','session_groups','subagent_groups'}
+
+def group_identity(field, raw, pid):
+    # Applied-rate JSON is compared structurally across profiles, but each
+    # source is hydrated by its exact raw SQL grouping value.
+    values=tuple(json.dumps(json.loads(v) if isinstance(v,str) else v,sort_keys=True) if field=='applied_rate_groups' and i==3 and v is not None
+                 else json.dumps(v,sort_keys=True) for i,v in enumerate(raw))
+    return (pid if field in LOCAL_GROUPS else '',)+values
+
+def group_order(row, field):
+    dimensions={'groups':('provider','model','agent_kind','task'),
+                'model_groups':('provider','model'),
+                'applied_rate_groups':('provider','model','service_tier','rate'),
+                'project_groups':('key',),'session_groups':('key',),'subagent_groups':('key',)}[field]
+    return (-row['latest_started'],row.get('profile_id','') if field in LOCAL_GROUPS else '',
+            *(json.dumps(row.get('original_ids',{}).get(d,row.get(d)),sort_keys=True) for d in dimensions))
 
 
 def ordered(rows, timestamp, limit=None, offset=0, *, numeric_id=False):
@@ -237,7 +258,7 @@ def quota_unavailable():
             'note': 'Subscription quotas may share accounts across profiles and cannot be summed. No quota probes were performed.'}
 
 
-def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200, view=None, group=None, **filters):
+def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200, view=None, group=None, list_mode='legacy', **filters):
     from .projection import selected_fields, manifest
     fields = selected_fields(view, group)
     include = lambda name: fields is None or name in fields
@@ -273,6 +294,10 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
         if anchor is None:
             anchor = max(0, end - 86400)
         candidates = []
+        grouped=GROUP_FIELDS.get(view)
+        group_field=(grouped.get(group) if isinstance(grouped,dict) else grouped) if list_mode=='page' else None
+        identities={}
+        selected_groups=set()
         for profile, status, reader in ready:
             try:
                 lo, hi = start, end
@@ -289,30 +314,41 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                          local.get('agent', ''), local.get('project', ''),
                          local.get('session_scope', 'exact'), local.get('subagent', ''),
                          local.get('model', ''), local.get('model_provider', ''))
-                keys = reader._request_keys(*scope, limit=offset + limit) if include('requests') else []
-                candidates.append((profile, status, reader, scope, keys, selected_test))
+                keys = reader._request_keys(*scope, limit=20000 if list_mode=='all' else offset + limit) if include('requests') else []
+                group_keys=reader.group_keys(group_field,scope) if group_field else None
+                candidates.append((profile, status, reader, scope, keys, selected_test, group_keys))
             except (sqlite3.Error, OSError, json.JSONDecodeError):
                 status['status'] = 'unreadable'
         # Merge scalar keys only. Never retain/qualify per-profile JSON prefixes.
         # A late read failure changes both totals and winners: retry survivors on
         # these same copied roots and generation, not newly sampled live sources.
         while candidates:
+            identities={}
+            if group_field:
+                for p, _, _, _, _, _, keys in candidates:
+                    for raw, stamp in keys:
+                        identity=group_identity(group_field,raw,p['profile_id'])
+                        identities[identity]=max(stamp,identities.get(identity,float('-inf')))
+                selected_groups=set(sorted(identities,key=lambda k:(-identities[k],k))[offset:offset+limit])
             winners = sorted(((stamp or 0, str(key), p['profile_id'])
-                              for p, _, _, _, keys, _ in candidates for stamp, key in keys),
-                             reverse=True)[offset:offset + limit]
+                              for p, _, _, _, keys, _, _ in candidates for stamp, key in keys),
+                             reverse=True)[offset:offset + (20000 if list_mode=='all' else limit)]
             selected = {}
             for _, key, pid in winners:
                 selected.setdefault(pid, []).append(key)
             reports = []
             failed = set()
-            for profile, status, reader, scope, _, selected_test in candidates:
+            for profile, status, reader, scope, _, selected_test, group_keys in candidates:
                 try:
                     lo, hi, provider, session, agent, project, session_scope, subagent, model, model_provider = scope
-                    report = reader.read(lo, hi, provider, 0, limit, session, agent, project,
+                    report = reader.read(lo, hi, provider, 0, limit if list_mode=='legacy' else (20000 if list_mode=='all' else offset+limit), session, agent, project,
                         session_scope, subagent, model, model_provider,
                         trend_start=lo if local.get('test_id') or local.get('bucket_start') is not None else anchor,
                         _detail_ids=selected.get(profile['profile_id'], ()) if include('requests') else None,
-                        view=view,group=group,_selected_test=selected_test)
+                        _group_keys=[raw for raw, _ in group_keys if group_identity(group_field,raw,profile['profile_id']) in selected_groups] if group_field else None,
+                        view=view,group=group,_selected_test=selected_test,
+                        list_mode=('all' if list_mode=='all' else 'page') if view=='compressions' and list_mode!='legacy' else 'legacy',
+                        compression_kind=local.get('compression_kind',''))
                     status['status'] = 'read'
                     reports.append((profile, report))
                 except (sqlite3.Error, OSError, json.JSONDecodeError):
@@ -333,8 +369,8 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
     for field in ('request_count', 'compression_count', 'crossing_start', 'crossing_end'):
         if include(field):out[field] = sum(r[field] for r in data) if data else None
     out['next_offset'] = offset + limit if out['request_count'] is not None and offset + limit < out['request_count'] else None
-    for field, kind, stamp, cap in [('requests', 'request', 'started', limit),
-            ('compressions', 'compression', 'started', 1000), ('tests', 'test', 'started', 100),
+    for field, kind, stamp, cap in [('requests', 'request', 'started', 20000 if list_mode=='all' else limit),
+            ('compressions', 'compression', 'started', 20000 if list_mode=='all' else offset+limit if list_mode=='page' else 1000), ('tests', 'test', 'started', 100),
             ('rates', 'rate', 'created', 500), ('health', None, 'updated', None)]:
         if not include(field):continue
         rows = [qualify(v, p, kind) for p, r in reports for v in r[field]]
@@ -353,11 +389,12 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
         out['compression_truncated'] = out['compression_count'] is not None and out['compression_count'] > len(out['compressions'])
     for field, kind, key in [('project_groups', 'project', 'key'), ('session_groups', 'session', 'key'),
             ('subagent_groups', 'subagent', 'key'), ('project_options', 'project', 'id')]:
-        if include(field):out[field] = sorted([qualify(v, p, kind, key) for p, r in reports for v in r[field]], key=lambda v: v[key])
+        if include(field):
+            out[field] = [qualify(v, p, kind, key) for p, r in reports for v in r[field]]
+            out[field].sort(key=lambda v: group_order(v,field) if field!='project_options' else v['id'])
     # Global categorical groups have shared semantics, unlike profile-local IDs.
     if include('groups'):
-        out['groups'] = sorted([qualify(v, p) for p, r in reports for v in r['groups']],
-                               key=lambda v: (v['provider'], v['model'], v['agent_kind'], v['task']))
+        out['groups'] = sorted([qualify(v, p) for p, r in reports for v in r['groups']],key=lambda v:group_order(v,'groups'))
     for field, dimensions in [('provider_groups', ('provider',)), ('model_groups', ('provider', 'model')),
             ('agent_groups', ('agent_kind',)), ('applied_rate_groups', ('provider', 'model', 'service_tier', 'rate'))]:
         if include(field):out[field] = merge_groups(data, field, dimensions)
@@ -385,10 +422,41 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                 combined[field] = sum(r[field] or 0 for r in progression) if combined['eligible_pairs'] else None
             combined['excluded_reasons'] = add_values([r['excluded_reasons'] for r in progression])
             out['cache_read_progression'] = combined
+    if list_mode!='legacy':
+        field={'requests':'requests','compressions':'compressions','cache':'applied_rate_groups','models':'groups','overview':{'model':'model_groups','time':'trend','project':'project_groups','session':'session_groups','subagent':'subagent_groups'}.get(group)}.get(view)
+        if field is None:raise ValueError('Unsupported record list.')
+        count=out['request_count'] if field=='requests' else (sum(r['list_count'] for r in data) if data else None) if field=='compressions' else len(out['trend']['buckets']) if field=='trend' else len(identities) if group_field else len(out[field])
+        if count is None:
+            if list_mode=='all':raise ValueError('Full record report unavailable: no readable profiles.')
+            count=0
+        if list_mode=='all' and count>20000:raise ValueError('Full record report exceeds the 20,000-row safety limit; narrow the window.')
+        end_offset=offset+(20000 if list_mode=='all' else limit)
+        out['list_count']=count
+        out['list_next_offset']=end_offset if list_mode=='page' and end_offset<count else None
+        if field=='trend':out['list_rows']=list(reversed(out['trend']['buckets']))[offset:end_offset]
+        elif field not in ('requests','compressions'):
+            if not group_field:out[field]=out[field][offset:end_offset]
+            else:
+                # Match the lightweight global key order (including stable
+                # original identity ties), not opaque qualified display IDs.
+                ranks={identity:i for i,identity in enumerate(sorted(selected_groups,key=lambda k:(-identities[k],k)))}
+                dimensions={'groups':('provider','model','agent_kind','task'),
+                            'model_groups':('provider','model'),
+                            'applied_rate_groups':('provider','model','service_tier','rate'),
+                            'project_groups':('key',),'session_groups':('key',),'subagent_groups':('key',)}[field]
+                out[field].sort(key=lambda row:ranks[group_identity(field,tuple(
+                    json.dumps(row[d],sort_keys=True,separators=(',',':')) if field=='applied_rate_groups' and d=='rate' and row[d] is not None
+                    else row.get('original_ids',{}).get(d,row[d]) for d in dimensions),row.get('profile_id',''))])
+        elif field=='compressions':out[field]=out[field][offset:end_offset] if list_mode=='page' else out[field]
+        # Each source was copied independently, not as an atomic cross-profile instant.
+        out['list_provenance']='Per-profile copied snapshots; no simultaneous cross-profile instant.'
+    list_next=out.get('list_next_offset') if list_mode!='legacy' else None
+    list_rows=out.get('list_rows') if list_mode!='legacy' else None
     if fields is not None:
         out = {**{key:out[key] for key in fields if key in out},
                **{key:out[key] for key in ('profile_scope', 'read_only', 'refresh_mode', 'analytics_revision', 'coverage', 'quota', 'profile_sequences')},
                'projection':manifest(fields)}
+        if list_mode!='legacy':out.update(list_count=count,list_next_offset=list_next,list_provenance='Per-profile copied snapshots; no simultaneous cross-profile instant.',**({'list_rows':list_rows} if field=='trend' else {}))
     return out
 
 
