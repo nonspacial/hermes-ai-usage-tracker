@@ -2433,7 +2433,9 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    if(revision&&response?.analytics_revision&&response.analytics_revision!==revision)dirty=true;
    lastRevision=response?.analytics_revision||null;
    lastInventory=beforeInventory;
-   const admitted=!!(memoryKey&&revision&&beforeInventory&&before?.change_token===after?.change_token&&
+   // The post-read hint may differ: that schedules a follow-up, not a veto
+   // on retaining this completed, same-inventory response under its own key.
+   const admitted=!!(memoryKey&&revision&&beforeInventory&&
       beforeInventory===ledgerInventoryKey(after,profile)&&
       rememberLedger(memoryKey,response,revision,beforeInventory,received,memoryGeneration));
    baseline=canResume&&admitted?resumeBaseline(response,received):null;

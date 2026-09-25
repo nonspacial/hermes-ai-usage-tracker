@@ -2,10 +2,109 @@
 import os
 import re
 import time
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def completed_selection_regressions(browser):
+    """A hint changing during a successful read must not erase its sibling snapshot."""
+    page = browser.new_page(viewport={'width': 1700, 'height': 1050})
+    errors, outbound = [], []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('request', lambda request: outbound.append(request.url))
+    page.route('**/*', lambda route: route.abort())
+    page.set_content((ROOT / 'preview.html').read_text())
+    page.evaluate('''()=>{
+      window.held=[];window.reads=[];window.holdLedger=false;
+      window.changeOnDelivery=false;
+      const original=rest;
+      rest=(path,options)=>{
+        if(new URL(path,'https://offline').pathname==='/ledger'){
+          reads.push(path);
+          if(holdLedger)return new Promise((resolve,reject)=>held.push({path,
+            deliver:()=>{if(changeOnDelivery){demoChange++;changeOnDelivery=false}
+              original(path,options).then(resolve,reject)}}));
+        }
+        return original(path,options);
+      };
+    }''')
+    period = page.get_by_role('group', name='Time window')
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    expect(page.get_by_test_id('ledger-freshness')).to_be_visible()
+    period.get_by_role('button', name='Custom', exact=True).click()
+    page.get_by_label('Window start').fill('2026-09-24T00:00')
+    page.get_by_label('Window end').fill('2026-09-25T00:00')
+    expect(page.get_by_test_id('ledger-freshness')).to_be_visible()
+    # Mutate the opaque hint while the first Custom GET is held, before the
+    # post-read check. The completed response still belongs to these dates.
+    page.evaluate('window.holdLedger=true;window.changeOnDelivery=true')
+    page.get_by_role('tab', name='Requests', exact=True).click()
+    page.wait_for_function('held.length===1')
+    custom = page.evaluate('held[0].path')
+    custom_query = parse_qs(urlsplit(custom).query)
+    assert custom_query['view'] == ['requests'] and 'end' in custom_query, custom_query
+    page.evaluate('held.shift().deliver()')
+    expect(page.get_by_test_id('request-list')).to_be_visible()
+    custom_key = page.evaluate('''path=>ledgerMemoryKey(host.state.connectionId.get(),
+      'infra',path,0)''', custom)
+    page.wait_for_function('key=>ledgerMemory.has(key)', arg=custom_key)
+    page.wait_for_function('path=>held.some(r=>r.path===path)', arg=custom)
+    # A dirty hint schedules a fresh read but must not remove the completed
+    # Custom entry. Keep reads held so only deliberately delivered reads paint.
+    period.get_by_role('button', name='Past 24h', exact=True).click()
+    page.wait_for_function('''()=>held.some(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
+      return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-86400)<30})''')
+    page.evaluate('''()=>{const i=held.findIndex(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
+      return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-86400)<30});
+      held.splice(i,1)[0].deliver()}''')
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+    page.wait_for_function('''()=>[...ledgerMemory.keys()].some(k=>JSON.parse(k).at(-1)===86400)''')
+    period.get_by_role('button', name='Custom', exact=True).click()
+    page.wait_for_function('path=>held.filter(r=>r.path===path).length>=2', arg=custom)
+    expect(page.get_by_test_id('request-list')).to_be_visible()
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+    assert page.evaluate('key=>ledgerMemory.has(key)', custom_key)
+    prior_received = page.evaluate('key=>ledgerMemory.get(key).received', custom_key)
+    page.evaluate('''path=>{const i=held.findLastIndex(r=>r.path===path);
+      if(i<0)throw Error('missing Custom replacement');held.splice(i,1)[0].deliver()}''', custom)
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+    expect(page.get_by_test_id('ledger-freshness')).not_to_contain_text('Cached snapshot')
+    expect(page.get_by_test_id('ledger-freshness')).not_to_contain_text('Updating')
+    assert page.evaluate('([key,prior])=>ledgerMemory.get(key).received>=prior',
+                         [custom_key, prior_received])
+    # Another fixed Custom date is a cold selection, not the old date's body.
+    page.get_by_label('Window end').fill('2026-09-26T00:00')
+    page.wait_for_function('''()=>held.some(r=>new URLSearchParams(r.path.split('?')[1]).get('end')
+      ===String(new Date('2026-09-26T00:00').getTime()/1000))''')
+    expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Requests')
+    assert page.evaluate('key=>ledgerMemory.has(key)', custom_key)
+    changed_custom = page.evaluate('held.at(-1).path')
+    assert page.evaluate('''([first,second])=>first!==ledgerMemoryKey(
+      host.state.connectionId.get(),'infra',second,0)&&
+      !ledgerMemory.has(ledgerMemoryKey(host.state.connectionId.get(),'infra',second,0))''',
+      [custom_key, changed_custom])
+    # The original rolling 24h remains available even after a full 7d read.
+    period.get_by_role('button', name='7 days', exact=True).click()
+    page.wait_for_function('''()=>held.some(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
+      return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-604800)<30})''')
+    page.evaluate('''()=>{const i=held.findIndex(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
+      return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-604800)<30});
+      held.splice(i,1)[0].deliver()}''')
+    expect(page.get_by_test_id('request-list')).to_be_visible()
+    page.wait_for_function('''()=>[...ledgerMemory.keys()].some(k=>JSON.parse(k).at(-1)===604800)''')
+    period.get_by_role('button', name='Past 24h', exact=True).click()
+    page.wait_for_function('''()=>held.some(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
+      return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-86400)<30})''')
+    expect(page.get_by_test_id('request-list')).to_be_visible()
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+    assert page.evaluate('key=>ledgerMemory.has(key)', custom_key)
+    assert not errors and not outbound, (errors, outbound)
+    page.close()
 
 
 def run():
@@ -181,8 +280,9 @@ def run():
         page.evaluate('window.holdLedger=false')
         assert not errors, errors
         assert not outbound, outbound
+        completed_selection_regressions(browser)
         browser.close()
-    print(f"PASS synthetic cold delivered {cold_ms} ms / labelled changed-hint revisit with read held {revisit_ms} ms; RAM count {stats['count']}, byte-limit retained {stats['byteBound']['count']} entries / {stats['byteBound']['bytes']} serialized UTF-16 payload bytes; object-heavy {stats['heavySize']} payload bytes; browser heap sample {stats['heapSample']} bytes (includes unrelated active/parsed state; not a cache heap cap); TTL/disposal, rapid-return flight, live age, failure, connection, identity and generation isolation")
+    print(f"PASS completed Custom changed-hint storage/follow-up, held cached revisit and replacement, distinct Custom dates, 24h/7d/24h sibling retention; synthetic cold delivered {cold_ms} ms / labelled changed-hint revisit held {revisit_ms} ms; RAM count {stats['count']}, byte-limit retained {stats['byteBound']['count']} entries / {stats['byteBound']['bytes']} serialized UTF-16 payload bytes; object-heavy {stats['heavySize']} payload bytes; browser heap sample {stats['heapSample']} bytes (includes unrelated active/parsed state; not a cache heap cap); TTL/disposal, rapid-return flight, live age, failure, connection, identity and generation isolation")
 
 
 if __name__ == '__main__':
