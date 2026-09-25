@@ -2303,7 +2303,7 @@ let liveLedgerOwnerId=0;
 // The token is a filesystem hint, not a database revision. Only a full REST
 // response publishes accounting; a hint never modifies totals or event rows.
 function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis,connection=null}){
-  let alive=true,active=false,dirty=false,manual=false,token=null,checking=false;
+  let alive=true,active=false,dirty=false,manual=false,manualForNext=false,token=null,checking=false;
   let unsupported=false,failures=0,checkFailures=0,followup=null,retry=null;
   const now=()=>clock.now?.()??Date.now();
   let lastFallback=now();
@@ -2444,24 +2444,28 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   }catch(error){
    if(!current())return;
    failed=true;failures++;
-   publish({error,fetching:false,manual:false});
-   manual=false;
+   publish({error,fetching:false,manual:manualForNext});
   }finally{
    active=false;
    if(!current())return;
+   // Manual ownership ends with its own settled read, not with an unbounded
+   // chain of background hints. A click during an older flight owns the next
+   // read; neither success nor failure makes the old snapshot look fresh.
+   if(manualForNext)manualForNext=false;
+   else if(manual){manual=false;publish({manual:false})}
    if(dirty){
     // Release the shared flight before starting a fresh read. Bursts collapse
     // into one follow-up, including a hint delivered during the post-read check.
-    schedule(failed?Math.min(30000,5000*failures):400);
+    schedule(manual?0:failed?Math.min(30000,5000*failures):400);
    }else if(failed){
     retry=clock.setTimeout(()=>{retry=null;start()},Math.min(30000,5000*failures));
-   }else if(manual){manual=false;publish({manual:false})}
+   }
+   }
   }
- }
- function hint(){if(!alive)return;if(active){dirty=true;return}schedule(150)}
- async function checkForChanges(){
-  if(!alive)return;
-  if(unsupported){
+  function hint(){if(!alive)return;if(active){dirty=true;return}schedule(150)}
+  async function checkForChanges(){
+   if(!alive)return;
+   if(unsupported){
    if(!windowSeconds&&document.visibilityState!=='hidden'&&now()-lastFallback>=60000){lastFallback=now();hint()}
    return;
   }
@@ -2479,7 +2483,13 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   if(token===null){token=next.change_token;hint();return}
   if(next.change_token!==token)hint();
  }
- function refresh(){if(!alive)return;manual=true;publish({manual:true});hint()}
+ function refresh(){
+  if(!current()||manual)return;
+  manual=true;
+  if(active){manualForNext=true;dirty=true}
+  else{clear();schedule(0)}
+  publish({manual:true});
+ }
  function dispose(){alive=false;clear()}
  return {start,hint,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
 }
@@ -2599,7 +2609,7 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
  const pending=operation?.scope===profile&&operation.epoch===control.epoch&&operation.busy;
  let state='checking',label=pending?'Reconnecting':'Connecting',detail='Waiting for fresh recorder and data checks.';
  if(checked?.ok&&!checked.stale&&checked.data.state==='not_recording'){state='not_recording';label='Not recording';detail=checked.data.message||'No live recorder reporting for this profile.'}
- else if(checked?.ok===false||(enabled&&readError)){state='disconnected';label='Disconnected';detail='A fresh connection/data check failed. Retrying automatically.'}
+ else if(checked?.ok===false){state='disconnected';label='Disconnected';detail='Recorder status check failed. Retrying automatically.'}
  else if(!pending&&checked?.ok&&!checked.stale){
   const data=checked.data;state=data.state||'unverified';detail=[data.message,...(data.warnings||[]).slice(0,3)].filter(Boolean).join(' · ');
   if(state==='online'){
@@ -2609,7 +2619,11 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
   }
   label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
  }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
- if(isAllProfiles(profile)){state=readError?'disconnected':'limited';label=pending?'Refreshing':readError?'Disconnected':changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed; showing the last good response. Retrying automatically.':changeLimited?'Read-only · change checks unavailable; visible-page 60-second fallback.':'Read-only · change checks every 30 seconds; rolling windows expire on a visible-page minute. No aggregate events.'}
+ if(enabled&&readError&&checked?.ok&&!checked.stale){
+  if(state==='online'){state='limited';label='Limited'}
+  detail+=' Usage refresh failed; showing the last good snapshot if available. Retrying automatically.';
+ }
+ if(isAllProfiles(profile)){state='limited';label=pending?'Refreshing':readError||changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed; showing the last good response if available. Retrying automatically.':changeLimited?'Read-only · change checks unavailable; visible-page 60-second fallback.':'Read-only · change checks every 30 seconds; rolling windows expire on a visible-page minute. No aggregate events.'}
  return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting'};
 }
 function ConnectionBadge({connection,disabled}){

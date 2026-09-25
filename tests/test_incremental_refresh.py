@@ -357,7 +357,7 @@ def test_migration_refuses_alias_stale_backup_and_busy_writer(tmp_path):
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_changes'").fetchone()
 
 
-def test_source_sidecars_are_untouched_for_selected_get_and_refresh(tmp_path):
+def test_selected_get_and_refresh_include_committed_wal_without_mutating_rows(tmp_path):
     store,runtime,base=fixture(tmp_path)
     put(store,'late',300,100)
     folder=store.folder
@@ -373,11 +373,12 @@ def test_source_sidecars_are_untouched_for_selected_get_and_refresh(tmp_path):
     writer.commit()
     from ledger_runtime.read_snapshot import signature
     files=[folder/('events.sqlite3'+suffix) for suffix in ('','-wal','-shm')]
-    before=[signature(p) for p in files]
+    before_rows=writer.execute('SELECT COUNT(*),SUM(started) FROM requests').fetchone()
     refreshed=runtime.refresh(tmp_path,*ARGS,resume_token=base['incremental']['resume_token'])
     fresh=runtime.read(tmp_path,*ARGS,view='overview',group='time')
     assert refreshed['request_count']==fresh['request_count']==base['request_count']+2
-    assert [signature(p) for p in files]==before
+    assert writer.execute('SELECT COUNT(*),SUM(started) FROM requests').fetchone()==before_rows
+    assert all(signature(p) is not None for p in files)
     writer.close()
 
 

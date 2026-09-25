@@ -107,6 +107,67 @@ def completed_selection_regressions(browser):
     page.close()
 
 
+def refresh_failure_regressions(browser):
+    """A manual read completes once, even with an endless dirty background stream."""
+    page = browser.new_page()
+    errors, outbound = [], []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('request', lambda request: outbound.append(request.url))
+    page.route('**/*', lambda route: route.abort())
+    page.set_content((ROOT / 'preview.html').read_text())
+    page.evaluate('''()=>{
+      window.flights=[];window.patches=[];
+      const original=rest;
+      rest=(path,options)=>new URL(path,'https://offline').pathname==='/ledger'
+        ?new Promise((resolve,reject)=>flights.push({
+           deliver:()=>original(path,options).then(resolve,reject),
+           fail:()=>reject(new Error('fixture read failed'))}))
+        :original(path,options);
+      window.coordinator=makeLedgerCoordinator({profile:'infra',
+        path:'/ledger?profile=infra&start=0&view=requests',windowSeconds:0,
+        publish:patch=>{patches.push(patch);window.last={...window.last,...patch}}});
+      coordinator.start();
+    }''')
+    page.wait_for_function('flights.length===1')
+    page.evaluate('flights[0].deliver()')
+    page.wait_for_function('last.data && !last.fetching')
+    page.evaluate('coordinator.hint()')
+    page.wait_for_function('flights.length===2')
+    page.evaluate('coordinator.refresh(); coordinator.refresh(); coordinator.hint()')
+    assert page.evaluate('last.manual && flights.length===2')
+    page.evaluate('flights[1].deliver()')
+    page.wait_for_function('flights.length===3')
+    assert page.evaluate('last.manual && flights.length===3')
+    page.evaluate("coordinator.hint(); flights[2].fail()")
+    page.wait_for_function('last.error && last.manual===false')
+    state = page.evaluate('''()=>({same:!!last.data,failed:last.error.message,
+      manualPatches:patches.filter(p=>p.manual===false).length,
+      flights:flights.length})''')
+    assert state['same'] and state['failed'] == 'fixture read failed' and state['flights'] == 3, state
+    # A dirty retry may continue, but it never reclaims the manual control.
+    page.wait_for_function('flights.length===4')
+    assert page.evaluate('last.manual===false && !!last.data')
+    page.evaluate('coordinator.dispose(); flights[3].fail()')
+    page.evaluate('''()=>{
+      window.flights=[];window.patches=[];window.last={};
+      window.coordinator=makeLedgerCoordinator({profile:'infra',
+        path:'/ledger?profile=infra&start=0&view=requests',windowSeconds:0,
+        publish:patch=>{patches.push(patch);window.last={...window.last,...patch}}});
+      coordinator.start();
+    }''')
+    page.wait_for_function('flights.length===1')
+    page.evaluate('coordinator.refresh(); coordinator.hint(); flights[0].deliver()')
+    page.wait_for_function('flights.length===2')
+    assert page.evaluate('last.manual && flights.length===2')
+    page.evaluate('coordinator.hint(); flights[1].deliver()')
+    page.wait_for_function('last.manual===false && !!last.data')
+    page.wait_for_function('flights.length===3')
+    assert page.evaluate('last.manual===false && !last.error')
+    page.evaluate('coordinator.dispose(); flights[2].fail()')
+    assert not errors and not outbound, (errors, outbound)
+    page.close()
+
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ['CHROMIUM_PATH'], headless=True,
@@ -233,6 +294,8 @@ def run():
         page.evaluate('window.failLedger=true;held[2].deliver()')
         expect(page.get_by_test_id('usage-stale')).to_contain_text('refresh failed')
         expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Update failed')
+        expect(page.get_by_test_id('connection-status')).to_have_attribute('data-state', 'limited')
+        expect(page.get_by_test_id('connection-status')).to_have_attribute('title', re.compile('Usage refresh failed'))
         page.evaluate('window.failLedger=false;held[1].deliver();held.length=0')
         # Failed identity verification must not replay a cached body.
         page.get_by_role('tab', name='Overview', exact=True).click()
@@ -281,8 +344,9 @@ def run():
         assert not errors, errors
         assert not outbound, outbound
         completed_selection_regressions(browser)
+        refresh_failure_regressions(browser)
         browser.close()
-    print(f"PASS completed Custom changed-hint storage/follow-up, held cached revisit and replacement, distinct Custom dates, 24h/7d/24h sibling retention; synthetic cold delivered {cold_ms} ms / labelled changed-hint revisit held {revisit_ms} ms; RAM count {stats['count']}, byte-limit retained {stats['byteBound']['count']} entries / {stats['byteBound']['bytes']} serialized UTF-16 payload bytes; object-heavy {stats['heavySize']} payload bytes; browser heap sample {stats['heapSample']} bytes (includes unrelated active/parsed state; not a cache heap cap); TTL/disposal, rapid-return flight, live age, failure, connection, identity and generation isolation")
+    print(f"PASS completed Custom changed-hint storage/follow-up, held cached revisit and replacement, distinct Custom dates, 24h/7d/24h sibling retention; synthetic cold delivered {cold_ms} ms / labelled changed-hint revisit held {revisit_ms} ms; RAM count {stats['count']}, byte-limit retained {stats['byteBound']['count']} entries / {stats['byteBound']['bytes']} serialized UTF-16 payload bytes; object-heavy {stats['heavySize']} payload bytes; browser heap sample {stats['heapSample']} bytes (includes unrelated active/parsed state; not a cache heap cap); TTL/disposal, rapid-return flight, live age, failure, connection, identity and generation isolation; manual dirty-follow-up success/failure release and healthy-recorder/read-error separation")
 
 
 if __name__ == '__main__':

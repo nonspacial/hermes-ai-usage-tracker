@@ -25,7 +25,7 @@ import uuid
 
 from . import accounting, pricing, ownership, projection, incremental
 from .storage import SCHEMA
-from .read_snapshot import snapshot_root, signature
+from .read_snapshot import selected_snapshot_root, signature
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
@@ -191,7 +191,7 @@ class AnalyticsRuntime:
                     result = self._reader(generation, empty).read(lo, max(lo, hi) if hi is not None else None, *args[2:],view=view,group=group)
             else:
                 source_generation=signature(source_file)
-                with snapshot_root(root) as copied_root:
+                with selected_snapshot_root(root) as copied_root:
                     reader = self._reader(generation, copied_root)
                     selected_test = None
                     if test_id:
@@ -282,7 +282,7 @@ class AnalyticsRuntime:
         with self.lease() as generation:
             if revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None:
                 from .incremental_refresh import replace_buckets
-                with snapshot_root(root) as copied_root:
+                with selected_snapshot_root(root) as copied_root:
                     if signature(source_file)!=current_generation:
                         candidate=None
                     else:

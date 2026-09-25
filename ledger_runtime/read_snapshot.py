@@ -1,4 +1,4 @@
-"""Read SQLite through a stable disposable copy, never source WAL sidecars.
+"""Read SQLite through disposable copies with scope-specific source effects.
 
 SQLite mode=ro can still create/update -shm and -wal in a writable source
 folder. Aggregate inspection therefore copies the database and its WAL
@@ -9,15 +9,22 @@ and recovery may depend on a super-journal outside this database.
 Do not use immutable=1 on a live WAL database:
 that would silently ignore committed WAL records.
 
-Each poll copies the entire DB/WAL (up to three attempts), even for a narrow
+Selected reads instead use a read-only SQLite source connection and SQLite's
+backup API. That connection may normally create/update source WAL/SHM sidecars;
+it cannot create a missing main database or write usage rows. A single backup
+step holds a consistent WAL read view even with a continuously writing recorder.
+
+Aggregate polls copy the entire DB/WAL (up to three attempts), even for a narrow
 window. This trades disk I/O and scratch space for no source SQLite writes.
 Stability relies on local filesystem inode/size/nanosecond timestamps, not a
 SQLite source lock; hostile writers or filesystems hiding changes are unsupported.
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import shutil
+import sqlite3
 import tempfile
+import time
 
 
 class SnapshotBusy(OSError):
@@ -26,6 +33,49 @@ class SnapshotBusy(OSError):
 
 class SnapshotUnsupported(OSError):
     reason = 'unsupported_rollback_journal'
+
+class SnapshotUnavailable(OSError):
+    reason = 'snapshot_unavailable'
+
+@contextmanager
+def selected_snapshot_root(root):
+    """Back up an existing selected ledger in one SQLite snapshot, not raw files.
+
+    One backup step prevents page-by-page restarts/starvation under WAL writes.
+    The two-second connection/busy budget bounds lock retries; a successful
+    full copy is allowed to finish. Python's backup progress callback also
+    interrupts repeated SQLITE_BUSY/LOCKED attempts when the budget expires.
+    """
+    source = (Path(root) / 'usage-ledger' / 'events.sqlite3').resolve()
+    if not source.is_file():
+        raise SnapshotUnavailable('Selected ledger disappeared during snapshot.')
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix='usage-selected-snapshot-')
+    except OSError as exc:
+        raise SnapshotUnavailable('Selected ledger scratch unavailable.') from exc
+    with scratch as folder:
+        target = Path(folder)
+        ledger = target / 'usage-ledger'
+        try:
+            ledger.mkdir()
+        except OSError as exc:
+            raise SnapshotUnavailable('Selected ledger scratch unavailable.') from exc
+        deadline = time.monotonic() + 2
+        # closing(), not Connection.__exit__, actually releases SQLite handles.
+        try:
+            with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True, timeout=2)) as reader:
+                with closing(sqlite3.connect(ledger / 'events.sqlite3', timeout=0)) as copy:
+                    def progress(status, remaining, total):
+                        if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) and time.monotonic() >= deadline:
+                            raise SnapshotBusy('Selected ledger locked during backup; retry shortly.')
+                    reader.backup(copy, pages=-1, progress=progress, sleep=.01)
+        except sqlite3.Error as exc:
+            if not source.is_file():
+                raise SnapshotUnavailable('Selected ledger disappeared during snapshot.') from exc
+            if (getattr(exc, 'sqlite_errorcode', None) or 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise SnapshotBusy('Selected ledger locked during backup; retry shortly.') from exc
+            raise SnapshotUnavailable('Selected ledger backup unavailable.') from exc
+        yield target
 
 
 def signature(path):

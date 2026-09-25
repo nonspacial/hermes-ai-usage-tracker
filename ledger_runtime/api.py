@@ -7,6 +7,7 @@ from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
 from .storage import Store
 from .pricing import start_worker
 from .analytics_reload import AnalyticsRuntime, RestartRequired
+from .read_snapshot import SnapshotBusy, SnapshotUnavailable
 
 def add_routes(router,resolve_profile,server_home):
     from . import aggregate
@@ -107,6 +108,8 @@ def add_routes(router,resolve_profile,server_home):
             return analytics.read(root,start,end,provider,offset,limit,session,agent,project,session_scope,subagent,
                                   model,model_provider,test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,view=view,group=group,profile_key=profile)
         except ValueError as exc:raise HTTPException(400,str(exc))
+        except SnapshotBusy as exc:raise HTTPException(503,'Selected analytics snapshot busy; retry shortly.') from exc
+        except SnapshotUnavailable as exc:raise HTTPException(503,'Selected analytics snapshot unavailable; retry shortly.') from exc
 
     @router.post('/ledger/refresh')
     def refresh_ledger(body:dict,profile:str='',start:float=0,end:float|None=None,
@@ -139,6 +142,10 @@ def add_routes(router,resolve_profile,server_home):
                                      test_id=test_id,bucket_start=bucket_start,bucket_end=bucket_end,profile_key=profile)
         except ValueError as exc:
             raise HTTPException(400,str(exc)) from exc
+        except SnapshotBusy as exc:
+            raise HTTPException(503,'Selected analytics snapshot busy; retry shortly.') from exc
+        except SnapshotUnavailable as exc:
+            raise HTTPException(503,'Selected analytics snapshot unavailable; retry shortly.') from exc
 
     @router.get('/ledger/skills')
     def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',
