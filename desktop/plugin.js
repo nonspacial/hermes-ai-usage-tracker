@@ -305,14 +305,14 @@ function QuotaBar({ window }) {
 const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
 // The popup shares Auto use's theme-aware surface and is fixed so reader
 // scrollports and chart SVGs cannot clip long explanations.
-const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}.au-tooltip-freshness{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary)}.au-tooltip-freshness-age[data-tone="healthy"]{color:var(--ui-text-success,#64bba8)}.au-tooltip-freshness-age[data-tone="caution"]{color:var(--ui-text-warning,#d2b776)}'
+const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}.au-tooltip-chart-summary{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary);color:var(--ui-accent)}.au-tooltip-freshness{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary)}.au-tooltip-freshness-age[data-tone="healthy"]{color:var(--ui-text-success,#64bba8)}.au-tooltip-freshness-age[data-tone="caution"]{color:var(--ui-text-warning,#d2b776)}'
 function installTooltips(root){
  if(!root)return;
  const style=document.createElement('style');style.textContent=tooltipCss;document.head.appendChild(style);
  const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
  tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
  let active=null,svgTitle=null,original=null,previousDescription=null,previousLabel=null;
- const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning'];
+ const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning','--ui-accent'];
  function syncTheme(){
   if(!active)return;
   const source=getComputedStyle(active);
@@ -352,6 +352,11 @@ function installTooltips(root){
  }
  function renderTip(){
   tip.replaceChildren(document.createTextNode(original));
+  const chartSummary=active?.getAttribute('data-au-chart-summary');
+  if(chartSummary){
+   const row=document.createElement('span');row.className='au-tooltip-chart-summary';row.setAttribute('data-testid','chart-point-summary');
+   row.textContent=chartSummary;tip.appendChild(row);
+  }
   const freshness=active?.getAttribute('data-au-freshness');
   if(freshness){
    const row=document.createElement('span');row.className='au-tooltip-freshness';row.setAttribute('data-testid','ledger-freshness');
@@ -392,7 +397,7 @@ function installTooltips(root){
     const current=active.getAttribute('title');
     if(current){original=current;active.dataset.auTooltip=current;renderTip();active.removeAttribute('title');position()}
    }
-   if(record.target===active&&record.attributeName?.startsWith('data-au-freshness')){
+   if(record.target===active&&(record.attributeName==='data-au-chart-summary'||record.attributeName?.startsWith('data-au-freshness'))){
     renderTip();position();
    }
    if(svgTitle&&(record.target===svgTitle||svgTitle.contains(record.target))&&svgTitle.textContent){
@@ -403,7 +408,7 @@ function installTooltips(root){
   }
   if(active)position();
  });
- changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
+ changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-chart-summary','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
  for(let node=root.parentElement;node;node=node.parentElement)changes.observe(node,{attributes:true,attributeFilter:['style','class']});
  window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
  return()=>{hide();root.removeEventListener('mouseover',enter);root.removeEventListener('mouseout',leave);
@@ -1264,6 +1269,7 @@ function UsageChart({data,mode,onSelectRange}){
  let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
  vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
+ const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
  const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
  const move=e=>{const x=plotX(e),time=plotStart+(x-L)/w*(plotEnd-plotStart),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.end=nearestBoundary(x);d.moved=Math.abs(e.clientX-d.clientX)>=5&&Math.abs(time-d.start)>=minZoom/2&&Math.abs(time-d.pointerTime)>=minZoom/2;
@@ -1275,7 +1281,7 @@ function UsageChart({data,mode,onSelectRange}){
   const range=d.moved?zoomRange(d.start,d.end):null;
   if(range&&onSelectRange)onSelectRange(...range);
  };
- return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
+ return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
  h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
@@ -1284,11 +1290,11 @@ function UsageChart({data,mode,onSelectRange}){
  active?h('line',{x1:xx(hover),x2:xx(hover),y1:T,y2:H-B,className:'au-crosshair'}):null,
  active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null,
  selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
- h('rect',{key:'hit',className:'au-plot-hit',x:L,y:T,width:w,height:hg,
+ h('rect',{key:'hit',className:'au-plot-hit','data-au-chart-summary':pointSummary,x:L,y:T,width:w,height:hg,
   onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});if(!canZoom)return;const x=plotX(e),start=nearestBoundary(x);drag.current={id:e.pointerId,start,end:start,pointerTime:plotStart+(x-L)/w*(plotEnd-plotStart),clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
   onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
   h('title',{},chartHelp))),
- active?h('div',{className:'au-chart-tip',role:'status'},new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · ',cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens',' · '+count(active.attempts)+' requests',active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
+ h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
 function missingFieldNote(summary,key){

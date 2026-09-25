@@ -26,6 +26,7 @@ def test_chart_interactions():
                 return result;
             }}''')
             page.get_by_role('navigation', name='Providers', exact=True).get_by_role('tab', name='Codex', exact=True).click()
+            page.wait_for_function('window.demoCalls.filter(p=>p.startsWith("/ledger?")).length >= 2')
             chart = page.get_by_test_id('usage-chart')
             plot = chart.locator('.au-plot-hit')
             expect(plot).to_be_visible()
@@ -37,6 +38,9 @@ def test_chart_interactions():
                 return page.evaluate('window.demoCalls.filter(p=>p.startsWith("/ledger?"))')
 
             def position(fraction):
+                # The short upper pane scrolls internally; expose the whole plot
+                # instead of sending pointer events through the lower sticky tabs.
+                page.locator('.au-upper').evaluate('e=>e.scrollTop=150')
                 box = plot.bounding_box()
                 assert box is not None
                 return box['x'] + box['width'] * fraction, box['y'] + box['height'] / 2
@@ -64,14 +68,32 @@ def test_chart_interactions():
             before = len(calls())
             page.mouse.click(*position(.3))
             expect(chart).to_be_focused()
+            footer = page.get_by_test_id('chart-point-summary')
+            bubble = page.locator('.au-tooltip[role="tooltip"]:visible')
+            expect(footer).to_be_visible()
+            assert 'Click to interact with Left/Right arrow keys' in bubble.inner_text()
+            assert 'Click and drag at least 15 minutes' in bubble.inner_text()
+            assert footer.inner_text() == chart.get_attribute('data-au-chart-summary')
+            assert chart.locator('.au-chart-tip').inner_text() == ''
+            assert footer.inner_text() not in chart.inner_text(), 'Point details must not occupy the pane'
+            assert bubble.evaluate('e=>e.lastElementChild.dataset.testid') == 'chart-point-summary'
+            assert footer.evaluate('e=>getComputedStyle(e).color') == line_stroke()
+            assert chart.evaluate('e=>e.getAttribute("aria-describedby")') == bubble.get_attribute('id')
             focus_stroke = stroke()
             assert focus_stroke == line_stroke() == button_text()
             assert focus_stroke != hover_stroke
             assert focus_stroke != 'rgb(255, 255, 255)'
             print(f'Computed plot strokes: hover={hover_stroke}, focus={focus_stroke}, width=1px, vector-effect=non-scaling-stroke')
-            tip = chart.locator('.au-chart-tip').inner_text()
+            tip = footer.inner_text()
             chart.press('ArrowRight')
-            assert chart.locator('.au-chart-tip').inner_text() != tip
+            expect(footer).not_to_have_text(tip)
+            assert footer.inner_text() == chart.get_attribute('data-au-chart-summary')
+            # Pointer inspection can change the selected point without hiding the instructions.
+            page.mouse.move(*position(.8))
+            expect(footer).not_to_have_text(tip)
+            assert footer.inner_text() == plot.get_attribute('data-au-chart-summary')
+            assert 'Click and drag at least 15 minutes' in bubble.inner_text()
+            assert footer.evaluate('e=>getComputedStyle(e).color') == line_stroke()
             assert len(calls()) == before, 'Single click and keyboard inspection must not fetch'
             # Normal hand jitter remains a click, not a zoom.
             x, y = position(.3)
@@ -85,6 +107,7 @@ def test_chart_interactions():
             page.evaluate("document.documentElement.style.setProperty('--ui-accent', '#6f549d')")
             assert stroke() == line_stroke() == button_text()
             assert stroke() != focus_stroke
+            assert footer.evaluate('e=>getComputedStyle(e).color') == line_stroke()
             page.evaluate("document.documentElement.style.removeProperty('--ui-accent')")
             assert stroke() == focus_stroke
             chart.locator('.au-chart-title').click()
