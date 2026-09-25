@@ -26,6 +26,10 @@ def put(store, key, started, reads):
                   'request_completed')
 
 
+def freshness(page):
+    page.get_by_test_id('connection-status').hover()
+    return page.get_by_test_id('ledger-freshness')
+
 def run():
     with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as directory:
         root=Path(directory)
@@ -67,7 +71,7 @@ def run():
                     'window.demoAnalyticsRevision='+json.dumps(revision)+';\nplugin.register({',1)
             page.set_content(text)
             page.get_by_role('tab',name='All providers',exact=True).click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             assert len(calls)==1 and calls[-1][:2]==('GET','/ledger')
             assert 'list_mode=page' in calls[-1][2]
             initial=page.evaluate('''()=>JSON.parse(ledgerMemory.values().next().value.payload)''')
@@ -96,12 +100,12 @@ def run():
             before=page.evaluate('''()=>JSON.parse(ledgerMemory.values().next().value.payload)''')
             fault_get=True
             page.evaluate('signalLedger()')
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Update failed')
+            expect(freshness(page)).to_contain_text('Update failed')
             assert page.evaluate('''()=>JSON.parse(ledgerMemory.values().next().value.payload)''')==before
             page.evaluate('signalLedger()')
             page.wait_for_function('''()=>!document.querySelector('[data-testid=ledger-freshness]')?.textContent.includes('Update failed')''')
             page.get_by_role('group',name='Breakdown grouping').get_by_role('button',name='Hour').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             assert calls[-1][:2]==('GET','/ledger') and 'group=time' in calls[-1][2]
             page.get_by_role('tab',name='Requests',exact=True).click()
             expect(page.get_by_test_id('request-list')).to_be_visible()

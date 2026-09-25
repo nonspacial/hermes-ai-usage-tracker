@@ -229,12 +229,12 @@ After the final pass, reopen Hermes normally. No enable command is needed for th
 
 1. Open the same provider/profile and let **24h** fully load.
 2. Switch to **7 days** and let it fully load.
-3. Return to **24h**. An eligible retained snapshot should display with **Cached snapshot / Updating** while refreshed data is fetched.
+3. Return to **24h**. Hover or focus the connection badge: an eligible retained snapshot should show **Updating… · cached** with a coloured elapsed age in the tooltip while fresh data is fetched. The badge's existing recorder explanation remains above it.
 4. Set a valid **Custom** range and let it load. Switch away, let the other range load, then return to the unchanged Custom range.
 5. Changing Custom's bounds selects different data; it must not display the previous range as if it matched.
 
 Perform this promptly: the current cache has a five-minute age limit, twelve-entry limit, 8 MiB total serialized-payload budget and 2 MiB per-entry limit. It is not unlimited retention until exit. Full quit clears it. A missing eligible snapshot still requires a fresh read; this installation does not promise every payload can be cached or every refresh will be instant.
 
-If a return still loads from scratch, report the range sequence, approximate wait and whether **Cached snapshot** ever appeared. Do not repeat installation or migration just because a performance check fails.
+If a return still loads from scratch, report the range sequence, approximate wait and whether **Updating… · cached** appeared in the connection badge tooltip. Do not repeat installation or migration just because a performance check fails.
 
 The original [offline migration runbook](OFFLINE_DELIVERY.md) is unchanged. **Do not run its migration sequence as part of this plugin-only retry.** Remaining infra migration work is separate.

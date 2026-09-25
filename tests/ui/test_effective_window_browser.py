@@ -19,6 +19,10 @@ from ledger_runtime.storage import Store
 from test_incremental_browser import put
 
 
+def freshness(page):
+    page.get_by_test_id('connection-status').hover()
+    return page.get_by_test_id('ledger-freshness')
+
 def run():
     with tempfile.TemporaryDirectory(dir=os.environ['TMPDIR']) as home:
         home=Path(home)
@@ -59,17 +63,17 @@ def run():
                  'window.demoAnalyticsRevision='+json.dumps(revision)+';\nplugin.register({',1)
             page.set_content(text)
             page.get_by_role('tab',name='All providers',exact=True).click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             group=page.get_by_role('group',name='Breakdown grouping')
             group.get_by_role('button',name='Hour').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             # The populated Hour row is an actual backend trend bucket, not a
             # guessed wall-clock grid cell. Activate its first-column link.
             dto=page.evaluate('''()=>JSON.parse([...ledgerMemory.values()].at(-1).payload)''')
             populated=next(i for i,row in enumerate(reversed(dto['trend']['buckets'])) if row['attempts'])
             bucket=list(reversed(dto['trend']['buckets']))[populated]
             page.locator('.au-breakdown tbody tr').nth(populated).locator('td').first.locator('button.au-drill').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             expect(page.get_by_test_id('recorded-summary')).to_be_visible()
             expect(page.get_by_test_id('usage-chart')).to_be_visible()
             expect(page.get_by_test_id('usage-totals')).to_be_visible()
@@ -84,12 +88,12 @@ def run():
             assert not any(c[0]=='POST' for c in calls)
             page.get_by_role('button',name='Remove bucket filter').click()
             expect(page.get_by_test_id('request-navigation')).to_have_count(0)
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             assert not any(c[0]=='POST' for c in calls if 'bucket_start' in c[2])
             # The displayed Custom start is rounded; the marker's actual start
             # must survive in the backend window, including with a bucket.
             page.get_by_role('combobox',name='Saved tests').select_option(marker['id'])
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             method,route,q,status=calls[-1]
             assert q['test_id']==[marker['id']] and 'end' not in q
             marker_dto=client.get('/ledger',params={k:v[0] for k,v in q.items()}).json()
@@ -106,7 +110,7 @@ def run():
             rows=page.locator('.au-breakdown tbody tr')
             assert rows.count()
             rows.first.locator('td').first.locator('button.au-drill').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             q=calls[-1][2]
             assert q['test_id']==[marker['id']] and 'bucket_start' in q
             marker_bucket=client.get('/ledger',params={k:v[0] for k,v in q.items()}).json()
@@ -133,27 +137,27 @@ def run():
             page.get_by_role('button',name='Remove saved test marker filter').click()
             page.get_by_role('button',name='Remove bucket filter').click()
             page.get_by_role('group',name='Time window').get_by_role('button',name='Past 24h').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             assert not any(c[0]=='POST' for c in calls if 'test_id' in c[2] or 'bucket_start' in c[2])
             # A malformed successful GET, whether its bound, nested DTO or
             # exact partition count, must not paint the selected view.
             for kind in ('window','nested','count'):
                 group.get_by_role('button',name='Hour').click()
-                expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+                expect(freshness(page)).to_contain_text('Updated')
                 fault=kind
                 page.locator('.au-breakdown tbody tr').first.locator('td').first.locator('button.au-drill').click()
                 page.wait_for_function("()=>document.querySelector('[data-testid=usage-stale]')?.textContent.includes('Invalid Overview')")
                 assert not page.get_by_test_id('usage-chart').count(),kind
                 assert calls[-1][0:2]==('GET','/ledger') and fault is None,kind
                 page.get_by_role('button',name='Remove bucket filter').click()
-                expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+                expect(freshness(page)).to_contain_text('Updated')
             for label in ('Project','Session','Subagents'):
                 group.get_by_role('button',name=label).click()
-                expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+                expect(freshness(page)).to_contain_text('Updated')
                 assert not page.get_by_test_id('usage-stale').count(),label
                 assert calls[-1][0:2]==('GET','/ledger'),(label,calls[-1])
             page.get_by_role('group',name='Time window').get_by_role('button',name='Past hour').click()
-            expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(page)).to_contain_text('Updated')
             assert calls[-1][0:2]==('GET','/ledger') and 'end' not in calls[-1][2]
             assert page.get_by_test_id('usage-chart').is_visible()
             assert not page.get_by_test_id('usage-stale').count()
@@ -180,7 +184,7 @@ def run():
               customEnd:'',filterTest:%s};\nplugin.register({''' % (marker['started'],json.dumps(marker['id']))
             persisted.set_content(text.replace('plugin.register({',injection,1))
             persisted.get_by_role('tab',name='All providers',exact=True).click()
-            expect(persisted.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+            expect(freshness(persisted)).to_contain_text('Updated')
             assert persisted.get_by_test_id('usage-chart').is_visible()
             assert persisted.get_by_test_id('recorded-summary').is_visible()
             assert persisted.get_by_test_id('usage-totals').is_visible()

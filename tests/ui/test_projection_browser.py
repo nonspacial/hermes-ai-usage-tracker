@@ -6,6 +6,10 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def freshness(page):
+    page.get_by_test_id('connection-status').hover()
+    return page.get_by_test_id('ledger-freshness')
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ['CHROMIUM_PATH'], headless=True,
@@ -57,16 +61,16 @@ def run():
         page.get_by_role('tab', name='Requests', exact=True).click()
         # A previously served view now restores only its exact labelled snapshot
         # while a genuine new read is held; the older Overview completion is inert.
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+        expect(freshness(page)).to_contain_text('cached')
+        expect(freshness(page)).to_contain_text('Updating')
         expect(page.get_by_test_id('request-list')).to_be_visible()
         expect(page.get_by_test_id('usage-totals')).to_be_visible()
         page.wait_for_function('heldViews.length>=5')
         page.evaluate('heldViews[3].deliver()')
         expect(page.get_by_test_id('request-list')).to_be_visible()
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(freshness(page)).to_contain_text('cached')
         page.evaluate('heldViews[4].deliver();window.holdProjection=false')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+        expect(freshness(page)).to_contain_text('Updated')
         request_query = page.evaluate("Object.fromEntries(new URL(projectionPaths.at(-1),'https://offline').searchParams)")
         assert request_query['view'] == 'requests' and 'group' not in request_query
         # Unlike a new commitment, a routine same-view refresh retains the

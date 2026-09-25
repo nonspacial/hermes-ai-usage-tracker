@@ -9,6 +9,10 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def freshness(page):
+    page.get_by_test_id('connection-status').hover()
+    return page.get_by_test_id('ledger-freshness')
+
 def completed_selection_regressions(browser):
     """A hint changing during a successful read must not erase its sibling snapshot."""
     page = browser.new_page(viewport={'width': 1700, 'height': 1050})
@@ -33,11 +37,11 @@ def completed_selection_regressions(browser):
     }''')
     period = page.get_by_role('group', name='Time window')
     page.get_by_role('tab', name='All providers', exact=True).click()
-    expect(page.get_by_test_id('ledger-freshness')).to_be_visible()
+    expect(freshness(page)).to_be_visible()
     period.get_by_role('button', name='Custom', exact=True).click()
     page.get_by_label('Window start').fill('2026-09-24T00:00')
     page.get_by_label('Window end').fill('2026-09-25T00:00')
-    expect(page.get_by_test_id('ledger-freshness')).to_be_visible()
+    expect(freshness(page)).to_be_visible()
     # Mutate the opaque hint while the first Custom GET is held, before the
     # post-read check. The completed response still belongs to these dates.
     page.evaluate('window.holdLedger=true;window.changeOnDelivery=true')
@@ -60,20 +64,20 @@ def completed_selection_regressions(browser):
     page.evaluate('''()=>{const i=held.findIndex(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
       return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-86400)<30});
       held.splice(i,1)[0].deliver()}''')
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
+    expect(freshness(page)).to_contain_text('Updated')
     page.wait_for_function('''()=>[...ledgerMemory.keys()].some(k=>JSON.parse(k).at(-1)===86400)''')
     period.get_by_role('button', name='Custom', exact=True).click()
     page.wait_for_function('path=>held.filter(r=>r.path===path).length>=2', arg=custom)
     expect(page.get_by_test_id('request-list')).to_be_visible()
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+    expect(freshness(page)).to_contain_text('cached')
+    expect(freshness(page)).to_contain_text('Updating')
     assert page.evaluate('key=>ledgerMemory.has(key)', custom_key)
     prior_received = page.evaluate('key=>ledgerMemory.get(key).received', custom_key)
     page.evaluate('''path=>{const i=held.findLastIndex(r=>r.path===path);
       if(i<0)throw Error('missing Custom replacement');held.splice(i,1)[0].deliver()}''', custom)
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Snapshot')
-    expect(page.get_by_test_id('ledger-freshness')).not_to_contain_text('Cached snapshot')
-    expect(page.get_by_test_id('ledger-freshness')).not_to_contain_text('Updating')
+    expect(freshness(page)).to_contain_text('Updated')
+    expect(freshness(page)).not_to_contain_text('cached')
+    expect(freshness(page)).not_to_contain_text('Updating')
     assert page.evaluate('([key,prior])=>ledgerMemory.get(key).received>=prior',
                          [custom_key, prior_received])
     # Another fixed Custom date is a cold selection, not the old date's body.
@@ -100,8 +104,8 @@ def completed_selection_regressions(browser):
     page.wait_for_function('''()=>held.some(r=>{const q=new URLSearchParams(r.path.split('?')[1]);
       return !q.has('end') && Math.abs(Date.now()/1000-Number(q.get('start'))-86400)<30})''')
     expect(page.get_by_test_id('request-list')).to_be_visible()
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
-    expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+    expect(freshness(page)).to_contain_text('cached')
+    expect(freshness(page)).to_contain_text('Updating')
     assert page.evaluate('key=>ledgerMemory.has(key)', custom_key)
     assert not errors and not outbound, (errors, outbound)
     page.close()
@@ -196,7 +200,7 @@ def run():
         page.evaluate('''()=>{
           window.ageTimers=new Set();const start=window.setInterval,stop=window.clearInterval;
           window.setInterval=function(fn,ms,...args){const id=start(fn,ms,...args);
-            if(ms===5000)ageTimers.add(id);return id};
+            if(ms===1000)ageTimers.add(id);return id};
           window.clearInterval=function(id){ageTimers.delete(id);return stop(id)};
         }''')
         page.get_by_role('tab', name='All providers', exact=True).click()
@@ -254,9 +258,9 @@ def run():
         page.evaluate('held.shift().deliver()')
         expect(page.get_by_test_id('request-list')).to_be_visible()
         cold_ms=round((time.perf_counter()-cold_start)*1000,1)
-        age_before=page.get_by_test_id('ledger-freshness').inner_text()
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text(re.compile(r'([5-9]|1[0-2])s since received'),timeout=13000)
-        assert age_before != page.get_by_test_id('ledger-freshness').inner_text()
+        age_before=freshness(page).inner_text()
+        expect(freshness(page)).to_contain_text(re.compile(r'([5-9]|1[0-2])s'),timeout=13000)
+        assert age_before != freshness(page).inner_text()
         assert page.evaluate('ageTimers.size') == 1
         hidden=page.evaluate('''()=>{
           Object.defineProperty(document,'visibilityState',{configurable:true,get:()=> 'hidden'});
@@ -279,23 +283,23 @@ def run():
         page.get_by_role('tab', name='Requests', exact=True).click()
         page.wait_for_function('held.length===1')
         expect(page.get_by_test_id('request-list')).to_be_visible()
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(freshness(page)).to_contain_text('cached')
         revisit_ms=round((time.perf_counter()-revisit_start)*1000,1)
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Updating')
+        expect(freshness(page)).to_contain_text('Updating')
         # The first Requests flight belongs to the disposed owner. A quick
         # Overview/Requests return must start a separate read, not adopt it.
         page.get_by_role('tab', name='Overview', exact=True).click()
         page.wait_for_function('held.length===2')
         page.get_by_role('tab', name='Requests', exact=True).click()
         page.wait_for_function('held.length===3')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(freshness(page)).to_contain_text('cached')
         page.evaluate('held[0].deliver()')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(freshness(page)).to_contain_text('cached')
         page.evaluate('window.failLedger=true;held[2].deliver()')
         expect(page.get_by_test_id('usage-stale')).to_contain_text('refresh failed')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Update failed')
+        expect(freshness(page)).to_contain_text('Update failed')
         expect(page.get_by_test_id('connection-status')).to_have_attribute('data-state', 'limited')
-        expect(page.get_by_test_id('connection-status')).to_have_attribute('title', re.compile('Usage refresh failed'))
+        expect(page.get_by_test_id('connection-status')).to_have_attribute('data-au-tooltip', re.compile('Usage refresh failed'))
         page.evaluate('window.failLedger=false;held[1].deliver();held.length=0')
         # Failed identity verification must not replay a cached body.
         page.get_by_role('tab', name='Overview', exact=True).click()
@@ -336,7 +340,7 @@ def run():
         page.evaluate("ReactDOM.render(h(()=>window.page(),{}),document.getElementById('root'))")
         page.get_by_role('tab', name='All providers', exact=True).click()
         page.wait_for_function('held.length===1')
-        expect(page.get_by_test_id('ledger-freshness')).to_contain_text('Cached snapshot')
+        expect(freshness(page)).to_contain_text('cached')
         page.evaluate('window.disposePlugin();held.shift().deliver()')
         page.wait_for_timeout(100)
         assert page.evaluate('ledgerMemory.size') == 0

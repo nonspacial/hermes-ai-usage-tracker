@@ -78,7 +78,9 @@ def run():
                     const target=node.tagName.toLowerCase()==='title'?node.parentElement:node;
                     const text=node.tagName.toLowerCase()==='title'?node.textContent:node.getAttribute('title');
                     target.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));
-                    if(popup.textContent!==text || popup.style.display==='none' || target.getAttribute('aria-describedby')!==popup.id)
+                    const expected=target.matches('[data-testid="connection-status"]')?
+                      text+target.getAttribute('data-au-freshness')+(target.getAttribute('data-au-freshness-age')||''):text;
+                    if(popup.textContent!==expected || popup.style.display==='none' || target.getAttribute('aria-describedby')!==popup.id)
                       failures.push(target.tagName+': '+text);
                     target.dispatchEvent(new MouseEvent('mouseout',{bubbles:true}));
                   }

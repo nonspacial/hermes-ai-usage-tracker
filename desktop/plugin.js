@@ -305,14 +305,14 @@ function QuotaBar({ window }) {
 const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
 // The popup shares Auto use's theme-aware surface and is fixed so reader
 // scrollports and chart SVGs cannot clip long explanations.
-const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}'
+const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}.au-tooltip-freshness{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary)}.au-tooltip-freshness-age[data-tone="healthy"]{color:var(--ui-text-success,#64bba8)}.au-tooltip-freshness-age[data-tone="caution"]{color:var(--ui-text-warning,#d2b776)}'
 function installTooltips(root){
  if(!root)return;
  const style=document.createElement('style');style.textContent=tooltipCss;document.head.appendChild(style);
  const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
  tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
  let active=null,svgTitle=null,original=null,previousDescription=null,previousLabel=null;
- const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary'];
+ const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning'];
  function syncTheme(){
   if(!active)return;
   const source=getComputedStyle(active);
@@ -350,6 +350,17 @@ function installTooltips(root){
   tip.style.left=Math.max(8,Math.min(box.left,innerWidth-width-8))+'px';
   tip.style.top=Math.max(8,Math.min(box.bottom+6+height<=innerHeight-8?box.bottom+6:box.top-height-6,innerHeight-height-8))+'px';
  }
+ function renderTip(){
+  tip.replaceChildren(document.createTextNode(original));
+  const freshness=active?.getAttribute('data-au-freshness');
+  if(freshness){
+   const row=document.createElement('span');row.className='au-tooltip-freshness';row.setAttribute('data-testid','ledger-freshness');
+   row.appendChild(document.createTextNode(freshness));
+   const age=active.getAttribute('data-au-freshness-age');
+   if(age){const value=document.createElement('span');value.className='au-tooltip-freshness-age';value.dataset.tone=active.getAttribute('data-au-freshness-tone')||'caution';value.textContent=age;row.appendChild(value)}
+   tip.appendChild(row);
+  }
+ }
  function show(target){
   const found=locate(target);if(!found){
    if(active?.contains(target))return;
@@ -367,7 +378,7 @@ function installTooltips(root){
   // while the styled explanation is present. Restore the title on departure.
   if(svgTitle){active.setAttribute('aria-label',previousLabel||original);svgTitle.textContent=''}
   else active.removeAttribute('title');
-  tip.textContent=original;tip.style.display='block';
+  renderTip();tip.style.display='block';
   position();
  }
  const enter=e=>show(e.target);
@@ -379,17 +390,20 @@ function installTooltips(root){
   for(const record of records){
    if(record.target===active&&record.attributeName==='title'){
     const current=active.getAttribute('title');
-    if(current){original=current;active.dataset.auTooltip=current;tip.textContent=current;active.removeAttribute('title');position()}
+    if(current){original=current;active.dataset.auTooltip=current;renderTip();active.removeAttribute('title');position()}
+   }
+   if(record.target===active&&record.attributeName?.startsWith('data-au-freshness')){
+    renderTip();position();
    }
    if(svgTitle&&(record.target===svgTitle||svgTitle.contains(record.target))&&svgTitle.textContent){
     original=svgTitle.textContent;active.dataset.auTooltip=original;
     if(previousLabel===null)active.setAttribute('aria-label',original);
-    tip.textContent=original;svgTitle.textContent='';position();
+    renderTip();svgTitle.textContent='';position();
    }
   }
   if(active)position();
  });
- changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class'],childList:true,characterData:true});
+ changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
  for(let node=root.parentElement;node;node=node.parentElement)changes.observe(node,{attributes:true,attributeFilter:['style','class']});
  window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
  return()=>{hide();root.removeEventListener('mouseover',enter);root.removeEventListener('mouseout',leave);
@@ -2095,26 +2109,6 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds}){
   const current=state.view===key&&state.epoch===owner.epoch?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
   return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
 }
-function LedgerFreshness({data,cached,received,fetching,error}){
- const [ageNow,setAgeNow]=useState(()=>Date.now());
- useEffect(()=>{
-  let timer=null;
-  const visibility=()=>{
-   if(timer!==null){clearInterval(timer);timer=null}
-   if(document.visibilityState==='visible'){
-    setAgeNow(Date.now());timer=setInterval(()=>setAgeNow(Date.now()),5000);
-   }
-  };
-  document.addEventListener('visibilitychange',visibility);
-  visibility();
-  return()=>{if(timer!==null)clearInterval(timer);document.removeEventListener('visibilitychange',visibility)};
- },[]);
- return h('span',{role:'status','data-testid':'ledger-freshness','aria-live':'off'},
-  ' · ',cached?'Cached snapshot':'Snapshot',
-  ' · generated '+new Date((data.generated_at||data.window?.end||0)*1000).toLocaleString(),
-  ' · '+Math.max(0,Math.floor((ageNow-(received||ageNow))/1000))+'s since received',
-  fetching?' · Updating…':error?' · Update failed':'');
-}
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
  return h('details',{className:'au-refresh-menu',onKeyDown:event=>{if(event.key==='Escape'){event.currentTarget.removeAttribute('open');event.currentTarget.querySelector('summary').focus()}}},
@@ -2197,11 +2191,29 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
  if(isAllProfiles(profile)){state='limited';label=pending?'Refreshing':readError||changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed; showing the last good response if available. Retrying automatically.':changeLimited?'Read-only · change checks unavailable; visible-page 60-second fallback.':'Read-only · change checks every 30 seconds; rolling windows expire on a visible-page minute. No aggregate events.'}
  return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting'};
 }
-function ConnectionBadge({connection,disabled}){
+function ConnectionBadge({connection,disabled,freshness}){
  const {state,label,detail,busy,reconnect,readOnly}=connection;
+ const [ageNow,setAgeNow]=useState(()=>Date.now());
+ useEffect(()=>{
+  if(!freshness?.received)return;
+  let timer=null;
+  const visibility=()=>{
+   if(timer!==null){clearInterval(timer);timer=null}
+   if(document.visibilityState==='visible'){
+    setAgeNow(Date.now());timer=setInterval(()=>setAgeNow(Date.now()),1000);
+   }
+  };
+  document.addEventListener('visibilitychange',visibility);visibility();
+  return()=>{if(timer!==null)clearInterval(timer);document.removeEventListener('visibilitychange',visibility)};
+ },[freshness?.received]);
  const action=readOnly?'Refresh read-only data.':'Click to reconnect and refresh. Running agents are not restarted.';
  const title=detail+' '+action;
- return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
+ // The age belongs to the committed selection only; never borrow a header or
+ // cached snapshot from a different tab, provider or profile for this badge.
+ const status=!freshness?'Usage idle':freshness.fetching?'Updating…':freshness.error?'Update failed':freshness.received?'Updated':'Checking…';
+ const source=freshness?.cached?' · cached':'';
+ const age=freshness?.received?Math.max(0,Math.floor((ageNow-freshness.received)/1000))+'s':null;
+ return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'data-au-freshness':status+source+(age?(source?' · ':' '):''),'data-au-freshness-age':age,'data-au-freshness-tone':state==='online'?'healthy':'caution','aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
 }
 
@@ -2518,7 +2530,7 @@ function UsagePageScope({selected}){
   setRequestFilters(next);if(tab!=='Overview')setTab('Requests');
  }
  const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
@@ -2551,9 +2563,7 @@ function UsagePageScope({selected}){
    h('div',{className:'au-segment au-mode-buttons',role:'group','aria-label':'Usage display'},...['Cost','Tokens'].map(v=>h('button',{key:v,'aria-pressed':displayMode===v,onClick:()=>{setDisplayMode(v);}},v))),
    h('select',{className:'au-mode-select','aria-label':'Usage display',value:displayMode,onChange:e=>{setDisplayMode(e.target.value);}},...['Cost','Tokens'].map(v=>h('option',{key:v,value:v},v))),
    h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
-   h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
-   h('span',{className:'au-muted au-window-label'},headerData?new Date(headerData.window.start*1000).toLocaleString()+' — '+new Date(headerData.window.end*1000).toLocaleString():'',
-    data?.window?h(LedgerFreshness,{data,cached:ledger.cached,received:ledger.received,fetching:ledger.fetching,error:ledger.error}):null)),
+   h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l)))),
   h('div',{className:'au-toolbar au-filters'},
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}):null,
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}):null,
