@@ -851,6 +851,100 @@ function QuotaBar({ window }) {
 // All reset controls live in the card header. The same component is used on
 // Subscriptions and the Codex provider page; query identity includes profile.
 const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
+// The popup shares Auto use's theme-aware surface and is fixed so reader
+// scrollports and chart SVGs cannot clip long explanations.
+const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}'
+function installTooltips(root){
+ if(!root)return;
+ const style=document.createElement('style');style.textContent=tooltipCss;document.head.appendChild(style);
+ const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
+ tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
+ let active=null,svgTitle=null,original=null,previousDescription=null,previousLabel=null;
+ const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary'];
+ function syncTheme(){
+  if(!active)return;
+  const source=getComputedStyle(active);
+  for(const token of themeTokens){
+   const value=source.getPropertyValue(token).trim();
+   if(value)tip.style.setProperty(token,value);else tip.style.removeProperty(token);
+  }
+ }
+ function hide(){
+  if(!active)return;
+  if(active.isConnected){
+   if(svgTitle){if(svgTitle.isConnected&&svgTitle.textContent==='')svgTitle.textContent=original}
+   else if(!active.hasAttribute('title'))active.setAttribute('title',original);
+   active.removeAttribute('data-au-tooltip');
+   if(previousDescription===null)active.removeAttribute('aria-describedby');
+   else active.setAttribute('aria-describedby',previousDescription);
+   if(svgTitle){if(previousLabel===null)active.removeAttribute('aria-label');else active.setAttribute('aria-label',previousLabel)}
+  }
+  active=null;svgTitle=null;tip.style.display='none';tip.textContent='';
+ }
+ function locate(target){
+  for(let node=target;node&&root.contains(node);node=node.parentElement){
+   if(node.nodeType!==1)continue;
+   const title=node.getAttribute('title');if(title)return {node,text:title,svg:null};
+   const svg=node.namespaceURI==='http://www.w3.org/2000/svg'&&node.querySelector(':scope > title');
+   if(svg?.textContent)return {node,text:svg.textContent,svg};
+  }
+  return null;
+ }
+ function position(){
+  if(!active)return;
+  if(!active.isConnected){hide();return}
+  syncTheme();
+  const box=active.getBoundingClientRect(),width=tip.getBoundingClientRect().width,height=tip.getBoundingClientRect().height;
+  tip.style.left=Math.max(8,Math.min(box.left,innerWidth-width-8))+'px';
+  tip.style.top=Math.max(8,Math.min(box.bottom+6+height<=innerHeight-8?box.bottom+6:box.top-height-6,innerHeight-height-8))+'px';
+ }
+ function show(target){
+  const found=locate(target);if(!found){
+   if(active?.contains(target))return;
+   if(active?.matches(':focus-within'))return;
+   const focused=locate(document.activeElement);
+   if(focused && root.contains(document.activeElement))return show(document.activeElement);
+   hide();return;
+  }
+  if(found.node===active)return;
+  hide();active=found.node;original=found.text;svgTitle=found.svg;
+  previousDescription=active.getAttribute('aria-describedby');previousLabel=active.getAttribute('aria-label');
+  active.setAttribute('data-au-tooltip',original);
+  active.setAttribute('aria-describedby',[previousDescription,tip.id].filter(Boolean).join(' '));
+  // Keep React's SVG title node in place and suppress the native bubble only
+  // while the styled explanation is present. Restore the title on departure.
+  if(svgTitle){active.setAttribute('aria-label',previousLabel||original);svgTitle.textContent=''}
+  else active.removeAttribute('title');
+  tip.textContent=original;tip.style.display='block';
+  position();
+ }
+ const enter=e=>show(e.target);
+ const leave=e=>{if(active&&!active.contains(e.relatedTarget)&&!active.matches(':focus-within'))show(document.activeElement)};
+ const blur=e=>{if(active&&!active.contains(e.relatedTarget)&&!active.matches(':hover'))show(e.relatedTarget||document.activeElement)};
+ root.addEventListener('mouseover',enter);root.addEventListener('mouseout',leave);
+ root.addEventListener('focusin',enter);root.addEventListener('focusout',blur);
+ const changes=new MutationObserver(records=>{
+  for(const record of records){
+   if(record.target===active&&record.attributeName==='title'){
+    const current=active.getAttribute('title');
+    if(current){original=current;active.dataset.auTooltip=current;tip.textContent=current;active.removeAttribute('title');position()}
+   }
+   if(svgTitle&&(record.target===svgTitle||svgTitle.contains(record.target))&&svgTitle.textContent){
+    original=svgTitle.textContent;active.dataset.auTooltip=original;
+    if(previousLabel===null)active.setAttribute('aria-label',original);
+    tip.textContent=original;svgTitle.textContent='';position();
+   }
+  }
+  if(active)position();
+ });
+ changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class'],childList:true,characterData:true});
+ for(let node=root.parentElement;node;node=node.parentElement)changes.observe(node,{attributes:true,attributeFilter:['style','class']});
+ window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
+ return()=>{hide();root.removeEventListener('mouseover',enter);root.removeEventListener('mouseout',leave);
+  root.removeEventListener('focusin',enter);root.removeEventListener('focusout',blur);
+  window.removeEventListener('scroll',position,true);window.removeEventListener('resize',position);
+  changes.disconnect();tip.remove();style.remove()};
+}
 function CodexResetControls({profile}) {
   const [confirm,setConfirm] = useState(false)
   const [busy,setBusy] = useState(false), [message,setMessage] = useState('')
@@ -917,7 +1011,7 @@ function CodexResetControls({profile}) {
       'Auto use ',jsx('input',{type:'checkbox','aria-label':'Auto use banked Codex reset',
         'aria-describedby':'au-reset-auto-warning',checked:!!state?.auto,
         disabled:!state?.binding||!!query.error||busy||blocked,onChange:auto})]}),
-      jsx('span',{id:'au-reset-auto-warning',className:'au-reset-tooltip',role:'tooltip',children:RESET_WARNING})]}),
+      jsx('span',{id:'au-reset-auto-warning',className:'au-tooltip au-reset-tooltip',role:'tooltip',children:RESET_WARNING})]}),
     jsx('button',{type:'button',className:'au-reset-badge',
       'data-tone':tone,'aria-label':'Resets: '+(count===null?'unknown':count),
       title:reason,ref:node=>{badgeRef.current=node},onClick:()=>{
@@ -1085,6 +1179,7 @@ function PageHeader({ profiles, profile, setProfile, chipProviders, chipProvider
       jsx('div', { className: 'au-header-profile au-header-picker', children: jsx(ProfilePicker, { profiles, value: profile, onSelect: setProfile }) }),
       jsxs('div', { className: 'au-refresh-split', children: [jsxs(Button, {
         variant: 'secondary',
+        className: 'au-refresh-button',
         title: isFetching ? 'Refreshing data' : 'Refresh data',
         'aria-label': isFetching ? 'Refreshing…' : 'Refresh',
         onClick: () => {
@@ -1183,6 +1278,9 @@ const ledgerCss = `
 @keyframes au-connection-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.au-ledger .au-connection[aria-busy="true"] .au-connection-dot{animation:none}}
 .au-refresh-split{display:inline-flex;align-items:center;gap:2px}
+.au-ledger .au-refresh-button:hover:not(:disabled){background:var(--au-selected-bg);border-color:var(--ui-accent);color:var(--ui-accent)}
+.au-ledger .au-refresh-button:focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
+.au-ledger .au-refresh-button:disabled{cursor:default}
 .au-refresh-menu{position:relative}
 .au-refresh-menu>summary{cursor:pointer;padding:7px 9px;list-style:none;border:1px solid var(--ui-stroke-secondary);border-radius:6px;background:var(--au-control-bg)}
 .au-refresh-menu>summary::-webkit-details-marker{display:none}
@@ -1297,8 +1395,10 @@ const ledgerCss = `
 .au-quota-card>div:first-child{flex-wrap:wrap}
 .au-reset-header{position:relative;display:flex;align-items:center;gap:8px;font-size:.6875rem;flex-shrink:0}
 .au-reset-auto{white-space:nowrap;cursor:pointer;color:var(--ui-text-secondary)}
-.au-reset-tooltip{position:absolute;top:calc(100% + 6px);right:0;z-index:21;width:min(310px,80vw);padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg);color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);visibility:hidden;pointer-events:none}
+${tooltipCss}
+.au-reset-tooltip{position:absolute;top:calc(100% + 6px);right:0;visibility:hidden}
 .au-reset-auto:is(:hover,:focus-within) .au-reset-tooltip{visibility:visible}
+@media (max-height:240px){.au-reset-tooltip{position:fixed;top:auto;bottom:8px;right:8px;max-height:calc(100vh - 16px);overflow-y:auto;pointer-events:auto}}
 .au-reset-auto input{vertical-align:middle;accent-color:var(--ui-accent)}
 .au-reset-auto:has(input:disabled){opacity:.6;cursor:not-allowed}
 .au-reset-badge{padding:3px 7px!important;border:1px solid var(--ui-stroke-secondary)!important;border-radius:12px!important;white-space:nowrap;font-weight:600}
@@ -1425,7 +1525,11 @@ const ledgerCss = `
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
 const count = n => n == null ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
-const short = n => n == null ? '—' : Number(n).toLocaleString(undefined,{notation:'compact',maximumFractionDigits:2})
+// Only token quantities use compact notation. Counts, rates and money retain
+// their separate formatters; exact detail values still use count().
+const short = n => n == null ? '—' : Math.abs(Number(n))<1000
+ ? Number(n).toLocaleString(undefined,{maximumFractionDigits:2})
+ : Number(n).toLocaleString(undefined,{notation:'compact',minimumFractionDigits:4,maximumFractionDigits:4})
 const money = n => n == null ? '—' : '$'+Number(n).toLocaleString(undefined,{minimumFractionDigits:4,maximumFractionDigits:6})
 const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
@@ -1690,6 +1794,7 @@ function UsageChart({data,mode,onSelectRange}){
   const previous=boundaryTimes.filter(t=>t<=start-minZoom).at(-1);
   return previous==null?null:[previous,start];
  };
+ const chartHelp='Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.');
  let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
  vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
@@ -1704,7 +1809,7 @@ function UsageChart({data,mode,onSelectRange}){
   const range=d.moved?zoomRange(d.start,d.end):null;
   if(range&&onSelectRange)onSelectRange(...range);
  };
- return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
+ return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart',tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
  h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
@@ -1716,7 +1821,7 @@ function UsageChart({data,mode,onSelectRange}){
  h('rect',{key:'hit',className:'au-plot-hit',x:L,y:T,width:w,height:hg,
   onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});if(!canZoom)return;const x=plotX(e),start=nearestBoundary(x);drag.current={id:e.pointerId,start,end:start,pointerTime:plotStart+(x-L)/w*(plotEnd-plotStart),clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
   onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
-  h('title',{},'Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.')))),
+  h('title',{},chartHelp))),
  active?h('div',{className:'au-chart-tip',role:'status'},new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · ',cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens',' · '+count(active.attempts)+' requests',active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
@@ -2643,8 +2748,9 @@ function UsagePie({items,label,onChoose,selected,unit='loads'}){
  return h('div',{className:'au-skill-chart'},
   total>0?h('svg',{viewBox:'0 0 200 200',className:'au-skill-pie',role:'img','aria-label':label},...items.map((item,i)=>{
    const start=angle;angle+=item.value/total*2*Math.PI;
-   const props={key:item.id,fill:skillColours[i%skillColours.length],stroke:'var(--au-surface-bg)',strokeWidth:2,...(onChoose?{onClick:()=>onChoose(item.id),style:{cursor:'pointer'}}:{})};
-   const title=h('title',{},item.label+': '+count(item.value)+' ('+(item.value/total*100).toFixed(1)+'%)');
+   const description=item.label+': '+count(item.value)+' ('+(item.value/total*100).toFixed(1)+'%)';
+   const props={key:item.id,fill:skillColours[i%skillColours.length],stroke:'var(--au-surface-bg)',strokeWidth:2,...(onChoose?{role:'button',tabindex:0,'aria-label':description,'aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),onKeyDown:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onChoose(item.id)}},style:{cursor:'pointer'}}:{})};
+   const title=h('title',{},description);
    return item.value===total?h('circle',{...props,cx:100,cy:100,r:96},title):h('path',{...props,d:`M100 100 L${100+96*Math.cos(start)} ${100+96*Math.sin(start)} A96 96 0 ${angle-start>Math.PI?1:0} 1 ${100+96*Math.cos(angle)} ${100+96*Math.sin(angle)} Z`},title);
   })):h('p',{className:'au-muted'},'No recorded values in this selection.'),
   h('div',{className:'au-skill-legend'},...items.map((item,i)=>h(onChoose?'button':'div',{
@@ -2793,6 +2899,7 @@ function UsagePageScope({selected}){
   setDrillTrail({context:navigationContext,entries:drillHistory.slice(0,-1)});
  }
  const isQuota=provider===QUOTA_HOME;
+ useEffect(()=>installTooltips(document.querySelector('.au-ledger')),[isQuota]);
  const ranges={'1h':3600,'24h':86400,'7d':604800,'30d':2592000,'90d':7776000,all:0}
  const initialStart=period==='custom'?(customStart?new Date(customStart).getTime()/1000:0):(ranges[period]?anchor-ranges[period]:0)
  const customValid=period!=='custom'||validCustomWindow(customStart,customEnd)||!!(filterTest&&validHalfHour(customStart)&&!customEnd);
@@ -2963,6 +3070,7 @@ function UsagePageScope({selected}){
 
 
 function UsageChip() {
+ useEffect(()=>installTooltips(document.querySelector('.au-usage-chip')),[])
   const hiddenIds = useValue($hidden)
   const selected = useValue($profile)
   const pinnedId = useValue($chipProvider)
@@ -2985,7 +3093,7 @@ function UsageChip() {
     type: 'button',
     title: `${detail}${pinned ? ' (pinned on the AI usage + page)' : ''}`,
     'aria-label': `AI usage +: ${detail}`,
-    className: 'px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) hover:text-(--ui-text-secondary)',
+    className: 'au-usage-chip px-1.5 text-[0.6875rem] text-(--ui-text-tertiary) hover:text-(--ui-text-secondary)',
     onClick: () => {
       haptic('tap')
       host.navigate(ROUTE)

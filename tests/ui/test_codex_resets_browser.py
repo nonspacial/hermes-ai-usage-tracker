@@ -16,6 +16,10 @@ def run():
             page.on('pageerror',lambda e:errors.append(str(e)))
             page.on('request',lambda r:network.append(r.url))
             page.set_content((ROOT/'preview.html').read_text(),wait_until='domcontentloaded')
+            def explanation(button):
+                # A focused/hovered button has its native bubble suppressed;
+                # the same text remains on the shared accessible tooltip.
+                return button.get_attribute('title') or button.get_attribute('data-au-tooltip') or ''
             home=page.get_by_test_id('quota-home')
             controls=home.get_by_test_id('codex-resets')
             expect(controls.get_by_role('button',name='Resets: 0')).to_be_visible()
@@ -34,20 +38,20 @@ def run():
             expect(controls.get_by_role('button',name='Resets: unknown')).to_have_attribute('data-tone','zero')
             controls.get_by_role('button',name='Resets: unknown').click()
             expect(controls.get_by_role('alertdialog')).to_have_count(0)
-            assert 'unknown' in (controls.get_by_role('button',name='Resets: unknown').get_attribute('title') or '').lower()
+            assert 'unknown' in explanation(controls.get_by_role('button',name='Resets: unknown')).lower()
             page.evaluate("""() => {window.demoResets.infra.count=0;queryClient.invalidateQueries({queryKey:['ai-usage-tracker','codex-resets','infra']})}""")
             expect(controls.get_by_role('button',name='Resets: 0')).to_be_visible()
             calls=page.evaluate('demoResetCalls.length')
             controls.get_by_role('button',name='Resets: 0').click()
             expect(controls.get_by_role('alertdialog')).to_have_count(0)
             assert page.evaluate('demoResetCalls.length') == calls
-            assert 'No banked resets' in (controls.get_by_role('button',name='Resets: 0').get_attribute('title') or '')
+            assert 'No banked resets' in explanation(controls.get_by_role('button',name='Resets: 0'))
             page.evaluate("""() => {Object.assign(window.demoResets.infra,{count:2,exhausted:false,redeemable:false});queryClient.invalidateQueries({queryKey:['ai-usage-tracker','codex-resets','infra']})}""")
             expect(controls.get_by_role('button',name='Resets: 2')).to_be_visible()
             assert controls.get_by_role('button',name='Resets: 2').get_attribute('data-tone')=='waiting'
             controls.get_by_role('button',name='Resets: 2').click()
             expect(controls.get_by_role('alertdialog')).to_have_count(0)
-            assert 'rounded 0%' in (controls.get_by_role('button',name='Resets: 2').get_attribute('title') or '')
+            assert 'rounded 0%' in explanation(controls.get_by_role('button',name='Resets: 2'))
             expect(controls.get_by_role('button',name='Refresh balance')).to_have_count(0)
             expect(controls.locator('.au-reset-popover')).to_have_count(0)
             page.evaluate("""() => {Object.assign(window.demoResets.infra,{episode:'fixture-episode',exhausted:true,redeemable:true});queryClient.invalidateQueries({queryKey:['ai-usage-tracker','codex-resets','infra']})}""")
@@ -100,7 +104,7 @@ def run():
             expect(top.get_by_role('button',name='Resets: 1')).to_be_visible()
             expect(top.get_by_role('checkbox',name='Auto use banked Codex reset')).to_be_checked()
             assert_header_order(top)
-            assert 'rounded 0%' in (top.get_by_role('button',name='Resets: 1').get_attribute('title') or '')
+            assert 'rounded 0%' in explanation(top.get_by_role('button',name='Resets: 1'))
             top.get_by_role('button',name='Resets: 1').click()
             expect(top.get_by_role('alertdialog')).to_have_count(0)
             page.get_by_role('tab',name='Nous Portal',exact=True).click()
