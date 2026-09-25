@@ -18,6 +18,7 @@ Exercise the packaged pane embedded in generated `preview.html` against syntheti
 - UI scripts are standalone and should not be collected into the backend pytest suite; browser success is not native host or provider-capture proof.
 - The cache browser script covers completed Custom reads despite changed hints, sibling 24h/7d retention, and distinct fixed dates as well as identity, disposal and failure. It also holds an active read across a manual Refresh, drives a failed dirty follow-up, and checks that the manual control releases while the last good body and failure remain; an otherwise healthy recorder must not be labelled Disconnected by a usage read error. For narrowly scoped fixes, run affected scripts only; avoid unrelated whole-app/backend suites.
 - `test_codex_resets_browser.py` uses only fake SDK reset responses to check text-checkbox-badge order in both cards, direct confirmation, no-action zero/unknown/ineligible counts, opt-in, cancellation/focus and guarded synthetic redemption. Never use a live account or enable auto use to verify this UI.
+- `test_unknown_provider_navigation.py` adds synthetic unknown and legitimate ledger-only requests. The preview fixture derives recorded provider IDs from its request rows, as the backend does; the browser check keeps unknown usage in All providers while excluding the attribution sentinel from tabs and the narrow selector.
 
 ## Work Guidance
 

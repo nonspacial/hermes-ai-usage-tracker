@@ -2309,7 +2309,9 @@ function UsagePageScope({selected}){
  }
  const detailContext={scope:selected,entries:detailEntries};
  const labels=Object.fromEntries(providers.map(p=>[p.id,p.label]));labels['openai-codex']='Codex';labels['nous']='Nous Portal'
- const names=[...new Set([...providers.map(p=>p.id),...(headerData?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME)
+ // The ledger catalogues attribution, including its `unknown` sentinel; that
+ // sentinel has no provider destination. Keep it in summaries and requests.
+ const names=[...new Set([...providers.map(p=>p.id),...(headerData?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME&&String(v).toLowerCase()!=='unknown')
  const label=provider?(labels[provider]||provider):'All providers'
  const [manualQuotaBusy,setManualQuotaBusy]=useState(false);
  const refresh=()=>{if(reloadControl.busy||ledger.manual||manualQuotaBusy)return;pendingRefresh=true;
