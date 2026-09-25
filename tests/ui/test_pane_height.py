@@ -50,11 +50,10 @@ def run():
         results = []
         for width, height in [(2200, 900), (390, 900), (2200, 420), (390, 420), (2200, 2100), (390, 2100), (320, 260)]:
             page.locator('#root').evaluate('(e,s)=>{e.style.width=s[0]+"px";e.style.height=s[1]+"px"}', [width, height])
-            for tab in ['Overview', 'Requests', 'Cache & costs', 'Compressions', 'Models & tasks', 'Frequency', 'Context footprint', 'Session timeline']:
-                skill = tab in ['Frequency', 'Context footprint', 'Session timeline']
-                nav.get_by_role('tab', name='Skills usage' if skill else tab, exact=True).click()
-                if skill:
-                    page.get_by_role('group', name='Skills view').get_by_role('button', name=tab, exact=True).click()
+            # Skills now has aggregate reports, not an 80-entry feed; its own
+            # browser check covers the chart and narrow geometry separately.
+            for tab in ['Overview', 'Requests', 'Cache & costs', 'Compressions', 'Models & tasks']:
+                nav.get_by_role('tab', name=tab, exact=True).click()
                 settle(page)
                 reader = page.locator('.au-reader')
                 entries = reader.locator('[data-scroll-key]')
@@ -90,9 +89,6 @@ def run():
                 if disclosure.count() and disclosure.is_visible():
                     disclosure.click()
                     opened=True
-                if tab=='Session timeline':
-                    target.locator('summary').click()
-                    opened=True
                 settle(page)
                 target.evaluate('e=>{const r=e.closest(".au-reader");r.scrollTop+=e.getBoundingClientRect().top-r.getBoundingClientRect().top-45;window.held=e}')
                 settle(page)
@@ -118,8 +114,8 @@ def run():
                 results.append((width, height, tab, geometry['cap']))
             page.screenshot(path=str(ROOT / 'tests/ui/artifacts' / f'pane-{width}-{height}.png'))
         assert not errors, errors
-        assert len(results) == 56
-        print('PASS 56 pane/view combinations: actual pane heights 260/420/900/2100, widths 320/390/2200; upper caps, lower bounds, keyboard/end reachability, prepend anchor and stable root height')
+        assert len(results) == 35
+        print('PASS 35 event-pane/view combinations: actual pane heights 260/420/900/2100, widths 320/390/2200; upper caps, lower bounds, keyboard/end reachability, prepend anchor and stable root height')
         print(results)
         browser.close()
 

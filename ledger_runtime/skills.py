@@ -25,9 +25,10 @@ CREATE TABLE IF NOT EXISTS skill_events (
 CREATE INDEX IF NOT EXISTS skill_events_time ON skill_events(ts,id);
 CREATE INDEX IF NOT EXISTS skill_events_session ON skill_events(session_id,ts);
 '''
-KINDS = {'skill_load', 'context_snapshot', 'compression_before', 'compression_after', 'turn_end'}
+KINDS = {'skill_load', 'catalogue_exposure', 'context_snapshot', 'compression_before', 'compression_after', 'turn_end'}
 IDENTIFIER = re.compile(r'[A-Za-z0-9_.:/@+\-]{1,240}\Z')
 SKILL_INDEX = re.compile(r'<available_skills>.*?</available_skills>', re.S)
+CATALOGUE_ENTRY = re.compile(r'^\s*-\s+([A-Za-z0-9_.:/@+\-]{1,240}):\s+(.+?)\s*$', re.M)
 LABELS = {'system_prompt': 'System prompt (undivided)', 'skills_index': 'Skill index',
           'skills': 'Retained skill results', 'conversation': 'Conversation and other tool results'}
 SNAPSHOT_LIMIT = 500
@@ -235,6 +236,35 @@ def pre(store, request, kw):
     snapshot(store, metadata(store, kw, request), request['id'] + ':context', 'context_snapshot',
              kw.get('request_messages'), kw.get('system_prompt'),
              context_used=kw.get('approx_input_tokens'), source='native_preflight_estimate_categories_chars_v1')
+    # Only the supported preflight hook's actual system material can establish
+    # inclusion. An absent/malformed index is unknown, never an empty catalogue.
+    system = kw.get('system_prompt')
+    messages = kw.get('request_messages')
+    parts: list[str] = [system] if isinstance(system, str) else []
+    if isinstance(messages, list):
+        for message in messages:
+            if isinstance(message, dict) and message.get('role') in ('system', 'developer'):
+                content = message.get('content')
+                if isinstance(content, str):
+                    parts.append(content)
+    seen = set()
+    descriptions = []
+    meta = metadata(store, kw, request)
+    if meta is None:
+        return
+    for part in parts:
+        for index in SKILL_INDEX.findall(part):
+            for name, description in CATALOGUE_ENTRY.findall(index):
+                name = skill_name(name)
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                descriptions.append({'name': name, 'estimated_tokens': rough(description)})
+    if descriptions:
+        append(store, {**meta, 'id': request['id'] + ':catalogue',
+            'ts': request['started'], 'kind': 'catalogue_exposure', 'descriptions': descriptions,
+            'source': 'pre_api_request_system_index_chars_v1',
+            'attribution': 'included_in_preflight_not_attention'})
 
 
 @r.safe
@@ -281,7 +311,7 @@ def compression_result(item, agent, result):
 
 def read(root, *, start: float=0, end=None, provider='', session='', session_scope='exact', agent='', project='',
          subagent='', model='', model_provider='', bucket_start=None, bucket_end=None,
-         skill='', offset=0, limit=200, test_id='', _detail_limit=None):
+         skill='', offset=0, limit=200, test_id='', _detail_limit=None, aggregate_only=False):
     """A coherent, read-only report, with full-period (not page) aggregates."""
     end = time.time() if end is None else end
     if number(start) is None or number(end) is None or end < start:
@@ -294,8 +324,9 @@ def read(root, *, start: float=0, end=None, provider='', session='', session_sco
            'coverage': {'status': 'not_recorded', 'since': None,
                         'note': 'No skills observations recorded. Historical activity is not reconstructed.'},
            'summary': {'loads': 0, 'references': 0, 'failures': 0, 'sessions': 0},
-           'skills': [], 'model_options': [], 'events': [], 'event_count': 0, 'next_offset': None,
-           'snapshots': [], 'snapshot_count': 0, 'snapshots_truncated': False}
+           'skills': [], 'model_options': [], 'events': [], 'event_count': None if aggregate_only else 0, 'next_offset': None,
+           'snapshots': [], 'snapshot_count': None if aggregate_only else 0, 'snapshots_truncated': False,
+           'catalogue': [], 'catalogue_coverage': {'status': 'unavailable', 'since': None}}
     path = Path(root) / 'usage-ledger' / 'events.sqlite3'
     if not path.is_file():
         if test_id:
@@ -357,20 +388,33 @@ def read(root, *, start: float=0, end=None, provider='', session='', session_sco
           SUM(CASE WHEN json_extract(data,'$.repeat')=1 AND json_extract(data,'$.is_reference')=0 THEN 1 ELSE 0 END),
           CASE WHEN SUM(CASE WHEN json_extract(data,'$.success')=1 AND json_extract(data,'$.is_reference')=0
                              AND json_extract(data,'$.estimated_tokens') IS NULL THEN 1 ELSE 0 END)>0 THEN NULL
-          ELSE SUM(CASE WHEN json_extract(data,'$.success')=1 AND json_extract(data,'$.is_reference')=0 THEN json_extract(data,'$.estimated_tokens') END) END
+          ELSE SUM(CASE WHEN json_extract(data,'$.success')=1 AND json_extract(data,'$.is_reference')=0 THEN json_extract(data,'$.estimated_tokens') END) END,
+          SUM(CASE WHEN json_extract(data,'$.success')=1 AND json_extract(data,'$.is_reference')=0
+                   AND json_extract(data,'$.estimated_tokens') IS NULL THEN 1 ELSE 0 END)
           FROM skill_events WHERE """
         groups = c.execute(group_sql + where + " AND kind='skill_load' GROUP BY skill ORDER BY 2 DESC,skill", params)
-        keys = ('name', 'loads', 'references', 'failures', 'sessions', 'repeat_loads', 'estimated_tokens')
+        keys = ('name', 'loads', 'references', 'failures', 'sessions', 'repeat_loads', 'estimated_tokens', 'unknown_sizes')
         out['skills'] = [dict(zip(keys, row)) for row in groups]
+        first = c.execute("SELECT MIN(ts) FROM skill_events WHERE kind='catalogue_exposure'").fetchone()[0]
+        if first is not None:
+            out['catalogue_coverage'] = {'status': 'partial' if end > first else 'unavailable', 'since': first}
+        out['catalogue'] = [dict(zip(('name', 'exposures', 'estimated_tokens'), row)) for row in c.execute(
+            "SELECT json_extract(j.value,'$.name'),COUNT(*),SUM(json_extract(j.value,'$.estimated_tokens')) "
+            "FROM skill_events, json_each(skill_events.data,'$.descriptions') j WHERE "
+            + where + " AND kind='catalogue_exposure' GROUP BY 1 ORDER BY 2 DESC,1", params)]
         for field in ('loads', 'references', 'failures'):
             out['summary'][field] = sum(g[field] for g in out['skills'])
         out['summary']['sessions'] = c.execute('SELECT COUNT(DISTINCT session_id) FROM skill_events WHERE ' + where + " AND kind='skill_load'", params).fetchone()[0]
+        if aggregate_only:
+            out['event_count'] = out['snapshot_count'] = None
+            return out
         detail_where, detail_params = where, list(params)
         if skill:
             # Context is session-level, not apportioned to individual skill loads.
             # Show direct retained matches only; unknown attribution is never invented.
             detail_where += " AND (skill=? OR EXISTS (SELECT 1 FROM json_each(skill_events.data,'$.retained_skills') WHERE value=?))"
             detail_params.extend([skill, skill])
+        detail_where += " AND kind!='catalogue_exposure'"
         out['event_count'] = c.execute('SELECT COUNT(*) FROM skill_events WHERE ' + detail_where, detail_params).fetchone()[0]
         order = ' ORDER BY ts DESC,id DESC'
         out['events'] = [json.loads(row[0]) for row in c.execute('SELECT data FROM skill_events WHERE ' + detail_where + order + ' LIMIT ? OFFSET ?', detail_params + [limit if _detail_limit is None else _detail_limit, offset])]

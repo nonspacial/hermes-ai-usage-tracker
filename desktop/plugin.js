@@ -1409,7 +1409,7 @@ const VIEW_KEY='usage-view-v1:';
 const viewScope=selected=>isAllProfiles(selected)?'aggregate:all':selected?'profile:'+selected:'';
 const PERIODS=['1h','24h','7d','30d','90d','all','custom'];
 const GROUPS=['model','time','project','session','subagent'];
-const SKILL_VIEWS=['Frequency','Context footprint','Session timeline'];
+const SKILL_VIEWS=['Frequency','Context footprint','Catalogue overhead'];
 const HALF_HOUR=1800;
 const validHalfHour=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:(00|30)$/.test(value)&&
  Number.isFinite(Date.parse(value))&&Date.parse(value)/1000%HALF_HOUR===0;
@@ -2043,7 +2043,6 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
    update(mode==='native-events'?'connected':'limited',mode==='native-events'?'Live update subscription acknowledged.':'Server is using display-refresh fallback.');deadline(45000);
    if(frame.type==='changed'||frame.type==='connected'){
     control.onHint?.();
-    queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
    }
    if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]},{cancelRefetch:false});
   })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed; REST polling remains active.')}
@@ -2091,7 +2090,7 @@ function ConnectionBadge({connection,disabled}){
 
 // Palette stays within the host theme; labels and counts never rely on colour.
 const skillColours=['var(--ui-accent,#a799ef)','var(--ui-text-success,#64bba8)','var(--ui-text-warning,#d2b776)','var(--ui-text-error,#d58c96)','var(--ui-text-secondary,#b8b6cf)'];
-function UsagePie({items,label,onChoose,selected}){
+function UsagePie({items,label,onChoose,selected,unit='loads'}){
  const total=items.reduce((n,v)=>n+v.value,0);let angle=-Math.PI/2;
  return h('div',{className:'au-skill-chart'},
   total>0?h('svg',{viewBox:'0 0 200 200',className:'au-skill-pie',role:'img','aria-label':label},...items.map((item,i)=>{
@@ -2101,72 +2100,64 @@ function UsagePie({items,label,onChoose,selected}){
    return item.value===total?h('circle',{...props,cx:100,cy:100,r:96},title):h('path',{...props,d:`M100 100 L${100+96*Math.cos(start)} ${100+96*Math.sin(start)} A96 96 0 ${angle-start>Math.PI?1:0} 1 ${100+96*Math.cos(angle)} ${100+96*Math.sin(angle)} Z`},title);
   })):h('p',{className:'au-muted'},'No recorded values in this selection.'),
   h('div',{className:'au-skill-legend'},...items.map((item,i)=>h(onChoose?'button':'div',{
-   key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' loads · inspect'}:{})
-  },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
+   key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' '+unit+' · inspect'}:{})
+  },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' '+unit+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
 }
-function SkillsUsageView({params,scope,onSession,profile,windowSeconds,view,setView,model,setModel,skill,setSkill}){
- const [offset,setOffset]=useState(0),[snapshotId,setSnapshotId]=useState('');
- const [scopeOwner]=useState(()=>({scope}));
- useEffect(()=>{if(scopeOwner.scope!==scope){scopeOwner.scope=scope;setModel('');setSkill('');setOffset(0);setSnapshotId('')}},[scope]);
- const p=new URLSearchParams(params);p.set('model',p.get('model')||model);p.set('skill',skill);p.set('offset',String(offset));p.set('limit','50');
- const path='/ledger/skills?'+p,key=path;
- const query=useQuery({...readOptions(profile),queryKey:[ID,'skills',scope,key],queryFn:async()=>({...await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,path),_skillsScope:key})});
- const [retained]=useState(()=>({scope:null,data:null}));
- const stableScope=JSON.stringify([scope,model,skill,offset]);
- const fresh=query.data?._skillsScope===key?query.data:null;
- if(fresh){retained.scope=stableScope;retained.data=fresh}
- // Rolling time bounds change the query key, not the user's selection. Keep
- // its keyed rows mounted while that refresh is pending; never bridge filters.
- const data=isAllProfiles(profile)&&query.error?null:fresh||(retained.scope===stableScope?retained.data:null);
- const chooseSkill=name=>{setSkill(name===skill?'':name);setOffset(0)};
- const kinds={skill_load:'Skill load',context_snapshot:'Before request',compression_before:'Before compression',compression_after:'After compression',turn_end:'Turn completed'};
- const eventLabel=e=>e.kind==='skill_load'?(e.success===false?'Failed load':e.is_reference?'Reference read':e.repeat?'Repeat skill load':'Skill load'):(kinds[e.kind]||e.kind);
- const snapshots=data?.snapshots||[];
- const snapshot=snapshotId?snapshots.find(s=>s.id===snapshotId):(snapshots.find(s=>s.context_used!=null)||snapshots[0]);
- const categories=(snapshot?.categories||[]).filter(c=>Number.isFinite(c.tokens)&&c.tokens>0);
- const inspected=(data?.skills||[]).find(s=>s.name===skill);
- const sessionLink=e=>e.session_id?h('button',{className:'au-drill',onClick:()=>onSession(e.session_id),title:'Filter all analytics to this session'},readable(e,'session_id')):'Unattributed';
- const eventRows=(data?.events||[]).map(e=>[
-  when(e.ts),eventLabel(e),readable(e,'skill'),e.file_path||'Main file / not applicable',e.provider||'Unknown',e.model||'Unknown',
-  e.project_label||originalId(e,'project_id')||'Unattributed',sessionLink(e),e.agent_kind||'Unattributed',
-  e.estimated_tokens==null?'Not recorded':'~'+count(e.estimated_tokens),e.context_used==null?'—':'~'+count(e.context_used),e.source||'Not recorded',originalId(e,'compression_id')||'—',
-  e.kind==='skill_load'?'—':h('button',{onClick:()=>{setView('Context footprint');setSnapshotId(e.id)}},'Inspect snapshot')
- ]);
- const eventHeaders=['Recorded at','Event','Skill','File','Provider','Model','Project','Session','Agent','Returned text · estimated tokens','Context footprint','Measurement source','Compression ID','Snapshot'];
- const eventList=(accordions=false)=>h('div',{'data-testid':'skill-events',key:stableScope},
-  accordions?h('div',{className:'au-timeline-scroll',tabIndex:0,'aria-label':'Session timeline entries'},...(data?.events||[]).map((e,i)=>h('details',{key:e.id,'data-event-id':e.id,'data-scroll-key':'event:'+e.id,className:'au-timeline-entry'},
-   h('summary',{},h('strong',{className:'au-timeline-session'},e.session_id?readable(e,'session_id'):'Unattributed session'+provenance(e)),
-    h('span',{},h('span',{className:'au-muted'},'Context footprint'),h('br'),e.context_used==null?'Not recorded':'~'+count(e.context_used)+' tokens'),
-    h('span',{},h('span',{className:'au-muted'},'Recorded'),h('br'),when(e.ts))),
-   h('dl',{},...eventRows[i].map((value,j)=>h('div',{key:j},h('dt',{},eventHeaders[j]),h('dd',{},value))))))):
-  table(eventHeaders,eventRows,null,(data?.events||[]).map(e=>e.id)),
-  !(data?.events||[]).length?h('p',{className:'au-muted'},'No recorded events match this selection.'):null,
-  h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},count(data?.event_count)+' matching events'),
-   h('button',{disabled:offset===0,onClick:()=>setOffset(Math.max(0,offset-50))},'Previous events'),
-   h('button',{disabled:data?.next_offset==null,onClick:()=>setOffset(data.next_offset)},'Next events')));
+let skillsReadOwnerId=0;
+function SkillsUsageView({params,scope,view,setView,model,setModel,skill,setSkill,refreshKey,windowSeconds}){
+ const connection=useValue(host.state.connectionId||$missingConnection);
+ const [scopeOwner]=useState(()=>({scope,readId:++skillsReadOwnerId}));
+ useEffect(()=>{if(scopeOwner.scope!==scope){scopeOwner.scope=scope;setModel('');setSkill('')}},[scope]);
+ const p=new URLSearchParams(params);p.delete('view');p.delete('group');p.delete('offset');
+ p.set('model',p.get('model')||model);p.set('aggregate_only','true');
+ // This report is deliberately not connected to the continuously updated request
+ // feed. It changes only with a committed scope/filter or the manual Refresh.
+ // A remounted report must not join its predecessor's unresolved shared read
+ // or query cache. Filters and Refresh still identify each committed read.
+ const path='/ledger/skills?'+p,semantic=JSON.stringify([connection,scope,path]),identity=JSON.stringify([semantic,refreshKey,scopeOwner.readId]);
+ const query=useQuery({queryKey:[ID,'skills-report',identity],queryFn:async()=>({...await sharedLedgerRead(rollingPath(path,windowSeconds),undefined,identity),_skillsScope:identity}),
+  retry:false,staleTime:Infinity,refetchOnMount:'always',refetchOnWindowFocus:false,refetchOnReconnect:false});
+ const [retained]=useState(()=>({scope:'',data:null}));
+ const fresh=query.data?._skillsScope===identity?query.data:null;
+ if(fresh){retained.scope=semantic;retained.data=fresh}
+ const data=fresh||(retained.scope===semantic?retained.data:null);
+ const chooseSkill=name=>setSkill(name===skill?'':name);
+ const rows=data?.skills||[],catalogue=data?.catalogue||[];
+ const selected=rows.find(s=>s.name===skill);
+ const sized=rows.filter(s=>s.loads>0);
+ const complete=sized.every(s=>s.estimated_tokens!=null);
+ const coverage=data?.coverage?.status;
+ const partialProfiles=data?.profile_scope==='all'&&coverage==='partial';
+ const total=complete&&coverage!=='not_recorded'&&coverage!=='unavailable'&&data?.summary!=null?sized.reduce((n,s)=>n+s.estimated_tokens,0):null;
+ const profileTotal=value=>coverage==='unavailable'||coverage==='not_recorded'||value==null?'—':count(value)+(partialProfiles?' · partial':'');
+ const totalLoads=sized.reduce((n,s)=>n+s.loads,0);
+ const known=sized.filter(s=>s.estimated_tokens!=null);
+ const catalogueAvailable=data?.catalogue_coverage?.status==='partial'&&catalogue.length>0;
+ const catalogueRows=[...catalogue.map(c=>({...c,loads:rows.find(s=>s.name===c.name)?.loads||0})),
+  ...rows.filter(s=>!catalogue.some(c=>c.name===s.name)).map(s=>({name:s.name,original_ids:s.original_ids,profile:s.profile,exposures:null,estimated_tokens:null,loads:s.loads}))];
  return h('section',{'data-testid':'skills-usage','aria-label':'Skills usage'},
   h(Coverage,{data}),
-  h('div',{className:'au-toolbar'},h('div',{className:'au-segment',role:'group','aria-label':'Skills view'},...['Frequency','Context footprint','Session timeline'].map(v=>h('button',{key:v,'aria-pressed':view===v,onClick:()=>{setView(v);setOffset(0)}},v))),
-   h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:p.get('model')||'',disabled:!!new URLSearchParams(params).get('model'),onChange:e=>{setModel(e.target.value);setOffset(0);setSnapshotId('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[]),...(p.get('model')?[p.get('model')]:[])])].map(m=>h('option',{key:m,value:m},m))))),
-
-  query.error?h('div',{className:'au-notice',role:'alert'},'Skills history unavailable. Newly installed recorder/API code requires a backend and producer restart. ',h('button',{onClick:()=>query.refetch()},'Retry skills history')):null,
-  !data?h('p',{className:'au-muted',role:'status'},query.error?'No history shown for this selection.':'Loading skills history…'):h('div',{},
-   view==='Context footprint'?h('div',{className:'au-toolbar au-snapshot-picker'},h('label',{},'Snapshot ',h('select',{'aria-label':'Context snapshot',value:snapshotId,onChange:e=>setSnapshotId(e.target.value)},h('option',{value:''},'Latest measured snapshot'),...snapshots.map(s=>h('option',{key:s.id,value:s.id},when(s.ts)+' · '+eventLabel(s)+' · '+(s.session_id?readable(s,'session_id'):'Unattributed'+provenance(s))))))):null,
-   h('div',{className:'au-metrics'},metric('Recorded main-skill loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.loads)),metric('Reference reads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.references)),metric('Failed loads',data.coverage?.status==='not_recorded'?'—':count(data.summary?.failures))),
-   skill?h('div',{className:'au-toolbar'},h('strong',{},'Inspecting '+(inspected?readable(inspected,'name'):'selected skill')),h('button',{onClick:()=>{setSkill('');setOffset(0)}},'Clear skill selection')):null,
-   view==='Frequency'?h('div',{},
-    h('div',{className:'au-box','data-testid':'skill-frequency'},h('h3',{},'Most frequently loaded skills'),
-     h(UsagePie,{label:'Skill load frequency',items:(data.skills||[]).filter(s=>s.loads>0).map(s=>({id:s.name,label:readable(s,'name'),value:s.loads})),selected:skill,onChoose:chooseSkill})),
-    (data.skills||[]).some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...(data.skills||[]).filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},readable(s,'name')))):null,
-    skill?h('div',{className:'au-box','data-testid':'skill-drilldown'},h('h3',{},inspected?readable(inspected,'name'):'Selected skill'),h('p',{className:'au-muted'},count(inspected?.loads)+' successful loads · '+count(inspected?.sessions)+' distinct sessions · '+count(inspected?.repeat_loads)+' repeat loads · '+(inspected?.estimated_tokens==null?'Text size not recorded':'~'+count(inspected.estimated_tokens)+' returned tokens (estimate, not billing)')),eventList()):null):null,
-   view==='Context footprint'?h('div',{'data-testid':'skill-context'},
-
-    data.snapshots_truncated?h('p',{className:'au-muted'},'Showing the newest '+count(snapshots.length)+' of '+count(data.snapshot_count)+' snapshots. Narrow the time window or session to inspect older snapshots.'):null,
-    snapshot?h('div',{className:'au-box'},h('h3',{},eventLabel(snapshot)+' · '+when(snapshot.ts)),h('p',{},sessionLink(snapshot),' · '+(snapshot.model||'Unknown model')),h('p',{},'Context: '+(snapshot.context_used==null?'Not recorded':'~'+count(snapshot.context_used))+(snapshot.context_max?' / '+count(snapshot.context_max):'')+' tokens'),
-     snapshot.compression_id?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Compression '+originalId(snapshot,'compression_id')),...snapshots.filter(s=>s.compression_id===snapshot.compression_id&&s.id!==snapshot.id).map(s=>h('button',{key:s.id,onClick:()=>setSnapshotId(s.id)},eventLabel(s)+' · '+(s.context_used==null?'Not recorded':count(s.context_used)+' tokens')))):null,
-     h(UsagePie,{label:'Estimated context composition',items:categories.map(c=>({id:c.id,label:c.label,value:c.tokens}))})):
-     h('p',{className:'au-muted'},snapshotId?'This snapshot is outside the returned window. Choose another snapshot.':'No context snapshots recorded for this selection.')):null,
-   view==='Session timeline'?h('div',{'data-testid':'skill-timeline'},eventList(true)):null
+  h('div',{className:'au-toolbar'},h('div',{className:'au-segment',role:'group','aria-label':'Skills view'},...SKILL_VIEWS.map(v=>h('button',{key:v,'aria-pressed':view===v,onClick:()=>setView(v)},v))),
+   h('label',{},'Model ',h('select',{'aria-label':'Skills model',value:p.get('model')||'',disabled:!!new URLSearchParams(params).get('model'),onChange:e=>{setModel(e.target.value);setSkill('')}},h('option',{value:''},'All models'),...[...new Set([...(data?.model_options||[]),...(model?[model]:[]),...(p.get('model')?[p.get('model')]:[])])].map(m=>h('option',{key:m,value:m},m)))),
+   data?h('span',{className:'au-muted',role:'status'},'Report generated '+when(data.generated_at)+(query.isFetching?' · Updating…':'')):null),
+  query.error?h('div',{className:'au-notice',role:'alert'},'Skills report unavailable. ',h('button',{onClick:()=>query.refetch()},'Retry skills report')):null,
+  !data?h('p',{className:'au-muted',role:'status'},'Loading skills report…'):h('div',{},
+   h('div',{className:'au-metrics'},metric('Recorded main-skill loads',profileTotal(data.summary?.loads)),metric('Reference reads',profileTotal(data.summary?.references)),metric('Failed loads',profileTotal(data.summary?.failures))),
+   skill&&view!=='Catalogue overhead'?h('div',{className:'au-toolbar'},h('strong',{},'Inspecting '+(selected?readable(selected,'name'):'selected skill')),h('button',{onClick:()=>setSkill('')},'Clear skill selection')):null,
+   view==='Frequency'?h('div',{'data-testid':'skill-frequency',className:'au-box'},h('h3',{},'Most frequently loaded skills'),
+    h(UsagePie,{label:'Skill load frequency',items:sized.map(s=>({id:s.name,label:readable(s,'name'),value:s.loads})),selected:skill,onChoose:chooseSkill}),
+    rows.some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...rows.filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},readable(s,'name')))):null,
+    skill&&selected?h('p',{className:'au-muted'},count(selected.loads)+' loads · '+count(selected.repeat_loads)+' repeat · '+count(selected.references)+' references · '+count(selected.failures)+' failures'):null):null,
+   view==='Context footprint'?h('div',{'data-testid':'skill-context',className:'au-box'},h('h3',{},'Returned skill content · period estimate'),
+    h('div',{className:'au-metrics'},metric('Estimated total',total==null?coverage==='unavailable'?'Unavailable':'Not recorded':'~'+count(total)+' tokens'+(partialProfiles?' · partial':'')),metric('Average per load',total==null||!totalLoads?'—':'~'+count(Math.round(total/totalLoads))+' tokens'+(partialProfiles?' · partial':'')),metric('Known-size loads',profileTotal(known.reduce((n,s)=>n+s.loads,0))+' / '+profileTotal(totalLoads))),
+    !complete?h('p',{className:'au-muted'},'Some returned sizes were not recorded; a complete total and share are unavailable.'):null,
+    complete?h(UsagePie,{label:'Estimated returned skill content by skill',unit:'estimated tokens',items:known.filter(s=>s.estimated_tokens>0).map(s=>({id:s.name,label:readable(s,'name'),value:s.estimated_tokens})),selected:skill,onChoose:chooseSkill}):
+      table(['Skill','Known returned estimate','Main loads','Size missing'],rows.map(s=>[readable(s,'name'),s.estimated_tokens==null?'Not recorded':'~'+count(s.estimated_tokens),count(s.loads),count(s.unknown_sizes)]),null,rows.map(s=>s.name)),
+    skill&&selected?h('p',{className:'au-muted'},selected.estimated_tokens==null?'Returned size not recorded':'~'+count(selected.estimated_tokens)+' tokens · '+(selected.loads?'~'+count(Math.round(selected.estimated_tokens/selected.loads))+' per load · ':'')+(total?'~'+(selected.estimated_tokens/total*100).toFixed(1)+'% of estimated total':'Share unavailable')):null):null,
+   view==='Catalogue overhead'?h('div',{'data-testid':'skill-catalogue',className:'au-box'},h('h3',{},'Catalogue descriptions versus loads'),
+    catalogueAvailable?h('div',{},h('p',{className:'au-muted'},'Observed preflight inclusion only · estimated description tokens; not model attention or provider billing.'),
+      table(['Skill','Description inclusions','Estimated description tokens','Observed main loads'],catalogueRows.map(c=>[readable(c,'name'),c.exposures==null?'Not recorded':count(c.exposures),c.estimated_tokens==null?'Not recorded':'~'+count(c.estimated_tokens),count(c.loads)]),null,catalogueRows.map(c=>c.name))):
+      h('p',{className:'au-muted'},'Description exposure unavailable for this selection. Earlier requests were not recorded; current catalogue contents are not historical evidence.')):null
   ));
 }
 
@@ -2202,6 +2193,7 @@ function UsagePageScope({selected}){
  const {agent,project,session,sessionScope,subagentId,model,modelProvider,bucketStart,bucketEnd}=requestFilters;
  const [breakdownGroup,setBreakdownGroup]=useState(saved.group);
  const [skillsView,setSkillsView]=useState(saved.skillsView),[skillsModel,setSkillsModel]=useState(saved.skillsModel),[skillsSkill,setSkillsSkill]=useState(saved.skillsSkill);
+ const [skillsRefresh,setSkillsRefresh]=useState(0);
  useEffect(()=>{if(restoringProvider&&!catalogueReady)return;saveView(viewScope(selected),{provider,tab,mode:displayMode,period,customStart,customEnd,chartBounds,filterTest,
   compMode,group:breakdownGroup,filters:requestFilters,skillsView,skillsModel,skillsSkill})},
   [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,chartBounds,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
@@ -2318,7 +2310,7 @@ function UsagePageScope({selected}){
   if(isQuota){setManualQuotaBusy(true);Promise.allSettled([inventory.refetch({cancelRefetch:false}),quota.refetch({cancelRefetch:false})]).finally(()=>{if(reloadControl.alive)setManualQuotaBusy(false)});return}
   inventory.refetch({cancelRefetch:false});
   ledger.refresh();queryClient.invalidateQueries({queryKey:[ID,'connection',selected]},{cancelRefetch:false});
-  queryClient.invalidateQueries({queryKey:[ID,'skills']},{cancelRefetch:false});
+  if(tab==='Skills usage')setSkillsRefresh(value=>value+1);
   quota.refetch({cancelRefetch:false});
  }
  async function exportAll(){setBusy(true);setErr('');try{
@@ -2384,7 +2376,7 @@ function UsagePageScope({selected}){
     data.groups.map(g=>JSON.stringify([g.provider,g.model,g.agent_kind,g.task])),
     data.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,readable(g,'task')].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
- if(tab==='Skills usage')body=h(SkillsUsageView,{profile:selected,windowSeconds,params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),onSession:id=>editRequestFilters({session:id,sessionScope:'exact'}),view:skillsView,setView:setSkillsView,model:skillsModel,setModel:setSkillsModel,skill:skillsSkill,setSkill:setSkillsSkill});
+ if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),view:skillsView,setView:setSkillsView,model:skillsModel,setModel:setSkillsModel,skill:skillsSkill,setSkill:setSkillsSkill,refreshKey:skillsRefresh,windowSeconds});
  return h(AnalyticsPane,{},h('style',{},ledgerCss),
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
   h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,

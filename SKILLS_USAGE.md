@@ -1,4 +1,4 @@
-# Skills usage and context history
+# Skills usage and period reports
 
 ## What is recorded
 
@@ -27,6 +27,15 @@ them. This implementation performs no installation or restart.
 - Before model requests, the recorder estimates the **raw** `request_messages`
   and `system_prompt` hook fields. It does not use the potentially truncated
   `request.body` diagnostic envelope.
+- The supported `pre_api_request` hook also records **future** named catalogue
+  description inclusion when its supplied system material contains a parseable
+  `<available_skills>` block. One request observation stores validated skill
+  names and `ceil(description characters / 4)` estimates, never description
+  text. Duplicate blocks in the same hook count once. No block means unknown,
+  not zero exposure; older requests cannot be backfilled from today's catalogue.
+  Attribution uses the hook's **requested** provider/model, not a verified
+  effective response model. The hook cannot prove provider transmission,
+  attention, billing or prompt-cache behaviour.
 - The existing guarded compression wrapper records `compression_before` on entry.
   Only a matching native `commit_status == committed` plus a returned
   `(messages, system_prompt)` pair permits `compression_after`. Aborts and raised
@@ -82,6 +91,9 @@ when no directly recognisable retained skill is present. Even
 attribution. Historical load counts are never substituted for retained tokens.
 Main skill `estimated_tokens` measures returned content only, not current
 retention, and is null if any counted main load has an unknown estimate.
+`unknown_sizes` counts these main loads; reference and failed attempts do not
+enter the returned-content denominator. A successful explicit repeat counts
+again, while retained content and prompt-cache reuse do not.
 
 Micro-compaction, pruning, providers bypassing these hooks, unavailable adapters,
 missing identities and uninstrumented producers may leave gaps. This is not an
@@ -109,6 +121,9 @@ host router's authentication/profile resolution. Parameters:
   `retained_skills` membership; unknown/unattributed snapshots are not assigned
   to the selected skill.
 - `offset >= 0`; `1 <= limit <= 200`. Pagination affects `events` only.
+- `aggregate_only=true` omits event/snapshot detail reads for the stable Skills
+  report; detail arrays are empty and their unqueried counts are null, not zero.
+  The historical rows remain available through the normal API.
 
 Response contract:
 
@@ -117,7 +132,9 @@ Response contract:
   version: 1, generated_at: number, window: {start: number, end: number},
   coverage: {status: 'recording'|'not_recorded'|'partial', since: number|null, note: string},
   summary: {loads: int, references: int, failures: int, sessions: int},
-  skills: [{name, loads, references, failures, sessions, repeat_loads, estimated_tokens: number|null}],
+  skills: [{name, loads, references, failures, sessions, repeat_loads, estimated_tokens: number|null, unknown_sizes}],
+  catalogue: [{name, exposures, estimated_tokens}],
+  catalogue_coverage: {status: 'partial'|'unavailable', since: number|null},
   model_options: [string], events: [Event], event_count: int, next_offset: int|null,
   snapshots: [Event], snapshot_count: int, snapshots_truncated: bool
 }
@@ -131,6 +148,9 @@ Response contract:
 `compression_before`, `compression_after`, `turn_end`. Additional content-free
 fields are `session_lineage`, `subagent_id`, `retained_skills`,
 `content_returned`, `deduplicated`.
+`catalogue_exposure` observations are not part of the legacy event/snapshot
+detail feed. `catalogue_coverage` is partial even after the first observation:
+absence of another index or model-specific observation is never historical zero.
 
 Aggregates cover the full filtered period, independent of pagination. Sessions
 count distinct exact sessions with a skill attempt (including references or
@@ -146,7 +166,8 @@ Invalid scope/time/pagination/test markers return 400; unknown profiles return
 ## Privacy and verification
 
 Persisted observations contain timestamps, numbers, booleans, fixed categories,
-safe identifiers and existing project display metadata. No prompts, skill text,
+safe identifiers and existing project display metadata. No prompts, skill text
+or catalogue description text,
 tool arguments, arbitrary results, error messages, absolute skill paths,
 credentials or provider diagnostics are stored. Identifiers are bounded and
 validated; reference paths cannot be absolute or traverse parents. Raw content

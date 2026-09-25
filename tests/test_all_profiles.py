@@ -191,6 +191,23 @@ def test_skills_collisions_paging_snapshots_and_unknown(tmp_path, monkeypatch):
     assert snapshot(tmp_path) == before
 
 
+def test_skills_catalogue_aggregate_only_preserves_profile_identity_and_missing_history(tmp_path):
+    exposure = dict(id='catalogue', ts=2, kind='catalogue_exposure', session_id='same-session',
+                    provider='fixture', model='fixture', descriptions=[{'name':'same-skill', 'estimated_tokens':7}])
+    database(tmp_path, events=[event(ts=1, tokens=3), exposure])
+    database(tmp_path / 'profiles' / 'other', events=[event(ts=1, tokens=5)])
+    before = snapshot(tmp_path)
+    out = aggregate.skills(inventory(tmp_path), end=4, aggregate_only=True)
+    assert out['summary']['loads'] == 2
+    assert out['events'] == out['snapshots'] == []
+    assert len(out['skills']) == 2 and out['skills'][0]['name'] != out['skills'][1]['name']
+    assert len(out['catalogue']) == 1 and out['catalogue'][0]['estimated_tokens'] == 7
+    assert out['catalogue'][0]['original_ids']['name'] == 'same-skill'
+    assert out['catalogue_coverage'] == {'status': 'partial', 'since': 2}
+    assert aggregate.skills(inventory(tmp_path), end=4, model='other', aggregate_only=True)['catalogue'] == []
+    assert snapshot(tmp_path) == before
+
+
 def test_identity_validation_and_equal_timestamp_pages(tmp_path, runtime):
     database(tmp_path, [request('a'), request('z')])
     database(tmp_path / 'profiles' / 'other', [request('a'), request('z')])

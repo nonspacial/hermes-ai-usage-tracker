@@ -1,6 +1,6 @@
 # AI usage + for Hermes Desktop
 
-AI usage + shows your subscription allowances and the usage recorded by your Hermes agents. Use it to check how much quota remains, inspect individual requests, compare models and projects, or see how skills and context compression contribute to a session.
+AI usage + shows your subscription allowances and the usage recorded by your Hermes agents. Use it to check how much quota remains, inspect individual requests, compare models and projects, or compare observed skill loads and estimated returned content over a period.
 
 The plugin appears as **AI usage +** in Hermes Desktop. Its installation name is `ai-usage-tracker`.
 
@@ -90,9 +90,9 @@ The usage pages answer different questions:
 | Cache & costs | Compare cache reads, calculated cache writes and estimated costs. Inspect the rates used and refresh provider prices. |
 | Compressions | Review recorded context compression and micro-compaction events alongside their linked usage. |
 | Models & tasks | Compare usage by model and task. |
-| Skills usage | See which skills were loaded, inspect reference reads and follow context estimates through a session. |
+| Skills usage | Compare observed skill-load frequency, estimated returned content and recorded catalogue-description inclusion over a period. |
 
-On Skills usage, select a slice of the frequency pie or an entry in its legend to inspect that skill's loads and reference reads. Use the model filter to narrow the results. Switch to **Context footprint** for estimated context composition or **Session timeline** to inspect observations and compression boundaries in order.
+On Skills usage, select a slice of the frequency pie or its legend to inspect that skill's loads. Use the model filter to narrow the results. **Context footprint** totals estimated returned main-skill content over the selected period (not retained context or provider input tokens); missing sizes remain unavailable. **Catalogue overhead** compares future observed description inclusion in the request preflight with actual main-skill loads. It does not measure model attention or reconstruct old descriptions. These reports update on opening, filter changes and manual Refresh, not on every request.
 
 In narrow panes, some tables become collapsed records. Expand a record to see its fields. Widen the pane if you prefer the table layout.
 

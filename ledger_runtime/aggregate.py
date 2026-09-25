@@ -392,7 +392,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
     return out
 
 
-def skills(inventory, *, start=0, end=None, offset=0, limit=200, **filters):
+def skills(inventory, *, start=0, end=None, offset=0, limit=200, aggregate_only=False, **filters):
     from .skills import read, SNAPSHOT_LIMIT
     end = time.time() if end is None else end
     validate(start, end, offset, limit, 200, filters)
@@ -410,7 +410,7 @@ def skills(inventory, *, start=0, end=None, offset=0, limit=200, **filters):
                 continue
             with snapshot_root(profile['path']) as copied_root:
                 report = read(copied_root, start=start, end=end, offset=0, limit=limit,
-                              _detail_limit=offset + limit, **local)
+                              _detail_limit=offset + limit, aggregate_only=aggregate_only, **local)
             recorded = report['coverage']['status'] != 'not_recorded'
             status.update(status='read' if recorded else 'not_recorded', observations=report['coverage'])
             if recorded:
@@ -426,11 +426,16 @@ def skills(inventory, *, start=0, end=None, offset=0, limit=200, **filters):
            'summary': add_values([r['summary'] for r in data]) if data else None,
            'model_options': sorted({v for r in data for v in r['model_options']})}
     for field in ('event_count', 'snapshot_count'):
-        out[field] = sum(r[field] for r in data) if data else None
+        out[field] = sum(r[field] for r in data) if data and not aggregate_only else None
     out['next_offset'] = offset + limit if out['event_count'] is not None and offset + limit < out['event_count'] else None
     out['events'] = ordered([qualify(v, p, 'skill_event') for p, r in reports for v in r['events']], 'ts', limit, offset)
     out['snapshots'] = ordered([qualify(v, p, 'skill_event') for p, r in reports for v in r['snapshots']], 'ts', SNAPSHOT_LIMIT)
     out['snapshots_truncated'] = out['snapshot_count'] is not None and out['snapshot_count'] > len(out['snapshots'])
     out['skills'] = sorted([qualify(v, p, 'skill', 'name') for p, r in reports for v in r['skills']],
-                           key=lambda v: (-v['loads'], v['original_ids']['name'], v['profile_id']))
+                            key=lambda v: (-v['loads'], v['original_ids']['name'], v['profile_id']))
+    out['catalogue'] = sorted([qualify(v, p, 'skill', 'name') for p, r in reports for v in r['catalogue']],
+                              key=lambda v: (-v['exposures'], v['original_ids']['name'], v['profile_id']))
+    observed = [r['catalogue_coverage']['since'] for r in data if r['catalogue_coverage']['since'] is not None]
+    out['catalogue_coverage'] = {'status': 'partial' if observed and end > min(observed) else 'unavailable',
+                                 'since': min(observed) if observed else None}
     return out

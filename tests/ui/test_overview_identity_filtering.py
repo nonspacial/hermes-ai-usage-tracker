@@ -122,7 +122,8 @@ def run():
         sub.get_by_role('tab', name='Skills usage').click()
         expect(page.get_by_role('combobox', name='Skills model')).to_be_disabled()
         assert query('/ledger/skills?')['model_provider'] == 'openai-codex'
-        assert not page.get_by_test_id('skill-events').get_by_text('unattributed-model').count() if page.get_by_test_id('skill-events').count() else True
+        assert query('/ledger/skills?')['aggregate_only'] == 'true'
+        assert not page.get_by_test_id('skills-usage').get_by_text('unattributed-model').count()
         sub.get_by_role('tab', name='Overview').click()
         nav.get_by_role('button', name='Remove model filter').click()
         expect(nav).to_have_count(0)

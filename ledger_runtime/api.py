@@ -151,7 +151,7 @@ def add_routes(router,resolve_profile,server_home):
     def skills_usage(profile:str='',start:float=0,end:float|None=None,provider:str='',session:str='',
                      session_scope:str='exact',agent:str='',project:str='',subagent:str='',test_id:str='',
                      model:str='',model_provider:str='',bucket_start:float|None=None,bucket_end:float|None=None,
-                     skill:str='',offset:int=0,limit:int=200,profile_scope:str='selected'):
+                     skill:str='',offset:int=0,limit:int=200,profile_scope:str='selected',aggregate_only:bool=False):
         from .skills import read
         check_bucket(bucket_start,bucket_end)
         try:
@@ -159,12 +159,12 @@ def add_routes(router,resolve_profile,server_home):
                 return aggregate.skills(aggregate.discover(server_home()), start=start,end=end,provider=provider,
                     session=session,session_scope=session_scope,agent=agent,project=project,subagent=subagent,
                     test_id=test_id,model=model,model_provider=model_provider,bucket_start=bucket_start,
-                    bucket_end=bucket_end,skill=skill,offset=offset,limit=limit)
+                    bucket_end=bucket_end,skill=skill,offset=offset,limit=limit,aggregate_only=aggregate_only)
             root=check_profile(profile)
             return read(root,start=start,end=end,provider=provider,session=session,session_scope=session_scope,
                         agent=agent,project=project,subagent=subagent,test_id=test_id,model=model,
                         model_provider=model_provider,bucket_start=bucket_start,bucket_end=bucket_end,skill=skill,
-                        offset=offset,limit=limit)
+                        offset=offset,limit=limit,aggregate_only=aggregate_only)
         except ValueError as exc:raise HTTPException(400,str(exc)) from exc
         except (sqlite3.Error,OSError):raise HTTPException(503,'Skills observations temporarily unavailable.')
 

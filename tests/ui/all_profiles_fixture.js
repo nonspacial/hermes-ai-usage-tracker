@@ -93,9 +93,11 @@ async function fixtureAggregate(u){
  const ordered=(rows,stamp)=>rows.sort((a,b)=>b[stamp]-a[stamp]||String(b.original_ids?.id).localeCompare(String(a.original_ids?.id))||b.profile_id.localeCompare(a.profile_id));
  if(u.pathname==='/ledger/skills'){
   out.skills=active.flatMap(p=>base.skills.map(s=>fixtureQualify(s,p,'skill','name')));
+  out.catalogue=active.flatMap(p=>base.catalogue.map(s=>fixtureQualify(s,p,'skill','name')));
+  out.catalogue_coverage=active.length?base.catalogue_coverage:{status:'unavailable',since:null};
   const rows=ordered(active.flatMap(p=>base.events.map(e=>fixtureQualify(e,p,'skill_event'))),'ts');
-  out.events=rows.slice(offset,offset+limit);out.event_count=active.length?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
-  out.snapshots=ordered(active.flatMap(p=>base.snapshots.map(e=>fixtureQualify(e,p,'skill_event'))),'ts');out.snapshot_count=active.length?out.snapshots.length:null;
+  out.events=rows.slice(offset,offset+limit);out.event_count=active.length&&!p.has('aggregate_only')?rows.length:null;out.next_offset=offset+limit<rows.length?offset+limit:null;
+  out.snapshots=ordered(active.flatMap(p=>base.snapshots.map(e=>fixtureQualify(e,p,'skill_event'))),'ts');out.snapshot_count=active.length&&!p.has('aggregate_only')?out.snapshots.length:null;
   out.summary=active.length?Object.fromEntries(Object.entries(base.summary).map(([k,v])=>[k,v*active.length])):null;
  }else{
   const rows=ordered(active.flatMap(p=>base.requests.map(r=>fixtureQualify(r,p,'request'))),'started');

@@ -51,6 +51,26 @@ def load(call='call', name='alpha', reference='', success=True, **kw):
 def report(env, **kw):
     return skills.read(env, **kw)
 
+def test_future_catalogue_preflight_and_period_aggregate_are_content_free(env):
+    index = '<available_skills>\n  tools:\n    - alpha: Four word description.\n    - beta: Another description.\n</available_skills>'
+    start(system_prompt='PRIVATE_SYSTEM ' + index, model='model-one')
+    load('one', name='alpha', result={'success': True, 'content': 'abcdefgh'})
+    load('two', name='alpha', result={'success': True, 'content': 'abcdefghijkl'})
+    load('reference', name='beta', reference='references/example.md')
+    out = report(env, end=time.time()+1, aggregate_only=True)
+    assert out['catalogue_coverage']['status'] == 'partial'
+    assert {e['name']: (e['exposures'], e['estimated_tokens']) for e in out['catalogue']} == {
+        'alpha': (1, skills.rough('Four word description.')),
+        'beta': (1, skills.rough('Another description.'))}
+    assert out['skills'][0]['loads'] == 2 and out['skills'][0]['estimated_tokens'] == 5
+    assert out['skills'][0]['unknown_sizes'] == 0
+    assert out['events'] == out['snapshots'] == []
+    assert report(env, model='other', aggregate_only=True)['catalogue'] == []
+    assert report(env, end=100, aggregate_only=True)['catalogue_coverage']['status'] == 'unavailable'
+    with r.store(env).db() as c:
+        stored = '\n'.join(row[0] for row in c.execute("SELECT data FROM skill_events WHERE kind='catalogue_exposure'"))
+    assert all(secret not in stored for secret in ('PRIVATE_SYSTEM', 'Four word description.', 'Another description.'))
+
 
 def test_success_reference_failure_reload_dedup_and_privacy(env):
     start()
@@ -326,6 +346,10 @@ def test_endpoint_read_only_missing_legacy_and_current_databases(env, monkeypatc
     before = db.read_bytes()
     response = client.get('/ledger/skills?limit=1')
     assert response.status_code == 200 and response.json()['summary']['loads'] == 1
+    aggregate_response = client.get('/ledger/skills?aggregate_only=true')
+    assert aggregate_response.status_code == 200
+    assert aggregate_response.json()['summary']['loads'] == 1
+    assert aggregate_response.json()['events'] == aggregate_response.json()['snapshots'] == []
     assert db.read_bytes() == before
 
 
