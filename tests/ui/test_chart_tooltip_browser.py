@@ -18,6 +18,7 @@ def test_chart_tooltip():
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.set_content((ROOT / 'preview.html').read_text(), wait_until='domcontentloaded')
+            page.evaluate('window.demoPeakValue=2;window.demoPeakUnmatched=1')
             page.evaluate('''() => {const original=rest;rest=async (...args)=>{
                 const result=await original(...args);
                 if(args[0].startsWith('/ledger?'))window.tooltipData=result;
@@ -27,6 +28,12 @@ def test_chart_tooltip():
             page.wait_for_function('window.demoCalls.filter(p=>p.startsWith("/ledger?")).length >= 2')
             page.wait_for_function('window.tooltipData?.trend?.buckets?.at(-1)?.missing_usage === 1')
             chart = page.get_by_test_id('usage-chart')
+            expect(page.get_by_test_id('subagent-summary')).to_contain_text('Peak observed subagents: 2 · partial')
+            page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Model').click()
+            expect(page.get_by_role('columnheader', name='Peak observed')).to_be_visible()
+            page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Subagents').click()
+            expect(page.get_by_role('columnheader', name='Peak observed')).to_have_count(0)
+            page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Hour').click()
             plot = chart.locator('.au-plot-hit')
             page.locator('.au-upper').evaluate('e=>e.scrollTop=150')
             # The final synthetic bucket has one request with unknown usage.
@@ -53,7 +60,7 @@ def test_chart_tooltip():
                 const b=window.tooltipData.trend.buckets[index];
                 return new Date(b.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+
                     ' UTC · '+b.known.total_tokens.toLocaleString(undefined)+
-                    ' tokens · '+b.attempts.toLocaleString(undefined)+' requests';
+                    ' tokens · '+b.attempts.toLocaleString(undefined)+' requests · Peak observed subagents: 2 · partial';
             }''', known)
             expect(footer).to_have_text(known_expected)
             assert 'Click to interact with Left/Right arrow keys' in popup.inner_text()
@@ -69,7 +76,7 @@ def test_chart_tooltip():
                 const b=window.tooltipData.trend.buckets.at(-1);
                 return new Date(b.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+
                     ' UTC · — tokens · '+b.attempts.toLocaleString(undefined)+
-                    ' requests · includes missing usage';
+                    ' requests · includes missing usage · Peak observed subagents: 2 · partial';
             }''')
             expect(footer).to_have_text(expected)
             assert chart.locator('.au-chart-tip').inner_text() == ''

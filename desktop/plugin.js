@@ -1265,11 +1265,11 @@ function UsageChart({data,mode,onSelectRange}){
   const previous=boundaryTimes.filter(t=>t<=start-minZoom).at(-1);
   return previous==null?null:[previous,start];
  };
- const chartHelp='Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.');
+ const chartHelp='Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.')+' Peak observed excludes missing/unmatched child lifecycle events; it is not a true maximum.';
  let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
  vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
- const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':''):null;
+ const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
  const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
  const move=e=>{const x=plotX(e),time=plotStart+(x-L)/w*(plotEnd-plotStart),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.end=nearestBoundary(x);d.moved=Math.abs(e.clientX-d.clientX)>=5&&Math.abs(time-d.start)>=minZoom/2&&Math.abs(time-d.pointerTime)>=minZoom/2;
@@ -1304,6 +1304,9 @@ function missingFieldNote(summary,key){
  const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>count(reasons[name])+' '+label):[];
  return (parts.length?parts.join(' · '):count(n)+' requests without this value')+' · subtotal';
 }
+function peakValue(value,coverage){return value?.value==null?'—':count(value.value)+(value.unmatched||coverage?.status==='partial'?' · partial':'')}
+function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
+function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
 function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
@@ -1314,7 +1317,8 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
    h('span',{},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
-   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':'')));
+   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
+   h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage))));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
  metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
@@ -1326,6 +1330,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  h('button',{className:'au-subagent-card','data-testid':'subagent-summary','aria-pressed':agent==='subagent',onClick:onSubagents,title:'Filter to subagent requests. These tokens are already included in the total.'},
  h('span',{className:'au-muted'},'Subagent tokens'),h('span',{className:'au-number'},viewTokens(data?.subagent_summary,'total_tokens')),
  h('span',{className:'au-muted'},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
+ h('span',{className:'au-muted',title:peakTitle(data?.subagent_summary?.peak_observed,data?.coverage)},peakLabel(data?.subagent_summary?.peak_observed,data?.coverage)),
  h('span',{className:'au-muted'},(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% of known tokens · '+selectedCost(data?.subagent_summary)))),
  mode!=='Limits'?h('div',{className:'au-hero','data-testid':'usage-hero'},h('div',{className:'au-hero-total'},
  h('div',{className:'au-big'},mode==='Cost'?selectedCost(s):t('total_tokens')),
@@ -1361,9 +1366,9 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  }
  const detail=group==='project'||group==='session'||group==='subagent';
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
- rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
+ rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
-  return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
+  return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
   identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC'}):readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
    {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
@@ -1384,7 +1389,8 @@ function recordRows(report,field){return report?.[field]||[]}
 function recordGeneration(report){return JSON.stringify([report?.analytics_revision,report?.seq,report?.profile_sequences,report?.coverage,report?.window,report?.list_count])}
 function validRecordPage(report,query){
  const field=recordField(query.get('view'),query.get('group'));
- if(!field||!report||!isCount(report.list_count)||!Array.isArray(report[field]))return false;
+ if(!field||!report||!isCount(report.list_count)||!Array.isArray(report[field])||
+    query.get('view')==='overview'&&report[field].some(row=>!validPeak(row.peak_observed)&&query.get('group')!=='subagent'))return false;
  const offset=Number(query.get('offset')||0),limit=Number(query.get('limit'));
  return isCount(offset)&&isCount(limit)&&limit>0&&report[field].length===Math.min(limit,Math.max(0,report.list_count-offset))&&
   report.list_next_offset===(offset+limit<report.list_count?offset+limit:null);
@@ -1750,6 +1756,8 @@ const OVERVIEW_OTHER=['requests','cache_read_progression','price_catalogs','appl
  'crossing_start','crossing_end'];
 const isObject=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const isCount=value=>Number.isSafeInteger(value)&&value>=0;
+const validPeak=value=>isObject(value)&&value.basis==='matched_child_lifecycle'&&
+ isCount(value.unmatched)&&(value.value===null||isCount(value.value));
 function validOverviewSummary(row){
  if(!isObject(row)||!['sessions','attempts','pending','unresolved','abandoned',
   'missing_usage','partial_breakdown','aggregate_records','priced_requests',
@@ -1842,7 +1850,7 @@ function validOverviewDto(dto,group,expected,revision,refresh=false){
     !Number.isFinite(dto.generated_at)||!isCount(dto.seq)||
     !validOverviewSummary(dto.summary)||dto.request_count!==dto.summary.attempts||
     (dto.next_offset!==null&&!isCount(dto.next_offset))||!isCount(dto.compression_count)||
-    !validOverviewSummary(dto.subagent_summary)||!isCount(dto.subagent_summary.agents)||
+    !validOverviewSummary(dto.subagent_summary)||!validPeak(dto.subagent_summary.peak_observed)||!isCount(dto.subagent_summary.agents)||
     dto.subagent_summary.attempts>dto.summary.attempts||
     !Array.isArray(dto.project_options)||!dto.project_options.every(row=>
      isObject(row)&&identityText(row.id)&&identityText(row.label)&&
@@ -1853,15 +1861,16 @@ function validOverviewDto(dto,group,expected,revision,refresh=false){
      (row.ended==null||Number.isFinite(row.ended)&&row.ended>=row.started)&&
      optionalText(row.profile))||
     !Array.isArray(dto.provider_groups)||!dto.provider_groups.every(row=>
-     isObject(row)&&identityText(row.provider)&&validOverviewSummary(row))||
+     isObject(row)&&identityText(row.provider)&&validOverviewSummary(row)&&validPeak(row.peak_observed))||
     !isObject(trend)||typeof trend.unit!=='string'||trend.timezone!=='UTC'||
     !Number.isFinite(trend.seconds)||trend.seconds<=0||!Array.isArray(trend.buckets)||
     !trend.buckets.every(row=>isObject(row)&&Number.isFinite(row.start)&&
      Number.isFinite(row.end)&&row.start>=window.start&&row.end<=window.end&&
      (row.end>row.start||window.start===window.end&&row.start===window.start&&
-      row.end===window.end&&row.attempts===0)&&validOverviewSummary(row))||
+      row.end===window.end&&row.attempts===0)&&validOverviewSummary(row)&&validPeak(row.peak_observed))||
     (breakdown[group]&&(!Array.isArray(dto[breakdown[group]])||
      !dto[breakdown[group]].every(row=>isObject(row)&&validOverviewSummary(row)&&
+      (group==='subagent'||validPeak(row.peak_observed))&&
       (group==='model'?identityText(row.provider)&&identityText(row.model):
        identityText(row.key)&&isCount(row.subagents)&&Number.isFinite(row.subagent_tokens)&&
        (group==='project'?optionalText(row.label)&&optionalText(row.path)&&optionalText(row.basis):

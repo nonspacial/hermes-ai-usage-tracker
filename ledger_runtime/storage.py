@@ -225,7 +225,7 @@ class Store:
                     for row in c.execute('SELECT '+','.join(exprs)+',MAX(started) AS latest_started FROM requests WHERE '
                                          +where+condition+' GROUP BY '+','.join(exprs), params)]
 
-    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None,_group_keys=None,view=None,group=None,_delta_seed=False,_validate_costs=False,_selected_test=None,list_mode='legacy',compression_kind=''):
+    def read(self,start=0,end=None,provider='',offset=0,limit=200,session='',agent='',project='',session_scope='exact',subagent='',model='',model_provider='',*,trend_start=None,_detail_ids=None,_group_keys=None,view=None,group=None,_delta_seed=False,_validate_costs=False,_selected_test=None,list_mode='legacy',compression_kind='',_include_peak_private=False,_skip_peak=False):
         from .projection import selected_fields, manifest
         fields=selected_fields(view,group)
         include=lambda name: fields is None or name in fields
@@ -319,6 +319,18 @@ class Store:
                 model_groups=[dict(provider=r['provider'],model=r['model'],latest_started=r['latest_started'],
                                    **summary_from_sql(r)) for r in c.execute(sql,arguments)]
             trend=sql_trend(c,where,params,start,end,summary_sql,trend_start=trend_start)
+            attribution=attribution_groups(c,where,params,summary_sql,fields=fields,
+                page_field=list_field if group_page and _group_keys is None else None,page=group_page,
+                selected=(list_field,group_where,group_params) if _group_keys is not None else None)
+            if not _skip_peak:
+                from .observed_peak import apply as apply_observed_peak
+                peak_report={'window':{'start':start,'end':end},'subagent_summary':attribution['subagent_summary'],
+                             'provider_groups':provider_groups,'model_groups':model_groups,'trend':trend,
+                             'project_groups':attribution.get('project_groups'),
+                             'session_groups':attribution.get('session_groups')}
+                scoped,peak_groups,unmatched,seen=apply_observed_peak(
+                    c,peak_report,where,params,
+                    scoped_filter=bool(provider or session or agent or project or subagent or model or model_provider))
             delta_seed=None
             precise=None
             if (_delta_seed or _validate_costs) and revision is not None and view=='overview' and group in ('time','model'):
@@ -368,9 +380,6 @@ class Store:
                                 # JSON object keys must be strings for signed tokens.
                                 delta_seed['model']={bucket:{json.dumps(key):value for key,value in groups.items()}
                                                      for bucket,groups in by_model.items()}
-            attribution=attribution_groups(c,where,params,summary_sql,fields=fields,
-                page_field=list_field if group_page and _group_keys is None else None,page=group_page,
-                selected=(list_field,group_where,group_params) if _group_keys is not None else None)
             if include('price_catalogs'):
                 from .pricing import catalog_status
                 catalogs=catalog_status(c,provider)
@@ -411,6 +420,8 @@ class Store:
           'groups':groups,'provider_groups':provider_groups,'model_groups':model_groups,'trend':trend,'price_catalogs':catalogs,
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
           'providers':providers,'health':health,'rates':rates,'tests':tests,'quota_observations':quota,'crossing_start':crossing,'crossing_end':crossing_end}
+        if _include_peak_private and not _skip_peak:
+            result.update(_peak_intervals=scoped,_peak_groups=peak_groups,_peak_unmatched=unmatched,_peak_seen=seen)
         if list_mode!='legacy':
             if list_field=='requests':total_rows=result['request_count']
             elif list_field=='compressions':total_rows=list_compcount
@@ -425,7 +436,8 @@ class Store:
             elif list_field not in ('requests','compressions') and not (list_total is not None and group_page):
                 result[list_field]=result[list_field][page_offset:page_offset+page_limit]
         if fields is None:return result
-        projected={**{key:result[key] for key in fields},'projection':manifest(fields)}
+        projected={**{key:result[key] for key in fields},'projection':manifest(fields),
+                   **{key:result[key] for key in ('_peak_intervals','_peak_groups','_peak_unmatched','_peak_seen') if key in result}}
         if list_mode!='legacy':
             projected.update(list_count=result['list_count'],list_next_offset=result['list_next_offset'])
             if list_field=='trend':projected['list_rows']=result['list_rows']

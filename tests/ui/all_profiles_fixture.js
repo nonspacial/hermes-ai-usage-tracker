@@ -15,7 +15,7 @@ const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
  models:['groups'],skills:[]};
 function fixtureOverviewSummary(row){
  const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];
- return {...row,unresolved:row.unresolved||0,abandoned:row.abandoned||0,
+ return {...row,peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,
   supplemental_requests:row.supplemental_requests||0,
   known_cost_usd:String(row.known_cost_usd),
   missing_reasons:Object.fromEntries(Object.entries(row.missing_fields).map(([key,n])=>

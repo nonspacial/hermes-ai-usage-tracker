@@ -346,7 +346,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                         trend_start=lo if local.get('test_id') or local.get('bucket_start') is not None else anchor,
                         _detail_ids=selected.get(profile['profile_id'], ()) if include('requests') else None,
                         _group_keys=[raw for raw, _ in group_keys if group_identity(group_field,raw,profile['profile_id']) in selected_groups] if group_field else None,
-                        view=view,group=group,_selected_test=selected_test,
+                        view=view,group=group,_selected_test=selected_test,_include_peak_private=True,
                         list_mode=('all' if list_mode=='all' else 'page') if view=='compressions' and list_mode!='legacy' else 'legacy',
                         compression_kind=local.get('compression_kind',''))
                     status['status'] = 'read'
@@ -399,6 +399,27 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
             ('agent_groups', ('agent_kind',)), ('applied_rate_groups', ('provider', 'model', 'service_tier', 'rate'))]:
         if include(field):out[field] = merge_groups(data, field, dimensions)
     out['subagent_summary'] = merge_summaries([r['subagent_summary'] for r in data]) if data else None
+    from .observed_peak import observation
+    def qualified_intervals(profile, values):
+        return [(sid, json.dumps([profile['profile_id'], identity]), lo, hi)
+                for sid, identity, lo, hi in values]
+    all_intervals=[interval for profile, report in reports
+                   for interval in qualified_intervals(profile,report['_peak_intervals'])]
+    missing_events=sum(r['_peak_unmatched'] for r in data)
+    observed=any(r['_peak_seen'] for r in data)
+    def measured(values,lo=None,hi=None):
+        return observation(values,missing_events,observed,
+                           out['window']['start'] if lo is None else lo,
+                           out['window']['end'] if hi is None else hi)
+    if out['subagent_summary'] is not None:
+        out['subagent_summary']['peak_observed']=measured(all_intervals)
+    for field,category,encode in (('provider_groups','provider',lambda row:row['provider']),
+                                  ('model_groups','model',lambda row:json.dumps([row['provider'],row['model']]))):
+        if include(field):
+            for row in out[field]:
+                values=[interval for profile,report in reports
+                        for interval in qualified_intervals(profile,report['_peak_groups'][category].get(encode(row),[]))]
+                row['peak_observed']=measured(values)
     out['providers'] = sorted({v for r in data for v in r['providers']})
     if include('price_catalogs'):
         out['price_catalogs'] = [qualify(v, p) for p, r in reports for v in r['price_catalogs']]
@@ -411,6 +432,13 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                 key = (bucket['start'], bucket['end'])
                 buckets.setdefault(key, []).append({k: v for k, v in bucket.items() if k not in ('start', 'end')})
         out['trend']['buckets'] = [dict(start=key[0], end=key[1], **merge_summaries(buckets[key])) for key in sorted(buckets)]
+        for bucket in out['trend']['buckets']:
+            bucket['peak_observed']=measured(all_intervals,bucket['start'],bucket['end'])
+    if include('project_groups') or include('session_groups'):
+        for field in ('project_groups','session_groups'):
+            if include(field):
+                for row in out[field]:
+                    row['peak_observed']['unmatched']=missing_events
     if include('cache_read_progression'):
         progression = [r['cache_read_progression'] for r in data]
         out['cache_read_progression'] = None

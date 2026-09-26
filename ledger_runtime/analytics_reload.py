@@ -27,7 +27,7 @@ from . import accounting, pricing, ownership, projection, incremental
 from .storage import SCHEMA
 from .read_snapshot import selected_snapshot_root, signature
 
-RELOADABLE = ('session_cache_writes', 'cache_progression', 'storage')
+RELOADABLE = ('session_cache_writes', 'cache_progression', 'observed_peak', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
 READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
                     'sql_summary', 'sql_trend', 'attribution_groups',
@@ -208,11 +208,14 @@ class AnalyticsRuntime:
                         args = (lo, max(lo, hi), *args[2:])
                     result = reader.read(*args,view=view,group=group,list_mode=list_mode,compression_kind=compression_kind,_selected_test=selected_test,
                                          _delta_seed=(list_mode=='legacy' and view=='overview' and group in ('time','model') and not test_id
-                                                      and bucket_start is None and len(args)>1
-                                                      and args[0]>0))
+                                                      and bucket_start is None and len(args)>1 and args[0]>0))
                     from .incremental import identity
                     with reader.db() as c:
                         db_identity=identity(c)
+            result.pop('_peak_intervals',None)
+            result.pop('_peak_groups',None)
+            result.pop('_peak_unmatched',None)
+            result.pop('_peak_seen',None)
             seed=result.pop('_delta_seed',None)
             # The read resolved an omitted end once; seal the exact SQL bound,
             # not an absent query parameter or another sample of wall time.
@@ -282,7 +285,9 @@ class AnalyticsRuntime:
                 current_generation[:2]!=tuple(source_generation[:2])):
             return self.read(root,*args,view=view,group=group,profile_key=profile_key,**options)
         with self.lease() as generation:
-            if revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None:
+            if (revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None
+                    and 'peak_observed' in base.get('subagent_summary',{})
+                    and all('peak_observed' in bucket for bucket in base.get('trend',{}).get('buckets',[]))):
                 from .incremental_refresh import replace_buckets
                 with selected_snapshot_root(root) as copied_root:
                     if signature(source_file)!=current_generation:
@@ -292,8 +297,9 @@ class AnalyticsRuntime:
                         from .incremental import identity
                         with reader.db() as c:
                             matches=identity(c)==db_identity
+                        peak_module=sys.modules[reader.__class__.__module__.rsplit('.',1)[0]+'.observed_peak']
                         candidate=(replace_buckets(reader,args,base,seed,base['incremental']['revision'],
-                                                   group=group) if matches else None)
+                                                   group=group,apply_observed_peak=peak_module.apply) if matches else None)
                 if signature(source_file)!=current_generation:
                     candidate=None
                 if candidate is not None:

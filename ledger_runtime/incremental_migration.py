@@ -153,7 +153,7 @@ def _reader_preflight(backup: Path, backup_sha256: str) -> None:
     Do not inspect host processes during an offline migration: open rows with
     owner identities need explicit reconciliation before this preflight.
     """
-    from .storage import Store, DecimalSum
+    from .storage import Store, DecimalSum, canonical_rate
     from .ownership import register_sql
     with tempfile.TemporaryDirectory(prefix='ledger-migration-') as scratch:
         folder = Path(scratch) / 'usage-ledger'
@@ -171,6 +171,7 @@ def _reader_preflight(backup: Path, backup_sha256: str) -> None:
             with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as c:
                 c.row_factory = sqlite3.Row
                 c.create_aggregate('decimal_sum', 1, DecimalSum)
+                c.create_function('canonical_rate', 1, canonical_rate, deterministic=True)
                 register_sql(c)
                 yield c
         reader.db = db

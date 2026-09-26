@@ -47,7 +47,7 @@ def _next_bucket(connection, row, start, end, step):
     return set()
 
 
-def replace_buckets(reader, args, response, seed, since, *, group='time', maximum=128):
+def replace_buckets(reader, args, response, seed, since, *, group='time', maximum=128, apply_observed_peak):
     """Return (response, seed) or None. args are Store.read positional args.
 
     Only fixed positive windows and Overview/time are supported. A narrow
@@ -144,7 +144,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
     for bucket in sorted(affected):
         low, high_bound = max(start,bucket),min(end,bucket+step)
         narrowed = (low,high_bound,*args[2:])
-        part = reader.read(*narrowed,view='overview',group=group,_validate_costs=True)
+        part = reader.read(*narrowed,view='overview',group=group,_validate_costs=True,_skip_peak=True)
         if not part.pop('_delta_cost_safe',False):
             return None
         if part.get('incremental',{}).get('revision') != high:
@@ -164,7 +164,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
             return None
         where,params,_ = request_predicate(start,end,args[2],args[5],args[6],args[7],
                                            args[8],args[9],args[10],args[11])
-        new['summary']=merge_summaries([{k:v for k,v in r.items() if k not in ('start','end')}
+        new['summary']=merge_summaries([{k:v for k,v in r.items() if k not in ('start','end','peak_observed')}
                                         for r in new['trend']['buckets']])
         new['summary']['sessions']=connection.execute('SELECT COUNT(DISTINCT NULLIF(session_id,\'\')) '
                                                       'FROM requests WHERE '+where,params).fetchone()[0]
@@ -177,6 +177,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
                            if row['provider'] in groups]
             value=merge_summaries(contributions)
             value['sessions']=row['sessions']
+            value['latest_started']=row['latest']
             providers.append({'provider':row['provider'],**value})
         new['provider_groups']=providers
         if group=='model':
@@ -190,6 +191,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
                 values=[groups[key] for groups in new_seed['model'].values() if key in groups]
                 value=merge_summaries(values)
                 value['sessions']=row['sessions']
+                value['latest_started']=row['latest']
                 models.append({'provider':row['provider'],'model':row['effective_model'],**value})
             new['model_groups']=models
         sub=merge_summaries(list(new_seed['subagent'].values()))
@@ -210,6 +212,9 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
         # events are paired with tracked writers; arbitrary events invalidate.
         if watermark(connection) != high:
             return None
+        apply_observed_peak(connection, new, where, params,
+                            scoped_filter=bool(args[2] or args[5] or args[6] or args[7] or
+                                               args[9] or args[10] or args[11]))
     new['generated_at']=time.time()
     new['incremental']={'version':1,'revision':high,'mode':'delta','changed_buckets':len(affected)}
     return new,new_seed
