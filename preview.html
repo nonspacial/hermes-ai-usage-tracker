@@ -55,7 +55,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 -->
-<html lang="en" style="background:#11111e;color:#d4d1e4;color-scheme:dark only"><head><meta charset="utf-8"><meta name="color-scheme" content="dark only"><meta name="theme-color" content="#11111e"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Usage Ledger · dark preview</title><style>html{background:#151520;color:#deddea;font:1rem system-ui,sans-serif;--ui-text-primary:#deddea;--ui-text-secondary:#b8b6cf;--ui-text-tertiary:#9290aa;--ui-text-quaternary:#77758e;--ui-stroke-secondary:#333148;--ui-accent:#ad9af4;--ui-bg-primary:#151520;--ui-bg-secondary:#222132}body{margin:0}#root{max-width:1440px;margin:auto;padding:18px 30px 50px}.banner{margin:20px 30px 0;padding:12px 16px;background:#2d281d;border:1px solid #66512e;color:#e5c574;border-radius:7px;font-size:.75rem}.flex{display:flex}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}.items-center{align-items:center}.items-baseline{align-items:baseline}.flex-1{flex:1}.gap-1{gap:4px}.gap-2{gap:8px}.gap-3{gap:12px}.p-3{padding:15px}.p-4{padding:0}.border{border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:10px 0}.h-full{height:100%}[class*='h-1.5']{height:6px}[class*='text-xs']{font-size:.75rem}[class*='text-sm']{font-size:.875rem}[class*='text-(']{color:var(--ui-text-tertiary)}.font-medium{font-weight:600}h3{font-size:.9375rem;margin:18px 0}h4{font-size:.8125rem}button,select,input{color:var(--ui-text-primary);background:var(--ui-bg-secondary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:7px 10px}button{cursor:pointer}a{color:#ad9af4}@media(max-width:620px){#root{padding:12px}.banner{margin:12px}}</style>
+<html lang="en" style="background:#11111e;color:#d4d1e4;color-scheme:dark only"><head><meta charset="utf-8"><meta name="color-scheme" content="dark only"><meta name="theme-color" content="#11111e"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Usage Ledger · dark preview</title><style>html{background:#151520;color:#deddea;font:1rem system-ui,sans-serif;--ui-text-primary:#deddea;--ui-text-secondary:#b8b6cf;--ui-text-tertiary:#9290aa;--ui-text-quaternary:#77758e;--ui-stroke-secondary:#333148;--ui-accent:#ad9af4;--ui-bg-primary:#151520;--ui-bg-secondary:#222132}body{margin:0}#root{width:100%;height:100%;margin:0;padding:0;box-sizing:border-box}.banner{margin:20px 30px 0;padding:12px 16px;background:#2d281d;border:1px solid #66512e;color:#e5c574;border-radius:7px;font-size:.75rem}.flex{display:flex}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}.items-center{align-items:center}.items-baseline{align-items:baseline}.flex-1{flex:1}.gap-1{gap:4px}.gap-2{gap:8px}.gap-3{gap:12px}.p-3{padding:15px}.p-4{padding:16px}.border{border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:0}.h-full{height:100%}[class*='h-1.5']{height:6px}[class*='text-xs']{font-size:.75rem}[class*='text-sm']{font-size:.875rem}[class*='text-(']{color:var(--ui-text-tertiary)}.font-medium{font-weight:600}h3{font-size:.9375rem;margin:18px 0}h4{font-size:.8125rem}button,select,input{color:var(--ui-text-primary);background:var(--ui-bg-secondary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:7px 10px}button{cursor:pointer}a{color:#ad9af4}</style>
 <style id="preview-rem-utilities">[class*='text-[0.6875rem]']{font-size:.6875rem}</style>
 <style id="preview-original-dark-theme">
 :root {
@@ -86,8 +86,7 @@ html, body, #root {
 html { height:100%; }
 body { height:100dvh; margin:0; display:flex; flex-direction:column; overflow:hidden; }
 .banner { flex:none; }
-#root { flex:1; min-height:0; width:100%; box-sizing:border-box; padding:18px 30px; overflow:hidden; }
-@media(max-width:620px){#root{padding:12px}}
+#root { flex:1; min-height:0; width:100%; box-sizing:border-box; padding:0; overflow:hidden; }
 body, #root, #root * { scrollbar-color: #45405e #11111e; }
 #root .au-ledger { background-color: #11111e; }
 #root .border {
@@ -113,7 +112,7 @@ textarea:focus-visible, summary:focus-visible {
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background-color: #11111e; }
 ::-webkit-scrollbar-thumb { background-color: #45405e; border: 3px solid #11111e; border-radius: 8px; }
 </style>
-</head><body style="background:#11111e;color:#d4d1e4;color-scheme:dark only"><div class="banner"><strong>OFFLINE UI PREVIEW · 2.0.0-test.17</strong> · Synthetic examples and synthetic prices only. No Hermes, account or network connection. This renders the packaged Desktop component through an isolated SDK/hook harness. <button onclick="addDemoEvent()">Add demo request</button></div><main id="root" style="background:#11111e;color:#d4d1e4"></main><script>/*
+</head><body style="background:#11111e;color:#d4d1e4;color-scheme:dark only"><main id="root" style="background:#11111e;color:#d4d1e4"></main><script>/*
  React v16.0.0
  react.production.min.js
 
@@ -1093,14 +1092,14 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
         ]
       }),
       jsxs('div', {
-        className: 'au-quota-rows',
-        'data-columns': windows.length + details.length >= 6 ? 'multiple' : 'single',
-        children: [
-          ...windows.map((window, index) => jsx(QuotaBar, { window }, `window-${index}`)),
-          ...details.map((detail, index) =>
-            jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, `detail-${index}`)
-          )
-        ]
+          className: 'au-quota-rows',
+          'data-columns': windows.length + details.length >= 6 ? 'multiple' : 'single',
+          children: [
+            ...windows.map((window, index) => jsx(QuotaBar, { window }, `window-${index}`)),
+            ...details.map((detail, index) =>
+              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, `detail-${index}`)
+            )
+          ]
       }),
       !provider.quota?.available && provider.quota?.unavailable_reason
         ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: provider.quota.unavailable_reason })
@@ -1258,7 +1257,7 @@ const ledgerCss = `
 .au-ledger .au-json-copy svg{display:block}
 .au-ledger pre.au-json-text{box-sizing:border-box;padding:8px 12px 14px;margin:0;max-height:400px;max-width:100%;width:100%;line-height:1.6;white-space:pre-wrap;overflow:auto;overflow-wrap:anywhere;cursor:text;user-select:text!important;-webkit-user-select:text!important}
 .au-ledger .au-json-text code{font:inherit;user-select:text!important;-webkit-user-select:text!important}
-@container(max-width:620px){.au-ledger .au-json-panel{width:75vw;min-width:220px}.au-ledger pre.au-json-text{max-height:340px}}
+@container(max-width:817px){.au-ledger .au-json-panel{width:100%;min-width:0}.au-ledger pre.au-json-text{max-height:none;overflow:visible}}
 
 .au-ledger .au-provider-select{display:none}.au-ledger .au-notice{border-left:3px solid var(--ui-accent);padding:9px 13px;margin:12px 0;color:var(--ui-text-secondary);line-height:1.6}
 .au-ledger .au-meter{height:6px;width:110px;background:var(--ui-stroke-secondary);border-radius:3px;margin:5px 0;overflow:hidden}
@@ -1319,11 +1318,11 @@ const ledgerCss = `
 .au-ledger .au-read-growth{margin-top:10px;padding-top:8px;border-top:1px solid var(--ui-stroke-secondary);font-size:.6875rem;color:var(--ui-text-tertiary);line-height:1.5}
 .au-ledger .au-read-growth strong{font-weight:600;color:var(--ui-text-secondary)}
 @container(max-width:1100px){.au-ledger .au-component-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@container(max-width:620px){.au-ledger .au-component-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-cost-card .au-number{font-size:1.25rem}}
+@container(max-width:817px){.au-ledger .au-component-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-cost-card .au-number{font-size:1.25rem}}
 @container(max-width:370px){.au-ledger .au-component-cards{grid-template-columns:1fr}}
 
 .au-ledger .au-rate-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
-@container (max-width:620px){.au-ledger .au-provider-tabs{display:none}.au-ledger .au-provider-select{display:block}.au-ledger .au-number{font-size:1.25rem}}
+@container (max-width:817px){.au-ledger .au-provider-tabs{display:none}.au-ledger .au-provider-select{display:block}.au-ledger .au-number{font-size:1.25rem}}
 .au-ledger{color-scheme:dark;font-family:inherit}
 .au-ledger .au-usage-summary{padding:0 0 14px;border-bottom:1px solid var(--ui-stroke-secondary);margin-top:6px}
 .au-ledger .au-hero{display:grid;grid-template-columns:minmax(240px,0.8fr) minmax(360px,1.7fr);gap:48px;align-items:start;margin:20px 0 25px}
@@ -1383,7 +1382,7 @@ const ledgerCss = `
 .au-ledger .au-filters select[aria-label="Saved tests"]{flex-basis:145px;min-width:130px;max-width:247px}
 /* Keep the controls on one row through the three-column metric layout.
    Allow their ordinary wrapping only after the metrics switch to two columns. */
-@container (min-width:621px) and (max-width:980px){
+@container (min-width:818px) and (max-width:980px){
  .au-ledger .au-filters{gap:2px}
  .au-ledger .au-filters select{flex:1 1 95px;min-width:90px;padding-inline:4px}
  .au-ledger .au-filters select[aria-label="Project"]{flex-basis:98px;min-width:98px}
@@ -1396,7 +1395,7 @@ const ledgerCss = `
 .au-ledger .au-breakdown{margin-top:16px}.au-ledger .au-breakdown td:not(:first-child),.au-ledger .au-breakdown th:not(:first-child){text-align:right}
 .au-ledger .au-breakdown th:first-child,.au-ledger .au-breakdown td:first-child{padding-left:0}
 @container (max-width:980px){.au-ledger .au-totals{grid-template-columns:repeat(3,minmax(0,1fr))}.au-ledger .au-hero{gap:25px;grid-template-columns:minmax(170px,.7fr) minmax(310px,1.5fr)}.au-ledger .au-window-label{flex-basis:100%;margin-left:0}.au-ledger .au-period-buttons{display:none}.au-ledger .au-period-select{display:block}}
-@container (max-width:620px){.au-ledger .au-hero{display:block}.au-ledger .au-big{font-size:2.4375rem}.au-ledger .au-provider-totals{margin-top:18px}.au-ledger .au-chart{margin-top:28px}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-mode-buttons{display:none}.au-ledger .au-mode-select{display:block}.au-ledger .au-chart-title{flex-wrap:wrap}.au-ledger .au-totals .au-number{font-size:1.4375rem}.au-ledger .au-quality-line{display:block}}
+@container (max-width:817px){.au-ledger .au-hero{display:block}.au-ledger .au-big{font-size:2.4375rem}.au-ledger .au-provider-totals{margin-top:18px}.au-ledger .au-chart{margin-top:28px}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.au-ledger .au-mode-buttons{display:none}.au-ledger .au-mode-select{display:block}.au-ledger .au-chart-title{flex-wrap:wrap}.au-ledger .au-totals .au-number{font-size:1.4375rem}.au-ledger .au-quality-line{display:block}}
 
 .au-ledger .au-subagent-card{display:flex;flex-direction:column;align-items:flex-start;text-align:left;border:1px solid var(--ui-stroke-secondary);padding:10px 12px;min-width:0;background:transparent}
 .au-ledger .au-subagent-card .au-muted:last-child{font-size:.625rem}
@@ -1447,10 +1446,10 @@ ${tooltipCss}
 .au-ledger .au-scope-chip{display:inline-flex;align-items:center;gap:8px;max-width:100%;min-width:0;padding:5px 9px;font-size:.6875rem;border-radius:999px;background:var(--au-control-bg);color:var(--ui-text-secondary)}
 .au-ledger .au-scope-chip>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px}
 .au-ledger .au-scope-chip>span:last-child{flex:none}
-@container(max-width:620px){.au-ledger .au-active-scopes{flex-basis:100%}.au-ledger .au-request-navigation{gap:8px}.au-ledger .au-scope-chip>span:first-child{max-width:230px}}
+@container(max-width:817px){.au-ledger .au-active-scopes{flex-basis:100%}.au-ledger .au-request-navigation{gap:8px}.au-ledger .au-scope-chip>span:first-child{max-width:230px}}
 .au-ledger .au-breakdown-options{flex-wrap:wrap}
 @container (max-width:900px){.au-ledger .au-totals{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@container (max-width:620px){.au-ledger .au-main-tabs{flex-wrap:nowrap;overflow-x:auto}.au-ledger .au-main-tabs button{flex-shrink:0}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container (max-width:817px){.au-ledger .au-main-tabs{flex-wrap:nowrap;overflow-x:auto}.au-ledger .au-main-tabs button{flex-shrink:0}.au-ledger .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .au-ledger .au-field-label{display:none}
 .au-ledger .au-skill-chart{display:grid;grid-template-columns:minmax(0,1fr);gap:24px;align-items:start}
@@ -1496,12 +1495,17 @@ ${tooltipCss}
 .au-ledger .au-table[data-layout="records"][data-accordions="true"] tbody tr[data-expanded="false"] .au-record-heading{padding-bottom:0;border-bottom:0}
 @container(min-width:760px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container(max-width:400px){.au-ledger .au-table[data-layout="records"] tr{grid-template-columns:minmax(0,1fr)}}
-/* The route tile already supplies a definite height. Do not put this flex
-   allocation inside Radix's intrinsic-height scroll content wrapper. */
-.au-ledger.au-pane{height:100%;min-height:0;box-sizing:border-box;overflow:hidden;container-type:size}
+/* The split is a function of the available route tile alone. */
+.au-ledger.au-pane{height:100%;min-height:0;box-sizing:border-box;overflow:hidden;container:au-pane / size}
 .au-provider-pane{height:100%;min-height:0;display:flex;flex-direction:column}
-.au-upper{flex:0 1 auto;min-height:0;max-height:var(--au-upper-cap,50%);overflow:auto;scrollbar-gutter:stable;overflow-anchor:none}
-.au-totals .au-metric>.au-muted:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.5em;line-height:1.5}
+.au-upper{flex:0 0 clamp(55%,calc(560px + 1.5cqh),70%);min-height:0;display:flex;flex-direction:column;overflow:visible;overflow-anchor:none;position:relative}
+
+.au-upper>.au-usage-summary{flex:1;min-height:0;display:flex;flex-direction:column}
+.au-upper .au-hero{flex:1;min-height:min-content;align-items:stretch}
+.au-upper .au-chart{min-height:0;display:flex;flex-direction:column}
+.au-upper .au-chart svg{flex:1;min-height:160px;height:auto}
+.au-upper .au-chart-tip{flex:none}
+.au-totals .au-metric>.au-muted:last-child{min-height:1.5em;line-height:1.35;overflow-wrap:anywhere}
 .au-ledger .au-provider-pane>.au-subpage-tabs{flex:none;flex-wrap:nowrap;overflow:auto;margin:0;min-height:0;max-height:25%;padding:8px 0}
 .au-provider-pane>.au-subpage-tabs button{flex-shrink:0}
 .au-reader{flex:1;min-height:0;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;position:relative}
@@ -1536,11 +1540,169 @@ ${tooltipCss}
  .au-pane .au-provider-row{margin:2px 0;overflow-wrap:anywhere}
 }
 @container(max-width:980px){.au-pane .au-hero{gap:clamp(24px,calc(20.333px + .333cqh),25px)}}
-@container(max-width:620px){
+/* Compact actual content before assigning more height to the upper track. */
+.au-pane .au-totals .au-metric,.au-pane .au-totals .au-subagent-card{padding:7px 9px}
+.au-pane .au-totals .au-number{margin:3px 0}
+.au-pane .au-totals{margin:7px 0 8px;gap:7px}
+.au-pane .au-hero{margin:3px 0 7px;gap:16px}
+.au-pane .au-provider-totals{margin-top:2px}
+.au-pane .au-provider-row{margin:0;gap:1px}
+.au-pane .au-subagent-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:4px;align-content:start}
+.au-pane .au-subagent-card .au-muted:nth-child(n+3){grid-column:1/-1}
+.au-pane .au-main-tabs{margin:8px 0;padding-bottom:8px}
+.au-pane .au-usage-summary{margin-top:2px;padding-bottom:5px}
+.au-pane .au-chart svg{height:auto;min-height:160px;flex:1 1 160px}
+/* Compact medium-width summary content without relocating the top quota card. */
+@container au-pane (min-width:818px) and (max-width:1467px){
+ .au-pane .au-totals{grid-template-columns:repeat(4,minmax(0,1fr))}
+ .au-pane .au-metric,.au-pane .au-subagent-card{min-height:0}
+ .au-pane .au-totals .au-number{font-size:1.4375rem;line-height:1.12;margin:2px 0}
+ .au-pane .au-totals .au-muted{line-height:1.25}
+ .au-pane .au-totals .au-metric>.au-muted:last-child{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+ .au-pane .au-totals .au-subagent-card{display:flex;gap:1px}
+ .au-pane .au-totals .au-subagent-card .au-muted:nth-child(n+3){display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+ .au-pane .au-main-tabs{margin:4px 0;padding-bottom:3px}
+ .au-pane .au-view-controls{margin:2px 0;gap:5px}
+ .au-pane .au-filters{margin:2px 0 3px}
+ .au-pane .au-usage-summary{margin-top:0;padding-bottom:0}
+ .au-pane .au-totals{margin:2px 0;gap:5px}
+ .au-pane .au-hero{margin:1px 0;gap:10px}
+ .au-pane .au-provider-totals{margin-top:2px;gap:1px 8px}
+ .au-pane .au-provider-row{margin:0;gap:0;line-height:1.25;grid-template-columns:minmax(0,1fr) auto}
+ .au-pane .au-provider-row>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .au-pane .au-provider-row .au-muted{line-height:1.25}
+ .au-pane .au-provider-row>small:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+ .au-pane .au-provider-cost{font-size:1.1rem}
+ .au-pane .au-big{font-size:2.25rem;line-height:1.12;margin:1px 0}
+ .au-pane .au-chart-title{margin:0 0 3px}
+ .au-pane .au-chart-tip{min-height:12px}
+ .au-pane .au-quality{margin-top:2px}
+ .au-pane .au-quality-line details:not([open])>:not(summary){display:none}
+ .au-pane .au-reset-tooltip{display:none}
+ .au-pane .au-reset-auto:is(:hover,:focus-within) .au-reset-tooltip{display:block}
+ }
+/* Keep the full-width quota in its original top position; reclaim height in
+   its chrome and in the summary, never by allowing the chart under the tabs. */
+@container au-pane (min-width:818px){
+ .au-pane .au-provider-limits{margin-bottom:2px}
+ .au-pane .au-quota-card{padding:5px 8px;gap:3px}
+ .au-pane .au-quota-rows{row-gap:2px}
+ .au-pane .au-main-tabs{margin:3px 0;padding-bottom:3px}
+ .au-pane .au-view-controls{margin:2px 0;gap:5px}
+ .au-pane .au-filters{margin:2px 0 3px}
+ .au-pane .au-totals{margin:2px 0;gap:5px}
+ .au-pane .au-totals .au-metric,.au-pane .au-totals .au-subagent-card{padding:5px 7px}
+ .au-pane .au-totals .au-number{margin:2px 0;line-height:1.12}
+ .au-pane .au-hero{margin:1px 0;gap:10px}
+ .au-pane .au-chart-title{margin:0 0 3px}
+ .au-pane .au-chart-tip{min-height:12px}
+ .au-pane .au-chart-tip:empty{min-height:0}
+ .au-pane .au-quality{margin-top:2px}
+ .au-pane .au-usage-summary{margin-top:0;padding-bottom:0}
+}
+@container au-pane (min-width:818px) and (max-width:939px){
+ .au-pane .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@container au-pane (min-width:818px) and (max-width:939px){
+ .au-pane .au-totals .au-metric,.au-pane .au-totals .au-subagent-card{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:3px;align-content:start}
+ .au-pane .au-totals .au-number{grid-column:2;grid-row:1;margin:0}
+ .au-pane .au-totals .au-metric>.au-muted:last-child,.au-pane .au-totals .au-subagent-card>.au-muted:nth-child(n+3){grid-column:1/-1}
+ .au-pane .au-totals .au-subagent-card>.au-muted:nth-child(3){grid-row:2}
+ .au-pane .au-totals .au-subagent-card>.au-muted:nth-child(4){grid-row:3}
+ .au-pane .au-totals .au-subagent-card{grid-column:span 2}
+ .au-pane .au-totals .au-subagent-card>.au-muted:nth-child(3){grid-column:1;grid-row:2}
+ .au-pane .au-totals .au-subagent-card>.au-muted:nth-child(4){grid-column:2;grid-row:2;text-align:right}
+}
+@container au-pane (min-width:940px) and (max-width:1467px){
+ .au-pane .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .au-pane .au-totals{grid-template-columns:repeat(7,minmax(0,1fr))}
+ .au-pane .au-totals .au-metric>.au-muted:last-child{display:block;overflow:visible;white-space:normal}
+ .au-pane .au-totals .au-subagent-card{display:flex;gap:1px}
+ .au-pane .au-totals .au-subagent-card .au-muted:nth-child(n+3){display:block;white-space:normal;overflow:visible;max-width:none}
+}
+/* At the approved 750px fixed-split boundary, reclaim chrome and card
+   spacing rather than moving the full-width quota or clipping the plot. */
+@container au-pane (min-width:818px) and (max-height:850px){
+ .au-pane:not(.au-mobile) .au-main-tabs{margin:0;padding-bottom:0}
+ .au-pane:not(.au-mobile) .au-main-tabs button{padding-block:3px}
+ .au-pane:not(.au-mobile) .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:0}
+ .au-pane:not(.au-mobile) .au-quota-card{padding:1px 6px;gap:1px}
+ .au-pane:not(.au-mobile) .au-provider-limits{margin-bottom:0}
+ .au-pane:not(.au-mobile) .au-view-controls{margin:0;gap:2px}
+ .au-pane:not(.au-mobile) .au-segment button{padding-block:3px}
+ .au-pane:not(.au-mobile) .au-filters{margin:0}
+ .au-pane:not(.au-mobile) .au-filters :is(button,select,input){padding-block:3px}
+ .au-pane:not(.au-mobile) .au-totals{margin:0;gap:2px}
+ .au-pane:not(.au-mobile) .au-totals .au-metric,.au-pane:not(.au-mobile) .au-totals .au-subagent-card{padding:0 5px}
+ .au-pane:not(.au-mobile) .au-totals .au-number{margin:0}
+ .au-pane:not(.au-mobile) .au-hero{margin:0;gap:4px}
+ .au-pane:not(.au-mobile) .au-chart-title{margin:0}
+ .au-pane:not(.au-mobile) .au-usage-summary{padding-bottom:0}
+}
+@container au-pane (min-width:1500px){
+ .au-pane .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(4,minmax(0,1fr))}
+ .au-pane .au-chart svg{min-height:177px}
+}
+@container(min-width:1700px){.au-pane .au-provider-totals{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}}
+@container(max-width:1500px){
+ .au-pane .au-provider-totals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 10px}
+ .au-pane .au-provider-row{overflow-wrap:anywhere}
+}
+@container(max-width:1100px) and (min-width:818px){
+ .au-pane .au-hero{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+}
+/* In the fixed desktop split the summary is a smaller, inset, vertically
+   centred block; the chart owns the taller right-hand region. Keep the
+   single-scroller/mobile rendition and its SVG geometry unchanged. */
+.au-pane:not(.au-mobile) .au-hero{grid-template-columns:minmax(0, .8fr) minmax(0, 1.2fr)}
+.au-pane:not(.au-mobile) .au-hero-total{min-width:0;box-sizing:border-box;padding:6px 0 0 14px;display:flex;flex-direction:column;justify-content:safe center;align-self:stretch}
+.au-pane:not(.au-mobile) .au-chart svg{flex:1 1 0;height:0}
+@container (min-width:818px) and (max-width:900px){
+ .au-pane:not(.au-mobile) .au-provider-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .au-pane:not(.au-mobile) .au-provider-row{grid-template-columns:minmax(0,1fr)}
+ .au-pane:not(.au-mobile) .au-provider-row>span:first-child,
+ .au-pane:not(.au-mobile) .au-provider-row>small:last-child{white-space:normal;overflow:visible;text-overflow:clip}
+}
+@container (min-width:901px) and (max-width:1435px){
+ .au-pane:not(.au-mobile) .au-provider-totals{grid-template-columns:minmax(0,1fr)}
+ .au-pane:not(.au-mobile) .au-provider-row>span:first-child,
+ .au-pane:not(.au-mobile) .au-provider-row>small:last-child{white-space:normal;overflow:visible;text-overflow:clip}
+}
+
+.au-pane .au-custom-range{position:relative;z-index:16;font-size:.75rem}
+.au-pane .au-custom-range>summary{cursor:pointer;list-style:none;border:1px solid var(--ui-stroke-secondary);border-radius:6px;background:var(--au-control-bg);padding:7px 10px;white-space:nowrap}
+.au-pane .au-custom-range>summary::-webkit-details-marker{display:none}
+.au-pane .au-custom-panel{position:absolute;top:calc(100% + 4px);right:0;width:min(390px,calc(100cqw - 32px));padding:10px;background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px;z-index:20;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent)}
+.au-pane .au-custom-panel input{width:100%;min-width:0}
+.au-pane .au-custom-panel [role="alert"]{grid-column:1/-1}
+.au-pane .au-custom-range:not([open]) .au-custom-panel{display:none}
+@container au-pane (min-width:818px){.au-pane .au-custom-panel{left:0;right:auto}}
+.au-pane .au-filter-actions{display:none;position:relative;flex:none;font-size:.75rem}
+.au-pane .au-filter-actions>summary{min-height:30px;display:flex;align-items:center;cursor:pointer;border:1px solid var(--ui-stroke-secondary);border-radius:6px;background:var(--au-control-bg);padding:5px 9px}
+.au-pane .au-filter-actions:not([open]) .au-filter-action-panel{display:none}
+.au-pane .au-filter-action-panel{position:absolute;right:0;top:calc(100% + 4px);z-index:18;min-width:210px;display:grid;gap:5px;padding:8px;background:var(--au-card-bg);border:1px solid var(--ui-stroke-secondary);border-radius:6px}
+.au-pane .au-filter-action-panel button{text-align:left;white-space:nowrap}
+.au-pane .au-filter-action-panel select{width:100%;max-width:none}
+@container(max-width:817px){
  .au-pane .au-big{font-size:clamp(2.25rem,calc(1.96025rem + .545cqh),2.4375rem)}
  .au-pane .au-provider-totals{margin-top:clamp(10px,calc(-19.333px + 2.667cqh),18px)}
 }
 .au-reader:focus-visible,.au-upper:focus-visible{outline:2px solid var(--ui-accent);outline-offset:-2px}
+/* Width and height come from the actual route tile, not the window. */
+.au-ledger.au-pane.au-mobile{overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;overscroll-behavior:contain}
+.au-mobile .au-provider-pane{height:auto;min-height:100%;display:block}
+.au-mobile .au-upper{height:auto;max-height:none;display:block;overflow:visible}
+.au-mobile .au-reader{height:auto;overflow:visible;scrollbar-gutter:auto}
+.au-ledger.au-mobile .au-provider-pane>.au-subpage-tabs{overflow-x:auto;overflow-y:hidden;max-height:none}
+.au-ledger.au-mobile pre,.au-ledger.au-mobile pre.au-json-text{max-height:none;overflow:visible}
+.au-ledger.au-mobile .au-json-panel{width:100%;max-width:100%;min-width:0}
+.au-ledger.au-mobile .au-upper>.au-usage-summary{display:block}
+.au-ledger.au-mobile .au-upper .au-hero{display:block}
+.au-ledger.au-mobile .au-upper .au-chart{display:block;margin-top:28px}
+.au-ledger.au-mobile .au-upper .au-chart svg{height:clamp(160px,24cqh,320px);min-height:160px}
+.au-ledger.au-mobile .au-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
+.au-ledger.au-mobile .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+.au-ledger.au-mobile .au-reader .au-table,.au-ledger.au-mobile .au-reader .au-timeline-scroll{overflow:visible;max-height:none}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
 const count = n => n == null ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
@@ -1553,7 +1715,7 @@ const money = n => n == null ? '—' : '$'+Number(n).toLocaleString(undefined,{m
 const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
 function notice(t){return h('div',{className:'au-notice'},t)}
-function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted'},note))}
+function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted',title:typeof note==='string'?note:title||''},note))}
 // A bounded reader keeps a keyed visible entry, not a pixel count. Prepending
 // records (or changing their heights) must not move the entry being read.
 function readerSnapshot(root){
@@ -1575,82 +1737,74 @@ function Reader({children,className='',label,id,resetKey,...props}){
  if(!state.attach)state.attach=node=>{state.root=node};
  useEffect(()=>{
   const root=state.root;if(!root)return;
-  const remember=()=>{state.snapshot=readerSnapshot(root)};
-  const reconcile=()=>{restoreReader(root,state.snapshot);remember()};
+  const remember=()=>{if(!root.closest('.au-mobile'))state.snapshot=readerSnapshot(root)};
+  const reconcile=()=>{if(!root.closest('.au-mobile')){restoreReader(root,state.snapshot);remember()}};
+  const transferred=()=>{state.snapshot=readerSnapshot(root)};
   const observer=new MutationObserver(reconcile),resize=new ResizeObserver(reconcile);
-  remember();root.addEventListener('scroll',remember,{passive:true});
+  remember();root.addEventListener('scroll',remember,{passive:true});root.addEventListener('au-scroll-transferred',transferred);
   observer.observe(root,{childList:true,subtree:true,characterData:true});resize.observe(root.firstElementChild);
-  return()=>{observer.disconnect();resize.disconnect();root.removeEventListener('scroll',remember)};
+  return()=>{observer.disconnect();resize.disconnect();root.removeEventListener('scroll',remember);root.removeEventListener('au-scroll-transferred',transferred)};
  },[]);
  useEffect(()=>{if(state.root){state.root.scrollTop=0;state.snapshot=readerSnapshot(state.root)}},[resetKey]);
  return h('div',{...props,id,ref:state.attach,className:'au-reader '+className,tabIndex:0,'aria-label':label},h('div',{className:'au-reader-content'},children));
 }
-function AnalyticsPane({children}){
- const [state]=useState(()=>({root:null}));
- if(!state.attach)state.attach=node=>{state.root=node};
+function AnalyticsPane({children,resetKey}){
+ const [state]=useState(()=>({root:null,pending:null,scope:resetKey}));
+ state.scope=resetKey;
  useEffect(()=>{
-  const root=state.root;let frame=0,disposed=false;
-  function measure(){
-   frame=0;if(disposed)return;
-   const pane=root.querySelector('.au-provider-pane'),reader=root.querySelector('.au-reader'),nav=root.querySelector('.au-subpage-tabs');
-   if(!pane||!reader||!nav)return;
-   // Reserve at most ten normal lines, independently of the current viewport.
-   // Sparse tabs return unused space even beyond the usual two-thirds cap.
-   // Expanded bodies never redefine a normal collapsed line.
-   const rows=[...reader.querySelectorAll(reader.querySelector('tbody')?'tbody tr':reader.querySelector('.au-timeline-entry')?'.au-timeline-entry':'.au-skill-legend-row')];
-   const scrollTop=reader.scrollTop;
-   let heights,sparseNeed;
-   // Measure even an initially open, sole record without its inspector body.
-   // Restore in the same frame: no toggle events, lost state or scroll clamping.
-   reader.classList.add('au-measure-lines');
-   try{heights=rows.map(row=>{
-    const style=getComputedStyle(row),disclosure=row.querySelector('.au-record-disclosure');
-    const padding=parseFloat(style.paddingTop)+parseFloat(style.paddingBottom)+parseFloat(style.borderTopWidth)+parseFloat(style.borderBottomWidth);
-    const margin=parseFloat(style.marginBottom)||0;
-    if(row.matches('.au-timeline-entry'))return row.querySelector('summary').getBoundingClientRect().height+padding+margin;
-    if(disclosure&&getComputedStyle(disclosure).display!=='none')return disclosure.getBoundingClientRect().height+padding+margin;
-    return row.getBoundingClientRect().height+margin;
-   }).filter(n=>n>0);
-    if(rows.length<10){
-     reader.classList.add('au-measure-sparse');
-     sparseNeed=reader.firstElementChild.getBoundingClientRect().height+nav.getBoundingClientRect().height;
+  // The root, unlike Reader, owns mobile scrolling. Neither its pixels nor a
+  // clamped desktop round-trip snapshot belong to a different page/filter.
+  state.pending=null;
+  if(state.root)state.root.scrollTop=0;
+ },[resetKey]);
+ useEffect(()=>{
+  const root=state.root;if(!root)return;
+  let frame=0,transferFrame=0;
+  const measure=()=>{
+   frame=0;
+   // Border-box dimensions stay stable when the root gains a scrollbar.
+   const box=root.getBoundingClientRect(),mobile=box.width<850||box.height<750;
+   const wasMobile=root.classList.contains('au-mobile');
+   const reader=root.querySelector('.au-reader');
+   const anchor=reader&&wasMobile!==mobile?readerSnapshot(wasMobile?root:reader):null;
+   // If the desktop reader clamps an upper/first-row mobile position, retain
+   // that original snapshot for a round trip unless the reader was moved.
+   const scope=state.scope;
+   const returning=mobile&&state.pending?.scope===scope&&reader?.scrollTop===state.pending.readerTop;
+   const target=returning?state.pending.snapshot:anchor;
+   root.classList.toggle('au-mobile',mobile);
+   if(mobile){root.tabIndex=0;root.setAttribute('aria-label','AI usage + page')}
+   else{root.removeAttribute('tabindex');root.removeAttribute('aria-label')}
+   if(anchor&&reader){
+    const owner=mobile?root:reader;
+    if(target.items.length||mobile)restoreReader(owner,target);
+    if(mobile)state.pending=null;
+    else{
+     const first=target.items[0],node=first&&[...reader.querySelectorAll('[data-scroll-key]')]
+      .find(item=>item.dataset.scrollKey===first.key);
+     const clamped=!first||!node||Math.abs(node.getBoundingClientRect().top-reader.getBoundingClientRect().top-first.offset)>2;
+     state.pending=clamped?{scope,snapshot:target,readerTop:reader.scrollTop}:null;
     }
-   }finally{
-    reader.classList.remove('au-measure-lines','au-measure-sparse');reader.scrollTop=scrollTop;
+    reader.dispatchEvent(new Event('au-scroll-transferred'));
+    // The table may switch between columns and records in its own resize frame.
+    // Reapply the same key/offset after that reflow rather than retaining pixels.
+    cancelAnimationFrame(transferFrame);
+    transferFrame=requestAnimationFrame(()=>{
+     transferFrame=0;
+     if(state.scope===scope&&root.classList.contains('au-mobile')===mobile){
+      if(target.items.length||mobile)restoreReader(owner,target);
+      reader.dispatchEvent(new Event('au-scroll-transferred'));
+     }
+    });
    }
-   const line=heights.length?Math.max(...heights):0;
-   const first=rows[0],last=rows[rows.length-1];
-   const span=first&&last?last.getBoundingClientRect().bottom-first.getBoundingClientRect().top:0;
-   const chrome=Math.max(0,reader.firstElementChild.getBoundingClientRect().height-span)+nav.getBoundingClientRect().height;
-   const height=pane.clientHeight;
-   let cap=sparseNeed!==undefined?Math.max(height/2,height-sparseNeed)
-    :Math.max(height/2,Math.min(height*2/3,height-chrome-10*line));
-   // Prioritise the chart on short panes, then taper back to the original
-   // ten-row allocation as height grows. Do not jump at 600 or 1100px.
-   // This remains a maximum: sparse upper content never gains blank filler.
-   if(height>500&&height<1400){
-    const reserve=Math.max(nav.getBoundingClientRect().height+120,Math.min(height*.45,chrome+2*line));
-    const shortCap=Math.max(cap,height-reserve);
-    const weight=Math.min(1,(height-500)/100,(1400-height)/300);
-    cap+=weight*(shortCap-cap);
-   }
-   const rounded=Math.floor(cap);
-   // Flooring a fractional cap can leave only the summary's bottom border
-   // outside the scrollport. Fit that measured final pixel, but do not
-   // enlarge genuinely scrolling content or take the reader's last row.
-   const upper=pane.querySelector('.au-upper');
-   const bottom=upper.lastElementChild?.getBoundingClientRect().bottom-upper.getBoundingClientRect().top+upper.scrollTop;
-   const value=(bottom>rounded&&bottom<=rounded+1&&reader.clientHeight>120?Math.ceil(bottom):rounded)+'px';
-   if(pane.style.getPropertyValue('--au-upper-cap')!==value)pane.style.setProperty('--au-upper-cap',value);
-  }
+  };
   const schedule=()=>{if(!frame)frame=requestAnimationFrame(measure)};
-  const resize=new ResizeObserver(schedule);resize.observe(root);
-  const content=root.querySelector('.au-reader-content');if(content)resize.observe(content);
-  const mutations=new MutationObserver(schedule);mutations.observe(root,{subtree:true,childList:true,characterData:true});
-  root.addEventListener('toggle',schedule,true);root.addEventListener('au-reflow',schedule);schedule();
-  return()=>{disposed=true;resize.disconnect();mutations.disconnect();root.removeEventListener('toggle',schedule,true);root.removeEventListener('au-reflow',schedule);cancelAnimationFrame(frame)};
+  const observer=new ResizeObserver(schedule);
+  observer.observe(root);
+  schedule();
+  return()=>{observer.disconnect();cancelAnimationFrame(frame);cancelAnimationFrame(transferFrame)};
  },[]);
- return h('div',{ref:state.attach,className:'au-ledger au-pane p-4'},children);
+ return h('div',{ref:node=>{state.root=node},className:'au-ledger au-pane p-4'},children);
 }
 function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
  const [expanded,setExpanded]=useState({});
@@ -1790,6 +1944,23 @@ function viewTokens(s,key,format=short){return !s?.attempts?'0':knownTokens(s,ke
 function valueFor(s,mode){if(!s?.attempts)return 0;if(mode==='Cost')return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]||0)<s.attempts)?Number(s.known_cost_usd):null;return s.attempts>(s.missing_fields?.total_tokens||0)?Number(s.known?.total_tokens):null}
 function UsageChart({data,mode,onSelectRange}){
  const drag=useRef(null),chartRef=useRef(null),[selection,setSelection]=useState(null);
+ const [chartWidth,setChartWidth]=useState(760),[plotSize,setPlotSize]=useState(null);
+ useEffect(()=>{
+  const node=chartRef.current;if(!node||typeof ResizeObserver==='undefined')return;
+  const svg=node.querySelector('svg');
+  const observer=new ResizeObserver(()=>{
+   const width=node.clientWidth;
+   if(width)setChartWidth(previous=>Math.abs(previous-width)>1?width:previous);
+   // Match the viewBox to the rendered SVG in both pane modes. Otherwise
+   // the 760×258 → compact 160-high switch scales the mobile plot again
+   // around 800px, despite its CSS height remaining unchanged.
+   const size=svg?{width:svg.clientWidth,height:svg.clientHeight}:null;
+   setPlotSize(previous=>size&&size.width&&size.height?
+    previous&&Math.abs(previous.width-size.width)<1&&Math.abs(previous.height-size.height)<1?previous:size:
+    previous===null?previous:null);
+  });
+  observer.observe(node);if(svg)observer.observe(svg);return()=>observer.disconnect();
+ },[]);
  useEffect(()=>{
   const blurOutside=e=>{const chart=chartRef.current;if(chart&&e.target.closest?.('.au-plot-hit')!==chart.querySelector('.au-plot-hit')){if(chart.contains(e.target))e.preventDefault();if(document.activeElement===chart)chart.blur()}};
   document.addEventListener('pointerdown',blurOutside,true);
@@ -1797,7 +1968,11 @@ function UsageChart({data,mode,onSelectRange}){
  },[]);
  useEffect(()=>{drag.current=null;setSelection(null);setHover(null)},[data?.window?.start,data?.window?.end,mode]);
  const [hover,setHover]=useState(null),points=data?.trend?.buckets||[],unit=data?.trend?.unit||'day',cost=mode==='Cost',vals=points.map(p=>valueFor(p,mode)),max=Math.max(1,...vals.filter(v=>v!=null)),top=max*1.15;
- const W=760,H=258,L=65,R=18,T=14,B=39,w=W-L-R,hg=H-T-B,plotStart=points[0]?.start||0,plotEnd=points[points.length-1]?.end||plotStart+1;
+ const compact=chartWidth<760,mobilePlot=!!chartRef.current?.closest('.au-mobile'),measuredPlot=!!plotSize;
+ const W=measuredPlot?plotSize.width:compact?Math.max(180,chartWidth):760,H=measuredPlot?plotSize.height:compact?160:258;
+ // Retain the 849px plot height below the pane breakpoint. Compact labels
+ // may reflow horizontally, but must not trigger a second vertical shrink.
+ const L=65,R=compact?12:18,T=mobilePlot?14:compact?8:14,B=mobilePlot?17:compact?12:chartWidth<900?27:39,w=W-L-R,hg=H-T-B,plotStart=points[0]?.start||0,plotEnd=points[points.length-1]?.end||plotStart+1;
  const xx=i=>L+((points[i]?.start??plotStart)-plotStart)/Math.max(1,plotEnd-plotStart)*w,yy=v=>H-B-(v/top)*hg;
  // Use real rendered bucket edges on the shared half-hour clock grid, not
  // clipped off-grid endpoints or synthetic sample timestamps. Data buckets
@@ -1834,7 +2009,7 @@ function UsageChart({data,mode,onSelectRange}){
  h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
  h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'}),
- ...[0,Math.floor((points.length-1)/2),points.length-1].filter((n,i,a)=>n>=0&&n<points.length&&a.indexOf(n)===i).map(i=>h('text',{key:i,x:xx(i),y:H-10,textAnchor:i===0?'start':i===points.length-1?'end':'middle',className:'au-axis'},stamp(points[i].start))),
+ ...[0,Math.floor((points.length-1)/2),points.length-1].filter((n,i,a)=>n>=0&&n<points.length&&a.indexOf(n)===i).map(i=>h('text',{key:i,x:xx(i),y:compact?H-2:H-10,textAnchor:i===0?'start':i===points.length-1?'end':'middle',className:'au-axis'},stamp(points[i].start))),
  active?h('line',{x1:xx(hover),x2:xx(hover),y1:T,y2:H-B,className:'au-crosshair'}):null,
  active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null,
  selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
@@ -1863,7 +2038,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
   return h('span',{title:missingFieldNote(s,key)},awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
  const groups=data?.provider_groups||[];
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
-   h('span',{},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
+   h('span',{title:(uiNames[g.provider]||g.provider)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage))));
@@ -1877,9 +2052,8 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  metric('Cache savings',savingsValue(s),(s?.savings_missing?.cache_savings_usd?count(s.savings_missing.cache_savings_usd)+' incomplete savings estimates · subtotal':'Net of cache-write premium'),'Estimated read discount minus extra cache-write cost at the same rates. Incomplete estimates can reflect unavailable token fields, not just missing prices.'),
  h('button',{className:'au-subagent-card','data-testid':'subagent-summary','aria-pressed':agent==='subagent',onClick:onSubagents,title:'Filter to subagent requests. These tokens are already included in the total.'},
  h('span',{className:'au-muted'},'Subagent tokens'),h('span',{className:'au-number'},viewTokens(data?.subagent_summary,'total_tokens')),
- h('span',{className:'au-muted'},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
- h('span',{className:'au-muted',title:peakTitle(data?.subagent_summary?.peak_observed,data?.coverage)},peakLabel(data?.subagent_summary?.peak_observed,data?.coverage)),
- h('span',{className:'au-muted'},(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% of known tokens · '+selectedCost(data?.subagent_summary)))),
+ h('span',{className:'au-muted',title:count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
+ h('span',{className:'au-muted',title:peakTitle(data?.subagent_summary?.peak_observed,data?.coverage)+' · '+(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% of known tokens · '+selectedCost(data?.subagent_summary)},'Peak '+peakValue(data?.subagent_summary?.peak_observed,data?.coverage)+' · '+(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% · '+selectedCost(data?.subagent_summary)))),
  mode!=='Limits'?h('div',{className:'au-hero','data-testid':'usage-hero'},h('div',{className:'au-hero-total'},
  h('div',{className:'au-big'},mode==='Cost'?selectedCost(s):t('total_tokens')),
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
@@ -3118,33 +3292,43 @@ function UsagePageScope({selected}){
     displayData.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,readable(g,'task')].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
  if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),view:skillsView,setView:setSkillsView,model:skillsModel,setModel:setSkillsModel,skill:skillsSkill,setSkill:setSkillsSkill,refreshKey:skillsRefresh,windowSeconds});
- return h(AnalyticsPane,{},h('style',{},ledgerCss),
+ const scrollScope=navigationContext+JSON.stringify(requestFilters)+tab+(tab==='Compressions'?compMode:'');
+ return h(AnalyticsPane,{resetKey:scrollScope},h('style',{},ledgerCss),
   h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
   h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,
   provider?h(ProviderLimits,{quota,providerId:provider,label,selected,hiddenIds}):null,
+  h('div',{className:'au-analytics-controls'},
   h('div',{className:'au-view-controls'},
    h('div',{className:'au-segment au-mode-buttons',role:'group','aria-label':'Usage display'},...['Cost','Tokens'].map(v=>h('button',{key:v,'aria-pressed':displayMode===v,onClick:()=>{setDisplayMode(v);}},v))),
    h('select',{className:'au-mode-select','aria-label':'Usage display',value:displayMode,onChange:e=>{setDisplayMode(e.target.value);}},...['Cost','Tokens'].map(v=>h('option',{key:v,value:v},v))),
    h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
-   h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l)))),
+   h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
+   period==='custom'?h('details',{className:'au-custom-range'},h('summary',{},'Custom range'),h('div',{className:'au-custom-panel',role:'group','aria-label':'Custom time bounds'},
+    h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}),
+    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
+    !customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart. No data is requested until valid.'):null)):null)),
   h('div',{className:'au-toolbar au-filters'},
-  period==='custom'?h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}):null,
-  period==='custom'?h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}):null,
-  filterTest?h('button',{type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
-  period==='custom'&&!customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart. No data is requested until valid.'):null,
+  filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
   h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(headerData?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
   h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
   session?h('select',{'aria-label':'Session scope',value:sessionScope,onChange:e=>editRequestFilters({sessionScope:e.target.value})},h('option',{value:'family'},'Session + descendants'),h('option',{value:'exact'},'This session only')):null,
-  subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+(identityLabels.get(subagentId)||subagentId.slice(-14))+' ×'):null,
-  (project||agent||session||subagentId||model||bucketStart!=null)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
-  !aggregate&&h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
-  h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
-  headerData?.tests?.length?h('select',{'aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
+  subagentId?h('button',{className:'au-subagent-action',onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Subagent '+(identityLabels.get(subagentId)||subagentId.slice(-14))+' ×'):null,
+  (project||agent||session||subagentId||model||bucketStart!=null)?h('button',{className:'au-clear-action',onClick:clearRequestFilters},'Clear filters'):null,
+  !aggregate&&h('button',{className:'au-test-action',onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'),
+  h('button',{className:'au-export-action',onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
+  h('details',{className:'au-filter-actions'},h('summary',{},'Actions'),h('div',{className:'au-filter-action-panel'},
+   filterTest?h('button',{type:'button',onClick:()=>{setFilterTest('');setTestId('')}},'Remove saved marker'):null,
+   subagentId?h('button',{onClick:()=>editRequestFilters({subagentId:''}),title:subagentId},'Remove subagent filter'):null,
+   (project||agent||session||subagentId||model||bucketStart!=null)?h('button',{onClick:clearRequestFilters},'Clear filters'):null,
+   !aggregate?h('button',{onClick:()=>test(testId?'stop':'start')},testId?'End test marker':'Start test marker'):null,
+   h('button',{onClick:exportAll,disabled:busy||!data?.summary},busy?'Exporting…':'Export request CSV'),
+   headerData?.tests?.length?h('select',{'aria-label':'Saved tests in actions',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null)),
+  headerData?.tests?.length?h('select',{className:'au-saved-tests','aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
   h(Coverage,{data:headerData}),
   h(Summary,{data:headerData,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
-  h(Reader,{resetKey:navigationContext+JSON.stringify(requestFilters)+tab+(tab==='Compressions'?compMode:''),id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
+  h(Reader,{resetKey:scrollScope,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
   err?notice(err):null,
   ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
@@ -3152,9 +3336,9 @@ function UsagePageScope({selected}){
   body||h('p',{className:'au-muted',role:'status','data-testid':'ledger-view-pending'},data?.summary===null?'Recorded usage unavailable for this selection.':'Loading '+tab+(tab==='Overview'?' · '+breakdownGroup:'')+'…'),
   field&&displayData?.summary?h('div',{className:'au-toolbar','data-testid':'record-pagination'},
    h('span',{className:'au-muted'},'Showing '+shownRows.length+' of '+displayData.list_count+' records'),
-   currentRecord?.frozen?h('button',{onClick:()=>setRecordState(null),title:'Return to live ten-record pages.'},'Exit frozen view'):
-   h('button',{onClick:()=>extendRecords(),disabled:currentRecord?.busy||displayData.list_next_offset==null},currentRecord?.busy?'Loading…':'Load more'),
-   !currentRecord?.frozen?h('button',{onClick:()=>extendRecords(true),disabled:currentRecord?.busy||!displayData.list_count,title:'Capture every record in this selection from one read. Large reports can take time.'},'View all records'):null,
+   currentRecord?.frozen?h('button',{onClick:()=>setRecordState(null),title:'Return to live ten-record pages.'},'Exit frozen view'):null,
+   !currentRecord?.frozen&&(displayData.list_next_offset!=null||currentRecord?.busy||currentRecord?.error)?h('button',{onClick:()=>extendRecords(),disabled:currentRecord?.busy||displayData.list_next_offset==null},currentRecord?.busy?'Loading…':'Load more'):null,
+   !currentRecord?.frozen&&(displayData.list_next_offset!=null||currentRecord?.busy||currentRecord?.error)?h('button',{onClick:()=>extendRecords(true),disabled:currentRecord?.busy,title:'Capture every record in this selection from one read. Large reports can take time.'},'View all records'):null,
    currentRecord?.frozen?h('span',{className:'au-muted',title:displayData.list_provenance||'One selected-profile copied snapshot.'},'Frozen · '+(aggregate?'per-profile snapshots':'selected-profile snapshot')):null,
    currentRecord?.error?h('span',{role:'alert'},currentRecord.error):null):null)))
 }
