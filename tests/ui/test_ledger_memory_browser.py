@@ -9,6 +9,12 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def custom_bounds(page):
+    """The Custom start/end inputs live in the closed Custom range disclosure."""
+    page.evaluate("document.querySelectorAll('.au-custom-range').forEach(d=>{d.open=true})")
+    return page
+
+
 def freshness(page):
     page.get_by_test_id('connection-status').hover()
     return page.get_by_test_id('ledger-freshness')
@@ -39,8 +45,8 @@ def completed_selection_regressions(browser):
     page.get_by_role('tab', name='All providers', exact=True).click()
     expect(freshness(page)).to_be_visible()
     period.get_by_role('button', name='Custom', exact=True).click()
-    page.get_by_label('Window start').fill('2026-09-24T00:00')
-    page.get_by_label('Window end').fill('2026-09-25T00:00')
+    custom_bounds(page).get_by_label('Window start').fill('2026-09-24T00:00')
+    custom_bounds(page).get_by_label('Window end').fill('2026-09-25T00:00')
     expect(freshness(page)).to_be_visible()
     # Mutate the opaque hint while the first Custom GET is held, before the
     # post-read check. The completed response still belongs to these dates.
@@ -81,7 +87,7 @@ def completed_selection_regressions(browser):
     assert page.evaluate('([key,prior])=>ledgerMemory.get(key).received>=prior',
                          [custom_key, prior_received])
     # Another fixed Custom date is a cold selection, not the old date's body.
-    page.get_by_label('Window end').fill('2026-09-26T00:00')
+    custom_bounds(page).get_by_label('Window end').fill('2026-09-26T00:00')
     page.wait_for_function('''()=>held.some(r=>new URLSearchParams(r.path.split('?')[1]).get('end')
       ===String(new Date('2026-09-26T00:00').getTime()/1000))''')
     expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Requests')
