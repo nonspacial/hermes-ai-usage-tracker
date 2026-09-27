@@ -1,7 +1,7 @@
 """Per-profile durable event ledger. Request accounting is independent of Hermes state.db; metadata lookup is read-only."""
 from __future__ import annotations
 import contextvars, json, os, socket, sqlite3, threading, time, uuid, weakref
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -115,6 +115,85 @@ _WRITERS_LOCK=threading.Lock()
 _FORK_ORPHANS=[]
 _HOOKS_REGISTERED=False
 _EXITING=False
+# At rest the ledger must look as it did with close-after-every-write: every
+# commit in the main file, WAL empty. So a persistent Store is settled with
+# PRAGMA wal_checkpoint(TRUNCATE) when its last in-process unit of work ends
+# (a unit is the outermost producer hook, hook_scope, or a checkout outside a
+# hook): like the former "last close checkpoints", concurrent hook threads of
+# one process never checkpoint under each other, only the last to finish.
+# Hooks thereby pay one checkpoint instead of connect/PRAGMA/close per write.
+# The settled handle stays open for the rest of the burst only: once it has
+# been unused for IDLE_SECONDS a daemon thread (one per process, never a hook
+# thread) checkpoints and closes it, so at rest there is no open handle and,
+# as with per-write close, no -wal/-shm sidecar. A settle never waits on the
+# hook thread; one that cannot complete (another connection reading an old
+# snapshot, another process writing) is retried by the same thread every
+# SETTLE_RETRY_SECONDS, waiting up to SETTLE_RETRY_WAIT_MS each time, at most
+# SETTLE_RETRIES times (the next write settles again in any case).
+IDLE_SECONDS=1.0
+SETTLE_RETRY_SECONDS=1.0
+SETTLE_RETRY_WAIT_MS=1000
+SETTLE_RETRIES=30
+_IDLE=weakref.WeakKeyDictionary()
+_IDLE_COND=threading.Condition()
+_REAPER=None
+_HOOK_SETTLE: contextvars.ContextVar['_HookUnits | None']=contextvars.ContextVar('usage_hook_settle',default=None)
+
+def _identity(path):
+    try: st=os.stat(path)
+    except OSError: return None
+    return (st.st_dev,st.st_ino)
+
+def _checkpoint(c,wait_ms=0):
+    """PRAGMA wal_checkpoint(TRUNCATE); hooks never wait on busy readers or
+    writers (wait_ms=0), the idle reaper waits up to wait_ms. True when every
+    frame reached the main file and the WAL was truncated."""
+    try:
+        c.execute(f'PRAGMA busy_timeout={int(wait_ms)}')
+        try: row=c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+        finally: c.execute('PRAGMA busy_timeout=2000')
+        return row is not None and row[0]==0 and row[1]==row[2]
+    except sqlite3.Error: return False
+    finally:
+        if isinstance(c,_WriterConnection): c.end_checkout()
+
+def _schedule_retry(store,attempt=1):
+    # attempt 0 = idle close (due IDLE_SECONDS after the handle's last use).
+    global _REAPER
+    if attempt>SETTLE_RETRIES: return
+    due=(store.__dict__.get('_last_used') or time.monotonic())+IDLE_SECONDS if attempt==0 else time.monotonic()+SETTLE_RETRY_SECONDS
+    with _IDLE_COND:
+        if _EXITING: return
+        _IDLE[store]=(due,attempt)
+        if _REAPER is None:
+            _REAPER=threading.Thread(target=_reap,name='usage-ledger-settle',daemon=True)
+            _REAPER.start()
+        else: _IDLE_COND.notify()
+
+def _reap():
+    # Exits (and is restarted by the next checkout) once nothing is pending.
+    global _REAPER
+    while True:
+        with _IDLE_COND:
+            while True:
+                now=time.monotonic()
+                if _EXITING or not _IDLE:
+                    _REAPER=None; return
+                ready=[(s,v[1]) for s,v in list(_IDLE.items()) if v[0]<=now]
+                if ready:
+                    for s,_ in ready: _IDLE.pop(s,None)
+                    break
+                _IDLE_COND.wait(min(v[0] for v in _IDLE.values())-now)
+        for s,attempt in ready:
+            try:
+                # A unit in progress settles (and re-arms the close) when it ends.
+                if s.__dict__.get('_units'): pass
+                elif attempt==0: s._idle_close()
+                elif s._settle(SETTLE_RETRY_WAIT_MS): _schedule_retry(s,0)
+                else: _schedule_retry(s,attempt+1)
+            except Exception: pass   # never let the retry thread die on one store
+            del s
+        ready=None
 
 class _WriterConnection(sqlite3.Connection):
     """Tracks cursors of one checkout so none outlives it with an active
@@ -144,20 +223,32 @@ def _close_writers():
     # in a daemon thread is left alone rather than closed underneath it. Any
     # later write in this exiting process uses a fresh per-call connection.
     global _EXITING
-    _EXITING=True
+    with _IDLE_COND:
+        _EXITING=True
+        _IDLE_COND.notify_all()
     with _WRITERS_LOCK: stores=list(_WRITERS)
     for store in stores:
         store.close_writer(timeout=1)
 
 def _after_fork():
     # Never use or close an inherited SQLite handle in a forked child. The
-    # child is single-threaded here, so no lock is taken (one held by another
-    # parent thread at fork time would never be released in the child).
+    # child is single-threaded here, so no lock is taken; every module lock a
+    # parent thread may have held at fork time is re-created instead (it would
+    # never be released in the child). The parent's settle-retry thread does
+    # not exist in the child; the next incomplete settle starts a new one.
+    global LOCK,_WRITERS_LOCK,_NOTIFY_LOCK,_IDLE_COND,_IDLE,_REAPER
+    LOCK=threading.RLock()
+    _WRITERS_LOCK=threading.Lock()
+    _NOTIFY_LOCK=threading.Lock()
+    _IDLE_COND=threading.Condition()
+    _IDLE=weakref.WeakKeyDictionary()
+    _REAPER=None
     for store in list(_WRITERS):
         state=store.__dict__.get('_writer')
         if state is not None:_FORK_ORPHANS.append(state)
         store.__dict__['_writer']=None
         store.__dict__['_writer_lock']=threading.Lock()
+        store.__dict__['_units']=0      # parent threads' units never end here
 
 def _register_process_hooks():
     # Lazily, by the first persistent writer only: analytics reload
@@ -173,13 +264,34 @@ def _register_process_hooks():
 
 _HOOK_PROJECTS: contextvars.ContextVar[dict | None]=contextvars.ContextVar('usage_hook_projects',default=None)
 
+class _HookUnits(set):
+    """Persistent Stores whose unit of work is the current hook. ``closed``
+    once the hook has ended (a copied context may still reference it)."""
+    closed=False
+
 @contextmanager
 def hook_scope():
-    """One producer hook: projects.db claims are read at most once per root."""
-    token=_HOOK_PROJECTS.set({}) if _HOOK_PROJECTS.get() is None else None
+    """One producer hook: projects.db claims are read at most once per root,
+    and the hook is one unit of work for each persistent Store it writes:
+    when the outermost scope exits and no other unit of that Store is in
+    progress in this process, the Store is settled (WAL checkpointed into the
+    main file and truncated).
+
+    Work started with contextvars.copy_context() (or asyncio tasks) inside a
+    hook shares these per-hook objects: while the hook runs its writes join
+    the hook's unit; once the hook has returned they are their own units.
+    """
+    outer=_HOOK_PROJECTS.get() is None
+    if not outer:
+        yield; return
+    units=_HookUnits()
+    token=_HOOK_PROJECTS.set({}); settle_token=_HOOK_SETTLE.set(units)
     try: yield
     finally:
-        if token is not None: _HOOK_PROJECTS.reset(token)
+        _HOOK_SETTLE.reset(settle_token); _HOOK_PROJECTS.reset(token)
+        with _WRITERS_LOCK: units.closed=True; stores=list(units)
+        for store in stores:
+            store._end_unit()
 
 def projects_for(root):
     from .projects import read_projects
@@ -243,7 +355,38 @@ class Store:
         seed(self)
     @contextmanager
     def db(self):
-        if self.persistent and not _EXITING:
+        if not self.persistent:
+            c=self._connect()
+            try:
+                yield c; c.commit()
+            except BaseException:
+                c.rollback(); raise
+            finally: c.close()
+            return
+        own=self._begin_unit()
+        try:
+            with self._checkout() as c:
+                yield c
+        finally:
+            if own: self._end_unit()
+    def _begin_unit(self):
+        # Inside a hook the unit is the hook (ended by hook_scope); outside a
+        # hook it is this checkout. True when the caller must end it.
+        units=_HOOK_SETTLE.get()
+        with _WRITERS_LOCK:
+            hook=units is not None and not units.closed
+            if hook and self in units: return False
+            self.__dict__['_units']=self.__dict__.get('_units',0)+1
+            if hook: units.add(self)
+        return not hook
+    def _end_unit(self):
+        # The last in-process unit to end settles (never raises).
+        with _WRITERS_LOCK:
+            n=max(0,self.__dict__.get('_units',0)-1); self.__dict__['_units']=n
+        if n==0: self.settle()
+    @contextmanager
+    def _checkout(self):
+        if not _EXITING:
             lock=self.__dict__.get('_writer_lock')
             if lock is None:
                 with _WRITERS_LOCK: lock=self.__dict__.setdefault('_writer_lock',threading.Lock())
@@ -255,14 +398,70 @@ class Store:
                     with self._persistent_db() as c:
                         yield c
                 finally:
+                    self.__dict__['_last_used']=time.monotonic()
                     lock.release()
                 return
+        # A fresh-connection fallback is settled with its unit like any other
+        # (beside a live persistent handle it leaves the WAL in place).
         c=self._connect()
         try:
             yield c; c.commit()
         except BaseException:
             c.rollback(); raise
         finally: c.close()
+    def settle(self):
+        """Settle now without waiting; hand an incomplete settle to the retry
+        thread, and a settled open handle to the idle close."""
+        try:
+            if not self._settle(0): _schedule_retry(self)
+            elif self.__dict__.get('_writer') is not None: _schedule_retry(self,0)
+        except Exception: pass   # at-rest hygiene never fails a write
+    def _idle_close(self):
+        """Settle-thread only: checkpoint and close a handle unused for
+        IDLE_SECONDS (a busy or recently used one is re-armed)."""
+        lock=self.__dict__.get('_writer_lock')
+        if lock is None or self.__dict__.get('_writer') is None: return
+        if time.monotonic()<(self.__dict__.get('_last_used') or 0)+IDLE_SECONDS or not lock.acquire(blocking=False):
+            _schedule_retry(self,0); return
+        done=True
+        try:
+            state=self.__dict__.get('_writer')
+            if state is None or self.__dict__.get('_units'): return   # a live unit re-arms it
+            if state[2]==os.getpid() and state[1] is not None and state[1]==_identity(self.path):
+                done=_checkpoint(state[0],SETTLE_RETRY_WAIT_MS)
+            self._discard_writer()   # the last close also removes -wal/-shm
+        finally: lock.release()
+        if not done: _schedule_retry(self)
+    def _settle(self,wait_ms=0):
+        """TRUNCATE-checkpoint the ledger (the at-rest guarantee). True when
+        the WAL is empty, or when another thread holds the handle (a checkout
+        belongs to a unit that settles when it ends; a concurrent settle
+        re-checks ``_settle_due`` after releasing it).
+
+        A replaced/removed file is never checkpointed through the stale
+        handle (its WAL was settled at its last write; the next checkout
+        reconnects). Without a usable handle (discarded after a reader's TEMP
+        objects or an error, or closed) a short connection settles instead.
+        """
+        lock=self.__dict__.get('_writer_lock')
+        if lock is None: return True
+        self.__dict__['_settle_due']=True
+        done=True
+        while self.__dict__.get('_settle_due'):
+            if not lock.acquire(blocking=False): return True
+            try:
+                self.__dict__['_settle_due']=False
+                state=self.__dict__.get('_writer')
+                if state is None:
+                    # mode=rw: a removed ledger is never re-created by a settle.
+                    try:
+                        uri=Path(os.path.abspath(self.path)).as_uri()+'?mode=rw'
+                        with closing(sqlite3.connect(uri,uri=True,timeout=0)) as c: done=_checkpoint(c,wait_ms)
+                    except sqlite3.Error: done=not self.path.exists()
+                elif state[2]==os.getpid() and state[1] is not None and state[1]==_identity(self.path):
+                    done=_checkpoint(state[0],wait_ms)
+            finally: lock.release()
+        return done
     def _connect(self,*,shared=False):
         # shared: the persistent writer is used by whichever thread holds
         # _writer_lock (never concurrently), so thread affinity is not checked.
@@ -284,8 +483,7 @@ class Store:
         transaction, or a replaced/removed database file.
         """
         state=self.__dict__.get('_writer')
-        try: identity=os.stat(self.path); identity=(identity.st_dev,identity.st_ino)
-        except OSError: identity=None
+        identity=_identity(self.path)
         if state is not None and (identity is None or state[1]!=identity or state[2]!=os.getpid()):
             self._discard_writer()
             state=None
@@ -301,9 +499,7 @@ class Store:
                 state=None
         if state is None:
             c=self._connect(shared=True)
-            try: st=os.stat(self.path); identity=(st.st_dev,st.st_ino)
-            except OSError: identity=None
-            state=(c,identity,os.getpid())
+            state=(c,_identity(self.path),os.getpid())
             self.__dict__['_writer']=state
             with _WRITERS_LOCK: _WRITERS.add(self)
             _register_process_hooks()

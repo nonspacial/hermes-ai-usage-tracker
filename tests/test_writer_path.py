@@ -382,10 +382,8 @@ def test_persistent_writer_reuse_reconnect_and_threads(tmp_path, monkeypatch):
         assert not errors
         with sqlite3.connect(s.path) as c:
             assert c.execute("SELECT COUNT(*) FROM requests WHERE id LIKE 't%-%'").fetchone()[0] == 80
-        # A replaced database file is never written through a stale handle.
-        s.close_writer()
-        with s.db() as c:
-            c.execute('SELECT 1')
+        # A replaced database file is never written through a stale handle
+        # (no close_writer() first; see also the rollback test below).
         replacement = s.path.with_name('replacement.sqlite3')
         with sqlite3.connect(s.path) as source, sqlite3.connect(replacement) as target:
             source.backup(target)
@@ -394,6 +392,258 @@ def test_persistent_writer_reuse_reconnect_and_threads(tmp_path, monkeypatch):
         with sqlite3.connect(s.path) as c:
             assert c.execute("SELECT COUNT(*) FROM requests WHERE id='on-replacement'").fetchone()[0] == 1
     finally:
+        s.close_writer()
+
+
+def _wal(s):
+    wal = Path(str(s.path) + '-wal')
+    return wal.stat().st_size if wal.exists() else None
+
+
+def _integrity_and_count(path):
+    with sqlite3.connect(path) as c:
+        return (c.execute('PRAGMA integrity_check').fetchone()[0],
+                c.execute('SELECT COUNT(*) FROM requests').fetchone()[0])
+
+
+def test_main_file_rollback_under_live_producer_is_not_undone(tmp_path):
+    """Between writes the main file holds every commit and the WAL is empty,
+    so restoring an older main file under a live persistent handle is a clean
+    rollback: nothing stale is replayed over it (as with per-write close)."""
+    s = Store(tmp_path)
+    s.persistent = True
+    try:
+        for i in range(60):
+            s.request({'id': f'r{i}', 'started': i, 'session_id': 's', 'pad': 'x' * 3000}, 'request_started')
+        backup = s.path.with_name('backup.sqlite3')
+        with sqlite3.connect(s.path) as a, sqlite3.connect(backup) as b:
+            a.backup(b)
+        for i in range(60, 80):
+            s.request({'id': f'r{i}', 'started': i, 'session_id': 's', 'pad': 'y' * 3000}, 'request_started')
+        assert s.__dict__['_writer'] is not None           # handle still open: no close_writer()
+        assert _wal(s) in (None, 0)
+        # A main-file-only copy taken now is complete.
+        copy = s.path.with_name('copy.sqlite3')
+        import shutil
+        shutil.copyfile(s.path, copy)
+        assert _integrity_and_count(copy) == ('ok', 80)
+        os.replace(backup, s.path)
+        assert _integrity_and_count(s.path) == ('ok', 60)   # fresh reader, producer still live
+        s.request({'id': 'after', 'started': 1, 'session_id': 's'}, 'request_started')
+        assert _integrity_and_count(s.path) == ('ok', 61)
+    finally:
+        s.close_writer()
+    assert _integrity_and_count(s.path) == ('ok', 61)
+
+
+def test_hook_settles_wal_once_at_its_end(tmp_path, monkeypatch):
+    s = Store(tmp_path)
+    s.persistent = True
+    settled = []
+    original = storage._checkpoint
+    monkeypatch.setattr(storage, '_checkpoint', lambda c, *a: (settled.append(1), original(c, *a))[1])
+    try:
+        with storage.hook_scope():
+            s.request({'id': 'a', 'started': 1, 'session_id': 's'}, 'request_started')
+            with storage.hook_scope():                     # nested hook: same unit
+                s.request({'id': 'b', 'started': 2, 'session_id': 's'}, 'request_started')
+            assert _wal(s) > 0 and not settled             # one burst shares the handle
+        assert settled == [1] and _wal(s) == 0
+        s.request({'id': 'c', 'started': 3, 'session_id': 's'}, 'request_started')  # outside a hook
+        assert settled == [1, 1] and _wal(s) == 0
+        assert s.__dict__['_writer'] is not None
+    finally:
+        s.close_writer()
+
+
+def test_only_the_last_concurrent_unit_settles(tmp_path, monkeypatch):
+    """Like the former 'last close checkpoints': a hook ending while another
+    thread's hook is still in progress does not checkpoint under it."""
+    import contextvars
+    s = Store(tmp_path)
+    s.persistent = True
+    settled = []
+    original = storage._checkpoint
+    monkeypatch.setattr(storage, '_checkpoint', lambda c, *a: (settled.append(1), original(c, *a))[1])
+    inside, release = threading.Event(), threading.Event()
+    def long_hook():
+        with storage.hook_scope():
+            s.request({'id': 'long', 'started': 1, 'session_id': 's'}, 'request_started')
+            inside.set(); release.wait(10)
+    t = threading.Thread(target=long_hook); t.start()
+    try:
+        assert inside.wait(5)
+        with storage.hook_scope():
+            s.request({'id': 'short', 'started': 2, 'session_id': 's'}, 'request_started')
+        assert not settled and _wal(s) > 0                 # the long hook is still a live unit
+    finally:
+        release.set(); t.join()
+    assert settled == [1] and _wal(s) == 0                  # settled by the last unit to end
+    # A copied hook context used after its hook returned is its own unit.
+    with storage.hook_scope():
+        ctx = contextvars.copy_context()
+    ctx.run(lambda: s.request({'id': 'late', 'started': 3, 'session_id': 's'}, 'request_started'))
+    assert settled == [1, 1] and _wal(s) == 0 and s.__dict__['_units'] == 0
+    s.close_writer()
+    assert _integrity_and_count(s.path) == ('ok', 3)
+
+
+def test_idle_handle_is_closed_and_sidecars_removed(tmp_path, monkeypatch):
+    """At rest (IDLE_SECONDS after the last use) there is no open handle and
+    no -wal/-shm, exactly as with per-write close; a burst shares one handle."""
+    monkeypatch.setattr(storage, 'IDLE_SECONDS', 0.2)
+    s = Store(tmp_path)
+    s.persistent = True
+    opened = []
+    original = s._connect
+    monkeypatch.setattr(s, '_connect', lambda **kw: (opened.append(kw), original(**kw))[1])
+    try:
+        for i in range(5):
+            with storage.hook_scope():
+                s.request({'id': f'r{i}', 'started': i, 'session_id': 's'}, 'request_started')
+        assert opened == [{'shared': True}]                 # burst: one handle
+        deadline = time.monotonic() + 3
+        while s.__dict__.get('_writer') is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert s.__dict__.get('_writer') is None
+        assert not Path(str(s.path) + '-wal').exists() and not Path(str(s.path) + '-shm').exists()
+        # Sidecar housekeeping at rest (as before) cannot break the next write.
+        s.request({'id': 'next', 'started': 9, 'session_id': 's'}, 'request_started')
+        assert len(opened) == 2 and _integrity_and_count(s.path) == ('ok', 6)
+    finally:
+        s.close_writer()
+
+
+def test_settle_never_recreates_a_removed_ledger(tmp_path):
+    s = Store(tmp_path)
+    s.persistent = True
+    s.request({'id': 'a', 'started': 1, 'session_id': 's'}, 'request_started')
+    s.close_writer()
+    for suffix in ('', '-wal', '-shm'):
+        Path(str(s.path) + suffix).unlink(missing_ok=True)
+    assert s._settle() is True
+    s.settle()
+    assert not s.path.exists()
+
+
+def test_settle_blocked_by_reader_is_retried_off_the_hook_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, 'SETTLE_RETRY_SECONDS', 0.1)
+    s = Store(tmp_path)
+    s.persistent = True
+    try:
+        s.request({'id': 'a', 'started': 1, 'session_id': 's'}, 'request_started')
+        # A reader holding an old snapshot blocks the write's non-waiting settle.
+        reader = sqlite3.connect(s.path, isolation_level=None)
+        reader.execute('BEGIN'); reader.execute('SELECT COUNT(*) FROM requests').fetchone()
+        t = time.monotonic()
+        s.request({'id': 'b', 'started': 2, 'session_id': 's'}, 'request_started')
+        assert time.monotonic() - t < 0.5                  # the write never waited on the reader
+        assert _wal(s) > 0
+        reader.execute('COMMIT'); reader.close()
+        deadline = time.monotonic() + 3
+        while _wal(s) not in (None, 0) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert _wal(s) in (None, 0)                         # truncated once the reader let go
+        assert _integrity_and_count(s.path) == ('ok', 2)
+    finally:
+        s.close_writer()
+
+
+@pytest.mark.skipif(not hasattr(os, 'fork'), reason='fork unavailable')
+def test_fork_child_does_not_inherit_held_module_locks(tmp_path):
+    import warnings
+    s = Store(tmp_path)
+    s.persistent = True
+    s.request({'id': 'parent', 'started': 1, 'session_id': 's'}, 'request_started')   # registers fork hook
+    held, release = threading.Event(), threading.Event()
+    def hold():
+        with r._LOCK, storage.LOCK, storage._WRITERS_LOCK, storage._NOTIFY_LOCK, storage._IDLE_COND:
+            held.set(); release.wait(10)
+    holder = threading.Thread(target=hold); holder.start()
+    assert held.wait(5)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', DeprecationWarning)
+            pid = os.fork()
+        if pid == 0:                                        # pragma: no cover - child
+            code = 1
+            try:
+                r.store(str(tmp_path))                      # recorder._LOCK
+                s.request({'id': 'child', 'started': 2, 'session_id': 's'}, 'request_started')
+                code = 0
+            finally:
+                os._exit(code)
+        deadline = time.monotonic() + 30
+        while True:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done: break
+            if time.monotonic() > deadline:
+                os.kill(pid, 9); os.waitpid(pid, 0)
+                pytest.fail('forked child deadlocked on an inherited lock')
+            time.sleep(0.05)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        release.set(); holder.join()
+        s.close_writer()
+    with sqlite3.connect(s.path) as c:
+        assert {r[0] for r in c.execute('SELECT id FROM requests')} == {'parent', 'child'}
+        assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+
+
+def test_concurrent_hook_threads_with_heartbeat(tmp_path, monkeypatch):
+    """Reviewer scenario, bounded: 4 threads x 40 hooks, heartbeat every 50 ms."""
+    from _hermes_ai_usage_ledger_v2 import adapters, connection
+    monkeypatch.setattr(adapters, 'install', lambda: None)
+    monkeypatch.setattr(connection, 'HEARTBEAT_SECONDS', 0.05)
+    monkeypatch.setattr(storage, 'SETTLE_RETRY_SECONDS', 0.1)
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    r._STORES.clear(); r._HEALTH.clear(); r.ADAPTERS.clear(); r.FAILURES = 0; r.LAST_FAILURE_AT = 0
+    threads_n, hooks = 4, 40
+    errors = []
+    def worker(n):
+        try:
+            for j in range(hooks):
+                kw = dict(api_request_id=f'a{n}-{j}', session_id=f's{n}', turn_id=f't{n}-{j // 10}',
+                          provider='openai-codex', api_mode='codex_responses', model='m', platform='cli',
+                          started_at=time.time())
+                r.pre(**kw)
+                if j % 3 == 0:
+                    r.capture_raw({'usage': {'input_tokens': 10, 'output_tokens': 2}}, source='native_terminal_usage')
+                if j % 7 == 0:
+                    r.error(session_id=f's{n}', api_request_id=f'a{n}-{j}', error={'type': 'TimeoutError'})
+                else:
+                    r.post(**kw, ended_at=time.time(), usage={'input_tokens': 9, 'output_tokens': 1, 'total_tokens': 10})
+                if j % 10 == 9:
+                    r.session_end(session_id=f's{n}', turn_id=f't{n}-{j // 10}', completed=True)
+        except Exception as exc:  # pragma: no cover - reported below
+            errors.append(repr(exc))
+    r.start_heartbeat(str(tmp_path))
+    try:
+        workers = [threading.Thread(target=worker, args=(n,)) for n in range(threads_n)]
+        [t.start() for t in workers]; [t.join() for t in workers]
+    finally:
+        r.stop_heartbeats()
+    s = r.store(str(tmp_path.resolve()))
+    try:
+        assert not errors
+        time.sleep(0.3)                                     # heartbeat thread observes stop
+        deadline = time.monotonic() + 3                     # a contended settle is retried
+        while _wal(s) not in (None, 0) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert _wal(s) in (None, 0)                         # at rest after the burst
+        failed = sum(1 for j in range(hooks) if j % 7 == 0) * threads_n
+        with sqlite3.connect(s.path) as c:
+            assert c.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+            assert dict(c.execute('SELECT status,COUNT(*) FROM requests GROUP BY status').fetchall()) == {
+                'completed': threads_n * hooks - failed, 'failed': failed}
+            assert inc.supported(c)
+            size = f"COALESCE(SUM({inc._size('')}),0)"
+            assert c.execute('SELECT total FROM analytics_change_bytes').fetchone()[0] == \
+                c.execute(f'SELECT {size} FROM analytics_changes').fetchone()[0]
+    finally:
+        # Contended hooks may log 'database is locked' (as before this change);
+        # never leak that failure state into later health/status tests.
+        r._STORES.clear(); r._HEALTH.clear(); r.FAILURES = 0; r.LAST_FAILURE_AT = 0; r.ADAPTERS.clear()
         s.close_writer()
 
 

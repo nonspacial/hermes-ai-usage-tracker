@@ -17,6 +17,13 @@ _HEARTBEATS={}
 _REGISTERED_ROOTS=set()
 _HEALTH={}
 
+def _reset_lock_after_fork():
+    # A heartbeat/hook thread of the parent may hold _LOCK at fork time; it
+    # would never be released in the (single-threaded) child.
+    global _LOCK
+    _LOCK=threading.RLock()
+if hasattr(os,'register_at_fork'):os.register_at_fork(after_in_child=_reset_lock_after_fork)
+
 def text(v,limit=240):return str(v or '')[:limit]
 def timestamp(v):
     if isinstance(v,(int,float)) and v>0:return float(v)
@@ -37,7 +44,9 @@ def safe(fn):
     @functools.wraps(fn)
     def wrapper(*a,**kw):
         global FAILURES,LAST_FAILURE_AT
-        # One hook = one projects.db read per profile (storage.hook_scope).
+        # One hook = one projects.db read per profile and one unit of work per
+        # written Store, settled when the last concurrent unit ends
+        # (storage.hook_scope). copy_context() inside a hook shares its scope.
         try:
             with hook_scope():return fn(*a,**kw)
         except Exception as exc:
