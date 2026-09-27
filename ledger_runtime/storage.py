@@ -288,10 +288,16 @@ def hook_scope():
     token=_HOOK_PROJECTS.set({}); settle_token=_HOOK_SETTLE.set(units)
     try: yield
     finally:
-        _HOOK_SETTLE.reset(settle_token); _HOOK_PROJECTS.reset(token)
-        with _WRITERS_LOCK: units.closed=True; stores=list(units)
-        for store in stores:
-            store._end_unit()
+        # A reset can raise (e.g. the scope exited in another Context); the
+        # unit must still end, else _units sticks >0 and the WAL never
+        # truncates again. The reset error still propagates.
+        try:
+            try: _HOOK_SETTLE.reset(settle_token)
+            finally: _HOOK_PROJECTS.reset(token)
+        finally:
+            with _WRITERS_LOCK: units.closed=True; stores=list(units)
+            for store in stores:
+                store._end_unit()
 
 def projects_for(root):
     from .projects import read_projects

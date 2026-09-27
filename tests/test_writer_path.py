@@ -456,6 +456,35 @@ def test_hook_settles_wal_once_at_its_end(tmp_path, monkeypatch):
         s.close_writer()
 
 
+def test_failing_context_reset_still_ends_the_hook_unit(tmp_path, monkeypatch):
+    """A hook exited in another Context (ContextVar.reset raises ValueError)
+    must still end its unit; otherwise _units sticks >0 and the WAL is never
+    truncated again."""
+    import contextvars
+    s = Store(tmp_path)
+    s.persistent = True
+    settled = []
+    original = storage._checkpoint
+    monkeypatch.setattr(storage, '_checkpoint', lambda c, *a: (settled.append(1), original(c, *a))[1])
+
+    def scenario():                                        # confine the leaked vars
+        scope = storage.hook_scope()
+        scope.__enter__()
+        s.request({'id': 'a', 'started': 1, 'session_id': 's'}, 'request_started')
+        assert s.__dict__['_units'] == 1 and _wal(s) > 0
+        with pytest.raises(ValueError):
+            contextvars.copy_context().run(scope.__exit__, None, None, None)
+        assert s.__dict__['_units'] == 0 and settled == [1] and _wal(s) == 0
+        # The leaked, closed unit set no longer captures later writes.
+        s.request({'id': 'b', 'started': 2, 'session_id': 's'}, 'request_started')
+        assert s.__dict__['_units'] == 0 and settled == [1, 1] and _wal(s) == 0
+    try:
+        contextvars.copy_context().run(scenario)
+    finally:
+        s.close_writer()
+    assert _integrity_and_count(s.path) == ('ok', 2)
+
+
 def test_only_the_last_concurrent_unit_settles(tmp_path, monkeypatch):
     """Like the former 'last close checkpoints': a hook ending while another
     thread's hook is still in progress does not checkpoint under it."""
