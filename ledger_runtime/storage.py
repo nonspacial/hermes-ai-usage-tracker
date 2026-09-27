@@ -1,6 +1,6 @@
 """Per-profile durable event ledger. Request accounting is independent of Hermes state.db; metadata lookup is read-only."""
 from __future__ import annotations
-import json, os, socket, sqlite3, threading, time, uuid
+import contextvars, json, os, socket, sqlite3, threading, time, uuid, weakref
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -50,16 +50,150 @@ def home():
 def iso(ts): return datetime.fromtimestamp(ts,timezone.utc).isoformat()
 def jd(obj): return json.dumps(obj,ensure_ascii=False,separators=(',',':'),allow_nan=False)
 
+_NOTIFY={}
+_NOTIFY_LOCK=threading.Lock()
+# A cached listener list is reused only while the folder's mtime is unchanged
+# and was already older than this when listed (a same-tick bind stays visible
+# on coarse-timestamp filesystems), and never for longer than NOTIFY_REGLOB.
+NOTIFY_SETTLE=2.0
+NOTIFY_REGLOB=5.0
+
+def _listeners(folder):
+    key=str(folder)
+    try: mtime=os.stat(folder).st_mtime
+    except OSError: return []
+    now=time.time()
+    with _NOTIFY_LOCK:
+        hit=_NOTIFY.get(key)
+        if hit and hit[0]==mtime and hit[1]-mtime>=NOTIFY_SETTLE and now-hit[1]<NOTIFY_REGLOB:
+            return hit[2]
+    paths=[str(p) for p in folder.glob('notify-*.sock')]
+    with _NOTIFY_LOCK: _NOTIFY[key]=(mtime,now,paths)
+    return paths
+
+def _owner_dead(path):
+    # api.py names listeners notify-<pid>-<hex>.sock; unknown names are kept.
+    try: pid=int(Path(path).name.split('-')[1])
+    except (IndexError,ValueError): return False
+    if pid<=0: return False
+    try: os.kill(pid,0)
+    except ProcessLookupError: return True
+    except OSError: return False
+    return False
+
 def notify(folder):
     # Producers emit tiny hints after durable writes. Missed hints never lose records.
+    # Every currently listed listener gets a datagram on every call; a vanished
+    # or refused listener drops the cache so the next call lists afresh.
     if not hasattr(socket,'AF_UNIX'): return
-    for path in folder.glob('notify-*.sock'):
-        s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
-        try: s.settimeout(.005); s.sendto(b'changed',str(path))
-        except OSError: pass
-        finally: s.close()
+    paths=_listeners(folder)
+    if not paths: return
+    stale=False
+    s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+    try:
+        s.settimeout(.005)
+        for path in paths:
+            try: s.sendto(b'changed',path)
+            except (FileNotFoundError,ConnectionRefusedError) as exc:
+                stale=True
+                # Refused = nothing bound to that path. Unlink only when the
+                # owning backend PID is also gone; a live owner cleans up itself.
+                if isinstance(exc,ConnectionRefusedError) and _owner_dead(path):
+                    try: os.unlink(path)
+                    except OSError: pass
+            except OSError: pass
+    finally: s.close()
+    if stale:
+        with _NOTIFY_LOCK: _NOTIFY.pop(str(folder),None)
+
+def synchronous_mode():
+    """FULL unless HERMES_USAGE_LEDGER_SYNCHRONOUS=NORMAL explicitly opts in."""
+    return 'NORMAL' if os.environ.get('HERMES_USAGE_LEDGER_SYNCHRONOUS','').strip().upper()=='NORMAL' else 'FULL'
+
+_WRITERS=weakref.WeakSet()
+_WRITERS_LOCK=threading.Lock()
+_FORK_ORPHANS=[]
+_HOOKS_REGISTERED=False
+_EXITING=False
+
+class _WriterConnection(sqlite3.Connection):
+    """Tracks cursors of one checkout so none outlives it with an active
+    statement (which would pin a stale WAL read snapshot for later checkouts)."""
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.checkout_cursors=[]
+    def cursor(self,*args,**kwargs):
+        cur=super().cursor(*args,**kwargs)
+        self.checkout_cursors.append(weakref.ref(cur))
+        return cur
+    def execute(self,sql,parameters=(),/):
+        return self.cursor().execute(sql,parameters)
+    def executemany(self,sql,parameters,/):
+        return self.cursor().executemany(sql,parameters)
+    def executescript(self,script,/):
+        return self.cursor().executescript(script)
+    def end_checkout(self):
+        refs,self.checkout_cursors=self.checkout_cursors,[]
+        for ref in refs:
+            cur=ref()
+            if cur is not None: cur.close()
+
+def _close_writers():
+    # Committed data is already durable (per-commit sync). Closing at exit only
+    # checkpoints the WAL as the former per-write close did; a connection busy
+    # in a daemon thread is left alone rather than closed underneath it. Any
+    # later write in this exiting process uses a fresh per-call connection.
+    global _EXITING
+    _EXITING=True
+    with _WRITERS_LOCK: stores=list(_WRITERS)
+    for store in stores:
+        store.close_writer(timeout=1)
+
+def _after_fork():
+    # Never use or close an inherited SQLite handle in a forked child. The
+    # child is single-threaded here, so no lock is taken (one held by another
+    # parent thread at fork time would never be released in the child).
+    for store in list(_WRITERS):
+        state=store.__dict__.get('_writer')
+        if state is not None:_FORK_ORPHANS.append(state)
+        store.__dict__['_writer']=None
+        store.__dict__['_writer_lock']=threading.Lock()
+
+def _register_process_hooks():
+    # Lazily, by the first persistent writer only: analytics reload
+    # generations re-execute this module but never open a persistent writer.
+    global _HOOKS_REGISTERED
+    with _WRITERS_LOCK:
+        if _HOOKS_REGISTERED: return
+        _HOOKS_REGISTERED=True
+    import atexit
+    atexit.register(_close_writers)
+    if hasattr(os,'register_at_fork'):
+        os.register_at_fork(after_in_child=_after_fork)
+
+_HOOK_PROJECTS: contextvars.ContextVar[dict | None]=contextvars.ContextVar('usage_hook_projects',default=None)
+
+@contextmanager
+def hook_scope():
+    """One producer hook: projects.db claims are read at most once per root."""
+    token=_HOOK_PROJECTS.set({}) if _HOOK_PROJECTS.get() is None else None
+    try: yield
+    finally:
+        if token is not None: _HOOK_PROJECTS.reset(token)
+
+def projects_for(root):
+    from .projects import read_projects
+    cache=_HOOK_PROJECTS.get()
+    if cache is None: return read_projects(root)
+    key=str(root)
+    if key not in cache: cache[key]=read_projects(root)
+    return cache[key]
 
 class Store:
+    # Opt-in per instance (recorder producers): keep one write connection open
+    # instead of connect/PRAGMA/commit/close per operation. Other Store users
+    # (dashboard/API processes, tests) keep a fresh connection per db() call.
+    persistent=False
     def __init__(self,root=None):
         self.root=Path(root) if root else home()
         self.folder=self.root/'usage-ledger'
@@ -109,18 +243,108 @@ class Store:
         seed(self)
     @contextmanager
     def db(self):
-        c=sqlite3.connect(self.path,timeout=2)
-        c.row_factory=sqlite3.Row
-        c.create_aggregate('decimal_sum',1,DecimalSum)
-        c.create_function('canonical_rate',1,canonical_rate,deterministic=True)
-        from .ownership import register_sql
-        register_sql(c)
-        c.execute('PRAGMA synchronous=FULL')
+        if self.persistent and not _EXITING:
+            lock=self.__dict__.get('_writer_lock')
+            if lock is None:
+                with _WRITERS_LOCK: lock=self.__dict__.setdefault('_writer_lock',threading.Lock())
+            # Uncontended (the usual hook path): reuse the open connection.
+            # Re-entrant or cross-thread use keeps the former independent
+            # connection semantics instead of sharing a transaction or waiting.
+            if lock.acquire(blocking=False):
+                try:
+                    with self._persistent_db() as c:
+                        yield c
+                finally:
+                    lock.release()
+                return
+        c=self._connect()
         try:
             yield c; c.commit()
         except BaseException:
             c.rollback(); raise
         finally: c.close()
+    def _connect(self,*,shared=False):
+        # shared: the persistent writer is used by whichever thread holds
+        # _writer_lock (never concurrently), so thread affinity is not checked.
+        c=(sqlite3.connect(self.path,timeout=2,check_same_thread=False,factory=_WriterConnection) if shared
+           else sqlite3.connect(self.path,timeout=2))
+        c.row_factory=sqlite3.Row
+        c.create_aggregate('decimal_sum',1,DecimalSum)
+        c.create_function('canonical_rate',1,canonical_rate,deterministic=True)
+        from .ownership import register_sql
+        register_sql(c)
+        c.execute('PRAGMA synchronous='+synchronous_mode())
+        return c
+    @contextmanager
+    def _persistent_db(self):
+        """One commit per checkout, as before; only connect/PRAGMA/close are saved.
+
+        Caller holds _writer_lock. The handle is discarded (reconnect next time)
+        after any error, TEMP objects left by a reader, an unfinished
+        transaction, or a replaced/removed database file.
+        """
+        state=self.__dict__.get('_writer')
+        try: identity=os.stat(self.path); identity=(identity.st_dev,identity.st_ino)
+        except OSError: identity=None
+        if state is not None and (identity is None or state[1]!=identity or state[2]!=os.getpid()):
+            self._discard_writer()
+            state=None
+        from .ownership import register_sql
+        if state is not None:
+            try:
+                # Fresh per-checkout execution_state cache and row factory,
+                # exactly as a newly opened connection would have.
+                state[0].row_factory=sqlite3.Row
+                register_sql(state[0])
+            except sqlite3.Error:
+                self._discard_writer()
+                state=None
+        if state is None:
+            c=self._connect(shared=True)
+            try: st=os.stat(self.path); identity=(st.st_dev,st.st_ino)
+            except OSError: identity=None
+            state=(c,identity,os.getpid())
+            self.__dict__['_writer']=state
+            with _WRITERS_LOCK: _WRITERS.add(self)
+            _register_process_hooks()
+        c=state[0]
+        try:
+            yield c
+            c.end_checkout(); c.commit()
+        except BaseException:
+            try:
+                c.end_checkout(); c.rollback()
+            finally: self._discard_writer()
+            raise
+        try:
+            # TEMP objects (e.g. a read() projection view shadowing requests)
+            # or any pending transaction must never leak into the next write.
+            dirty=c.in_transaction or c.execute('SELECT 1 FROM sqlite_temp_master LIMIT 1').fetchone() is not None
+            c.end_checkout()
+        except sqlite3.Error:
+            dirty=True
+        if dirty: self._discard_writer()
+    def _discard_writer(self):
+        state=self.__dict__.get('_writer')
+        self.__dict__['_writer']=None
+        if state is None: return
+        if state[2]!=os.getpid():
+            _FORK_ORPHANS.append(state); return
+        try: state[0].close()
+        except sqlite3.Error: pass
+    def close_writer(self,timeout=-1):
+        """Close the persistent handle (checkpointing as a last close does)."""
+        lock=self.__dict__.get('_writer_lock')
+        if lock is None: return True
+        if not lock.acquire(timeout=timeout): return False
+        try: self._discard_writer()
+        finally: lock.release()
+        return True
+    def __del__(self):
+        state=self.__dict__.get('_writer')
+        if state is not None and state[2]==os.getpid():
+            try: state[0].close()
+            except Exception: pass
     def event(self,c,kind,key,data):
         c.execute('INSERT INTO events(ts,kind,item_id,data) VALUES(?,?,?,?)',(time.time(),kind,key,jd(data)))
     def latest_rate(self,c,rec):
@@ -162,8 +386,7 @@ class Store:
                 data['status']='abandoned_with_usage'
             data.setdefault('started',time.time());data.setdefault('status','pending')
             from .attribution import attach
-            from .projects import read_projects
-            attach(c,data,read_projects(self.root))
+            attach(c,data,projects_for(self.root))
             if 'usage' in data:
                 # Final records keep the price snapshot chosen at completion, even
                 # if a duplicate notification arrives after a catalog refresh.
@@ -194,8 +417,7 @@ class Store:
             data=json.loads(old[0]) if old else {}
             data.update({k:v for k,v in rec.items() if v is not None});data.setdefault('started',time.time())
             from .attribution import attach
-            from .projects import read_projects
-            attach(c,data,read_projects(self.root))
+            attach(c,data,projects_for(self.root))
             self._put_comp(c,data);self.event(c,kind,rec['id'],rec)
         notify(self.folder)
     def health(self,process,data):
