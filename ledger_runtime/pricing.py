@@ -444,8 +444,12 @@ def anthropic_endpoint(base_url):
     return 'first_party' if host=='api.anthropic.com' else 'custom'
 
 # Anthropic's documented usage.speed / usage.inference_geo enumerations.
+# 'not_available' is documented (Usage & Cost API) for requests where the
+# inference_geo parameter does not apply; standard (global) pricing applies,
+# so it selects the global rate. The recorder's 'unrecognised' sentinel and any
+# other value stay unpriced.
 _ANTHROPIC_SPEEDS={'fast','standard'}
-_ANTHROPIC_GEOS={'global','us'}
+_ANTHROPIC_GEOS={'global':'global','us':'us','not_available':'global'}
 _ANTHROPIC_REQUESTED_STANDARD={'unspecified','','auto','default','standard','standard_only'}
 
 def _select_anthropic(s,rec,revision,stamp,retrospective):
@@ -466,8 +470,9 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
     if speed not in _ANTHROPIC_SPEEDS:return None
     geo=rec.get('returned_inference_geo')
     if geo is not None and geo not in _ANTHROPIC_GEOS:return None
+    rate_geo='global' if geo is None else _ANTHROPIC_GEOS[geo]
     candidates=[r for r in s['rates'] if r['model']==model and r['service_tier']==speed
-                and r.get('inference_geo')==(geo or 'global')]
+                and r.get('inference_geo')==rate_geo]
     prompt=(rec.get('usage') or {}).get('prompt_tokens')
     # 4.6+ models publish one flat rate over the whole window. Earlier models
     # publish no long-context rate, so price only a known prompt within the

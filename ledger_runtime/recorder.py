@@ -133,9 +133,10 @@ def response_metadata(response):
     return out
 
 # Anthropic reports these billing-relevant usage enums. Only documented values
-# are copied; anything else becomes a fixed sentinel so pricing fails closed.
+# are copied (verbatim: 'not_available' is kept, not rewritten to 'global');
+# anything else becomes a fixed sentinel so pricing fails closed.
 USAGE_ENUMS={'speed':('returned_speed',{'fast','standard'}),
-             'inference_geo':('returned_inference_geo',{'global','us'}),
+             'inference_geo':('returned_inference_geo',{'global','us','not_available'}),
              'service_tier':('returned_usage_service_tier',{'standard','priority','batch'})}
 
 def usage_enums(usage):

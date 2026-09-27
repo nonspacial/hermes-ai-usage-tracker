@@ -55,7 +55,9 @@ Rules:
   - An unspecified request is priced at standard speed **as a recorded assumption** (`tier_assumption`).
 - **Data residency.**
   - `usage.inference_geo: us` uses the published 1.1× rate. This applies only to 4.6+ models, which accept `inference_geo`.
-  - Any other reported geo is unpriced.
+  - `usage.inference_geo: not_available` is Anthropic's documented value when the `inference_geo` parameter does not apply to the request (Usage & Cost API: models that don't support the parameter "return `not_available` for this dimension"; standard pricing applies). It is recorded verbatim and priced at the global 1.0× rate, with no `geo_assumption` flag. Reported in operator live captures on 28 September 2026 for `claude-fable-5-1` and `claude-opus-5-5` requests that sent no geo parameter (not reproduced by the test suite).
+  - Any other reported geo, including the recorder's `unrecognised` sentinel, is unpriced.
+  - Rows recorded before `not_available` was admitted hold `unrecognised` (the raw value was not kept). They stay unpriced, including retrospectively: the read-side projection cannot tell them from a genuinely unknown geo, and no ledger rewrite is made.
   - When no geo is reported for a model that supports US-only routing, global pricing is used and flagged `geo_assumption`.
 - **Context window.**
   - 4.6+ models are priced flat over the full published window.
@@ -75,7 +77,7 @@ Rules:
   - Main-hook records with no base URL are flagged `endpoint_assumption`.
   - Auxiliary calls (titling, compression, …) are classified from the client object Hermes passes to its relay funnel, with the same helper. When that client exposes no readable `base_url` the call is recorded `unverified` and stays unpriced, including retrospectively; an auxiliary Anthropic client may point at a configured gateway, so it is never assumed first-party.
 - **Model names.** Hermes wire names are normalised only as Hermes does for direct Anthropic: strip an `anthropic/` prefix and change `.` to `-`. The result must then exactly match a documented ID or alias. Bedrock/Vertex IDs, `-latest` and undocumented snapshots stay unpriced.
-- **Recorder metadata.** Only the documented `usage.speed` (`fast`/`standard`), `usage.inference_geo` (`global`/`us`) and `usage.service_tier` (`standard`/`priority`/`batch`) enums are kept. Undocumented or non-string values become `unrecognised`. Also kept are a requested `speed` of `fast`/`standard` and a `first_party`/`custom`/`unverified` endpoint class. No URL or other raw field is stored.
+- **Recorder metadata.** Only the documented `usage.speed` (`fast`/`standard`), `usage.inference_geo` (`global`/`us`/`not_available`) and `usage.service_tier` (`standard`/`priority`/`batch`) enums are kept. Undocumented or non-string values become `unrecognised`. Also kept are a requested `speed` of `fast`/`standard` and a `first_party`/`custom`/`unverified` endpoint class. No URL or other raw field is stored.
 - **Display.** Cache & costs keeps its existing Context column. For direct Anthropic rates it shows `Global` or `US-only 1.1×`, `fast inferred` when the speed was not returned, and `assumed geo/endpoint/standard speed` for recorded assumptions. Its shared tooltip gives the full basis. Other providers keep their previous labels.
 - **Fail-closed refresh.** A refresh fails closed and keeps the last good catalogue if any of the following changes:
   - the currency statement, table columns or separators
