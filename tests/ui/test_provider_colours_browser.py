@@ -19,6 +19,13 @@ for(const id of ['ollama-cloud','anthropic','deepseek','gemini','qwen']){
  demoProviders.push({id,label:id,configured:true,quota:{available:true,plan:'Free',
    windows:[{label:'Weekly',remaining_percent:55},{label:'Daily',remaining_percent:40}]}});
 }
+// Anthropic shaped like the host's OAuth usage mapping as serialised by
+// dashboard/plugin_api.py: five_hour -> 'Current session', seven_day ->
+// 'Current week', seven_day_sonnet -> 'Sonnet week' (synthetic percentages).
+demoProviders.find(p=>p.id==='anthropic').quota.windows=[
+ {label:'Current session',used_percent:38,remaining_percent:62,reset_at:new Date((now+3600)*1000).toISOString(),detail:null},
+ {label:'Current week',used_percent:45,remaining_percent:55,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null},
+ {label:'Sonnet week',used_percent:20,remaining_percent:80,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null}];
 """
     if reverse:
         extra += 'demoProviders.reverse();events.reverse();\n'
@@ -35,6 +42,8 @@ def colour_state(page):
         .map(el=>{const s=getComputedStyle(el);return [s.color,s.borderColor,s.backgroundColor,s.boxShadow]});
       const badge=card?.querySelector('.au-provider-type-badge');
       const fill=index=>{const el=card?.querySelectorAll('.au-quota-rows .h-full')[index];return el?getComputedStyle(el).backgroundColor:null};
+      const fills=card?Object.fromEntries([...card.querySelectorAll('.au-quota-rows .h-full')].map(el=>
+        [el.closest('.flex-col').querySelector('span').textContent,getComputedStyle(el).backgroundColor])):null;
       return {line:css('.au-chart .au-line','stroke'),area:css('.au-chart .au-area','fill'),
         point:css('.au-chart .au-point','fill'),focus:css('.au-chart .au-plot-hit','stroke'),
         selected,body:css('.au-big','color'),amount:css('.au-provider-cost','color'),
@@ -42,7 +51,7 @@ def colour_state(page):
         card:card?{badge:badge?getComputedStyle(badge).backgroundColor:null,
           border:badge?getComputedStyle(badge).borderColor:null,
           foreground:badge?getComputedStyle(badge).color:null,
-          weekly:fill(0),daily:fill(1)}:null};
+          weekly:fill(0),daily:fill(1),fills}:null};
     }''')
 
 
@@ -123,9 +132,16 @@ def test_colours():
                 assert state['selected']==original['selected'],(id,state['selected'],original['selected'])
                 for key in ('body','amount','label','focus','accent'):
                     assert state[key]==original[key],(id,key,state[key],original[key])
-                if id not in ('nous','ollama','openrouter'):
+                if id=='anthropic':
+                    fills=state['card']['fills']
+                    assert fills['Current session']==fills['Current week']==fills['Sonnet week']==baseline[id]['colour'],(id,fills)
+                    assert fills['Current week']!=baseline['openai-codex']['colour'],(id,fills)
+                    assert fills['Current week']==state['line']==state['card']['border'],(id,state)
+                    page.locator('.au-provider-limits .au-quota-card').screenshot(path=str(SCRATCH/'provider-colours-anthropic-card-page-synthetic.png'))
+                elif id not in ('nous','ollama','openrouter'):
                     assert state['card']['weekly']==baseline[id]['colour'],(id,state['card'])
-                    if id!='openai-codex':assert state['card']['daily']==baseline['openai-codex']['colour'],(id,state['card'])
+                    # Every measured allowance bar (weekly and shorter windows) uses the provider colour.
+                    if id!='openai-codex':assert state['card']['daily']==baseline[id]['colour'],(id,state['card'])
                 if id not in ('ollama','openrouter'):
                     assert state['card']['border']==baseline[id]['colour'],(id,state['card'])
                     assert page.evaluate('''() => {
@@ -155,7 +171,13 @@ def test_colours():
             for i,id in enumerate(['openai-codex','nous','ollama','openrouter',*EXTRA]):
                 card=cards.nth(i)
                 assert card.locator('.au-provider-type-badge').evaluate('e=>getComputedStyle(e).borderColor')==baseline[id]['colour'] if card.locator('.au-provider-type-badge').count() else id in ('ollama','openrouter')
-                if card.locator('.au-quota-rows .h-full').count():
+                if id=='anthropic':
+                    rows={row.locator('span').first.text_content():row.locator('.h-full').evaluate('e=>getComputedStyle(e).backgroundColor')
+                          for row in card.locator('.au-quota-rows > .flex-col').all()}
+                    assert rows=={'Current session':baseline[id]['colour'],'Current week':baseline[id]['colour'],
+                                  'Sonnet week':baseline[id]['colour']},rows
+                    card.screenshot(path=str(SCRATCH/'provider-colours-anthropic-card-subscriptions-synthetic.png'))
+                elif card.locator('.au-quota-rows .h-full').count():
                     assert card.locator('.au-quota-rows .h-full').first.evaluate('e=>getComputedStyle(e).backgroundColor')==baseline[id]['colour']
             nav.get_by_role('tab',name='All providers').click()
             page.get_by_role('combobox',name='Hermes profile').select_option(label='All profiles')
@@ -210,6 +232,8 @@ def test_colours():
             page.screenshot(path=str(SCRATCH/'provider-colours-openrouter-light-synthetic.png'))
             nav.get_by_role('tab',name='anthropic',exact=True).click()
             assert badge_contrast(page)>=4.5,badge_contrast(page)
+            fills=colour_state(page)['card']['fills']
+            assert fills['Current session']==fills['Current week']==fills['Sonnet week']==light['anthropic']['colour'],(fills,light['anthropic'])
             page.screenshot(path=str(SCRATCH/'provider-colours-anthropic-light-synthetic.png'))
             # Fresh reordered catalogue yields the same reserved mapping; late IDs retain existing slots.
             reversed_page=browser.new_page()

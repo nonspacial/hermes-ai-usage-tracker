@@ -9,6 +9,13 @@ ROOT = Path(__file__).resolve().parents[2]
 WIDTHS = (850, 849, 800, 789, 788, 787, 700, 390)
 
 
+def split_mode(width, height):
+    # Fixed pane-size breakpoints shared with the row-quota/quota-top tests.
+    content = width - 32
+    need = 893 if content <= 900 else 871 if content < 940 else 862 if content < 1436 else 757
+    return width >= 850 and height - 32 >= need
+
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ['CHROMIUM_PATH'],
@@ -21,15 +28,18 @@ def run():
             page.set_content((ROOT / 'preview.html').read_text())
             page.get_by_role('tab', name='All providers', exact=True).click()
             heights = {}
-            for width, window in (*((w, w) for w in WIDTHS), (800, 1920)):
-                page.set_viewport_size({'width': window, 'height': 850})
-                if window != width:
-                    page.evaluate('''w=>{document.querySelector('.au-pane').parentElement.style.width=w+'px'}''', width)
-                page.wait_for_function('''w=>{
+            # 850x850 is a short medium pane: it now uses the single scroller and
+            # must keep the 849px graph height. 850x925 is the split boundary.
+            for width, window, height in (*((w, w, 850) for w in WIDTHS), (800, 1920, 850), (850, 850, 925)):
+                page.set_viewport_size({'width': window, 'height': height})
+                # Set or clear the narrow-tile width so a later case is not left inside it.
+                page.evaluate('''w=>{document.querySelector('.au-pane').parentElement.style.width=w?w+'px':''}''',
+                              width if window != width else 0)
+                page.wait_for_function('''([w,m])=>{
                     const pane=document.querySelector('.au-pane');
                     return Math.abs(pane.getBoundingClientRect().width-w)<1 &&
-                           pane.classList.contains('au-mobile')===(w<850);
-                }''', arg=width)
+                           pane.classList.contains('au-mobile')===m;
+                }''', arg=[width, not split_mode(width, height)])
                 page.wait_for_function('''() => {
                     const svg=document.querySelector('.au-chart svg');
                     return svg.clientHeight>190 &&
@@ -50,7 +60,7 @@ def run():
                         readerOverflow:getComputedStyle(q('.au-reader')).overflowY,
                         documentExcess:document.documentElement.scrollHeight-document.documentElement.clientHeight};
                 }''')
-                heights[(width, window)] = geometry
+                heights[(width, window, height)] = geometry
                 assert abs(geometry['pane'] - width) < 1, geometry
                 assert geometry['plotWidth'] > 0 and geometry['svgWidth'] <= width, geometry
                 assert geometry['labelFont'] == '11px', geometry
@@ -58,16 +68,18 @@ def run():
                            label['right'] <= geometry['svgRight']+2 and
                            label['bottom'] <= geometry['svgBottom']+2
                            for label in geometry['labels']), geometry
-                if width < 850:
+                if not split_mode(width, height):
                     assert geometry['rootOverflow'] == 'auto' and geometry['readerOverflow'] == 'visible', geometry
                     assert abs(geometry['svg'] - 196.3125) < 1, geometry
-                    assert abs(geometry['plot'] - heights[(849, 849)]['plot']) < 1, geometry
+                    if (849, 849, 850) in heights:
+                        assert abs(geometry['plot'] - heights[(849, 849, 850)]['plot']) < 1, geometry
                 else:
                     assert geometry['rootOverflow'] == 'hidden' and geometry['readerOverflow'] == 'auto', geometry
-                    assert geometry['plot'] > heights.get((849, 849), {'plot': 0})['plot'], geometry
+                    assert geometry['plot'] > heights[(849, 849, 850)]['plot'], geometry
                 assert geometry['documentExcess'] <= 1, geometry
-                print(f'{width}px pane / {window}px window: SVG {geometry["svg"]:.2f}px, plot {geometry["plot"]:.2f}px')
+                print(f'{width}x{height} pane / {window}px window: SVG {geometry["svg"]:.2f}px, plot {geometry["plot"]:.2f}px')
 
+            assert abs(heights[(850, 850, 850)]['plot'] - heights[(849, 849, 850)]['plot']) < 1, heights
             # The chart hit target is spatially reachable, keyboard inspection
             # updates the same tooltip, and a drag maps its screen fractions to
             # exactly the submitted half-hour boundaries in each mobile mode.

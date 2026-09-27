@@ -33,8 +33,24 @@ def test_original_desktop_components_unchanged():
             ):
                 assert body.count(approved)==1,(name,approved)
                 body=body.replace(approved,historical)
+        if name == 'QuotaBar':
+            # Approved provider-identity colour: every measured allowance fill uses
+            # providerAccent (Codex -> host --ui-accent). Normalise only these two
+            # exact substitutions; covered by test_provider_colours_browser and
+            # test_provider_row_quota_browser. Tone badges/labels stay original.
+            assert body==preview_body(name),name
+            for approved, historical in (
+                ('function QuotaBar({ window, providerId }) {', 'function QuotaBar({ window }) {'),
+                ("%`, background: providerAccent(providerId) }", "%`, background: 'var(--ui-accent)' }"),
+            ):
+                assert body.count(approved)==1,(name,approved)
+                body=body.replace(approved,historical)
         assert hashlib.sha256(body.encode()).hexdigest()==sha,name
 
+def preview_body(name):
+    preview=(ROOT/'preview.html').read_text()
+    start=preview.index('function '+name+'(')
+    return preview[start:preview.index('\n}',start)+2]
 _RUN_IN_HOME_DOC = """Run ``fn`` with ``home`` bound as this thread's Hermes home.
 
     The override lives in a ContextVar, so it is thread-local: a request can

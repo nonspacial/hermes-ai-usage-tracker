@@ -7,6 +7,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SHOTS = Path(os.environ['TMPDIR']) / 'quota-top-paging'
 
 
+def split_mode(width, height):
+    # Fixed pane-size breakpoints: split only at width >= 850 and height >= the
+    # width band's 16px insets + upper floor + 50px navigation + 160px reader.
+    content = width - 32
+    need = 893 if content <= 900 else 871 if content < 940 else 862 if content < 1436 else 757
+    return width >= 850 and height - 32 >= need
+
+
 def run():
     SHOTS.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
@@ -21,8 +29,9 @@ def run():
         page.get_by_role('tab', name='All providers', exact=True).click()
         providers = page.get_by_role('navigation', name='Providers', exact=True)
         subpages = page.get_by_role('navigation', name='Provider subpages', exact=True)
-        for width, height in ((3840, 2160), (1920, 1080), (980, 850), (851, 850), (850, 850), (849, 850), (800, 850), (390, 850)):
+        for width, height in ((3840, 2160), (1920, 1080), (980, 850), (980, 894), (851, 925), (850, 925), (850, 850), (849, 925), (800, 850), (390, 850)):
             page.set_viewport_size({'width': width, 'height': height})
+            page.wait_for_function('(m)=>document.querySelector(".au-pane").classList.contains("au-mobile")===m', arg=not split_mode(width, height))
             for name in ('Codex', 'Nous Portal', 'Ollama Cloud', 'OpenRouter'):
                 tab = providers.get_by_role('tab', name=name, exact=True)
                 if tab.is_visible():
@@ -48,7 +57,7 @@ def run():
                 assert geometry['quota']['bottom'] <= geometry['summary']['y'] + 1, geometry
                 assert abs(geometry['quota']['width'] - geometry['pane']['width']) < 3, geometry
                 assert not geometry['hidden'], geometry
-                if width == 390:
+                if not split_mode(width, height):
                     owners = page.evaluate('''() => {
                         const root=document.querySelector('.au-pane'), upper=document.querySelector('.au-upper');
                         const reader=document.querySelector('.au-reader');
@@ -59,7 +68,7 @@ def run():
                     }''')
                     assert owners['root'] > 0 and owners['rootOverflow'] == 'auto', owners
                     assert owners['upperOverflow'] == 'visible' and owners['readerOverflow'] == 'visible', owners
-                if width in (1920, 980, 851, 850):
+                if split_mode(width, height):
                     bounds = page.evaluate('''() => {
                         const rect=s=>document.querySelector(s).getBoundingClientRect();
                         const upper=rect('.au-upper'), chart=rect('.au-chart svg'), plot=rect('.au-plot-hit');
@@ -71,7 +80,7 @@ def run():
                     assert bounds['chartBottom'] <= bounds['navTop'] + 1, (width,name,bounds)
                     assert bounds['qualityBottom'] <= bounds['upperBottom'] + 1, (width,name,bounds)
                     assert bounds['plotHeight'] >= 139.5, (width,name,bounds)
-                if name == 'Nous Portal' and width in (3840, 1920, 980, 390):
+                if name == 'Nous Portal' and (width, height) in ((3840, 2160), (1920, 1080), (980, 894), (980, 850), (390, 850)):
                     fit = page.evaluate('''() => {
                         const upper=document.querySelector('.au-upper'), reader=document.querySelector('.au-reader');
                         const chart=document.querySelector('.au-chart svg'), plot=document.querySelector('.au-plot-hit');
@@ -91,7 +100,7 @@ def run():
                                     right:rect(c).right,cardRight:rect(e).right,scrollWidth:c.scrollWidth,clientWidth:c.clientWidth}))}))};
                     }''')
                     print(f'FIT {width}x{height} Nous: ' + str({k:v for k,v in fit.items() if k != 'cards'}))
-                    if width in (1920, 980, 851, 850):
+                    if split_mode(width, height):
                         assert fit['upperOverflow'] <= 1, fit
                         assert fit['chartBottom'] <= fit['upperBottom'] + 1, fit
                         assert fit['qualityBottom'] <= fit['upperBottom'] + 1, fit
@@ -102,9 +111,11 @@ def run():
                         assert all(c['scrollWidth'] <= c['clientWidth'] + 1 for c in fit['cards']), fit
                 if name == 'Nous Portal':
                     assert geometry['detailCount'] >= 6, geometry
-                if (width, name) in ((1920, 'Codex'), (1920, 'Nous Portal'), (980, 'Nous Portal'), (390, 'Codex')):
-                    page.screenshot(path=str(SHOTS / f'quota-top-{width}-{name.replace(" ", "-")}.png'))
-            if width >= 980:
+                if (width, height, name) in ((1920, 1080, 'Codex'), (1920, 1080, 'Nous Portal'), (980, 894, 'Nous Portal'), (390, 850, 'Codex')):
+                    if not split_mode(width, height):
+                        page.locator('.au-pane').evaluate('e=>e.scrollTop=0')
+                    page.screenshot(path=str(SHOTS / f'quota-top-{width}x{height}-{name.replace(" ", "-")}.png'))
+            if width >= 980 and split_mode(width, height):
                 providers.get_by_role('tab', name='All providers', exact=True).click()
                 subpages.get_by_role('tab', name='Skills usage', exact=True).click()
                 views = page.get_by_role('group', name='Skills view', exact=True)
@@ -115,9 +126,10 @@ def run():
                     dividers.append(page.locator('.au-reader').evaluate('e=>e.getBoundingClientRect().top'))
                 assert max(dividers)-min(dividers) < 1, (width, dividers)
         # Below 850px the pane is a single-scroller mobile layout; at and
-        # above 850px it retains the fixed split without clipping Nous.
+        # above 850px (at a split-capable 925px height) it retains the fixed
+        # split without clipping Nous.
         for width in (800, 849, 850, 851, 900, 979):
-            page.set_viewport_size({'width': width, 'height': 850})
+            page.set_viewport_size({'width': width, 'height': 925})
             page.wait_for_function('(w)=>document.querySelector(".au-pane").classList.contains("au-mobile")===(w<850)', arg=width)
             choice = providers.get_by_role('tab', name='Nous Portal', exact=True)
             if choice.is_visible():
@@ -132,7 +144,7 @@ def run():
                     qualityBottom:quality.bottom,navTop:nav.top,
                     metricRows:new Set([...document.querySelectorAll('.au-totals>*')].map(e=>Math.round(e.getBoundingClientRect().top))).size};
             }''')
-            print(f'BREAKPOINT {width}x850 Nous: {narrow}')
+            print(f'BREAKPOINT {width}x925 Nous: {narrow}')
             assert narrow['plotHeight'] >= 139.5, narrow
             if width >= 850:
                 assert narrow['chartBottom'] <= narrow['upperBottom'] + 1, narrow
@@ -144,7 +156,7 @@ def run():
         page.wait_for_function("document.querySelector('.au-pane').classList.contains('au-mobile')")
         assert page.locator('.au-pane').evaluate('e=>e.getBoundingClientRect().width') == 800
         page.locator('#root').evaluate('e=>{e.style.width="";e.style.flex=""}')
-        page.set_viewport_size({'width': 849, 'height': 850})
+        page.set_viewport_size({'width': 849, 'height': 925})
         page.wait_for_function("document.querySelector('.au-pane').classList.contains('au-mobile')")
         page.get_by_role('combobox', name='Main page').select_option(label='All providers')
         subpages.get_by_role('tab', name='Requests', exact=True).click()
@@ -159,7 +171,7 @@ def run():
         copy = inspector.get_by_role('button', name='Copy JSON to clipboard')
         copy.focus()
         for width in (849, 850, 851, 849):
-            page.set_viewport_size({'width': width, 'height': 850})
+            page.set_viewport_size({'width': width, 'height': 925})
             page.wait_for_function('(w)=>document.querySelector(".au-pane").classList.contains("au-mobile")===(w<850)', arg=width)
             expect(copy).to_be_focused()
             assert inspector.evaluate('e=>e===window.originalInspector && e.open')
@@ -182,7 +194,7 @@ def run():
         subpages.get_by_role('tab', name='Skills usage', exact=True).click()
         views = page.get_by_role('group', name='Skills view', exact=True)
         for width in (849, 850, 851):
-            page.set_viewport_size({'width': width, 'height': 850})
+            page.set_viewport_size({'width': width, 'height': 925})
             page.wait_for_function('(w)=>document.querySelector(".au-pane").classList.contains("au-mobile")===(w<850)', arg=width)
             nav_positions = []
             for view in ('Frequency', 'Context footprint', 'Catalogue overhead'):
@@ -201,12 +213,16 @@ def run():
         # A short but wide route tile has the same single root owner as a narrow one.
         page.get_by_role('combobox', name='Main page').select_option(label='Nous Portal') if page.get_by_role('combobox', name='Main page').is_visible() else providers.get_by_role('tab', name='Nous Portal', exact=True).click()
         subpages.get_by_role('tab', name='Overview', exact=True).click()
+        # Fixed breakpoints: immediately below/at/above each band's split height,
+        # plus the short medium panes that now fall back to one page scrollbar.
         for width, height in ((850, 600), (980, 600), (1920, 600), (850, 700),
-                              (849, 749), (850, 749), (851, 749),
-                              (849, 750), (850, 750), (851, 750),
-                              (849, 751), (850, 751), (851, 751)):
+                              (850, 750), (850, 850), (980, 850), (1300, 850),
+                              (849, 924), (850, 924), (851, 924),
+                              (849, 925), (850, 925), (851, 925),
+                              (849, 926), (850, 926), (851, 926),
+                              (980, 893), (980, 894), (1920, 788), (1920, 789)):
             page.set_viewport_size({'width': width, 'height': height})
-            mobile = width < 850 or height < 750
+            mobile = not split_mode(width, height)
             page.wait_for_function('(m)=>document.querySelector(".au-pane").classList.contains("au-mobile")===m', arg=mobile)
             sample = page.evaluate('''() => {
                 const root=document.querySelector('.au-pane'), upper=document.querySelector('.au-upper');
@@ -229,18 +245,24 @@ def run():
             assert sample['size'] == [width, height] and sample['documentExcess'] <= 1, sample
             if mobile:
                 assert sample['root']['overflow'] == 'auto' and sample['root']['excess'] > 0, sample
+                assert sample['upper']['overflow'] == 'visible' and sample['reader']['overflow'] == 'visible', sample
                 assert not sample['nested'], sample
+                # Existing mobile SVG floor is 160px (plot 129px) on very short panes;
+                # the >=139.5px plot requirement applies to the fixed split.
+                assert sample['qualityBottom'] <= sample['navTop'] + 1 and sample['plotHeight'] >= 128.5, sample
             else:
                 assert sample['root']['excess'] <= 1 and sample['reader']['overflow'] == 'auto', sample
                 assert sample['upper']['excess'] <= 1, sample
                 assert sample['quotaBottom'] < sample['chartBottom'] <= sample['upperBottom'] + 1, sample
                 assert sample['qualityBottom'] <= sample['navTop'] + 1, sample
                 assert sample['plotHeight'] >= 139.5, sample
-            if (width, height) in ((850, 600), (980, 600), (1920, 600), (850, 700), (850, 750)):
+                assert sample['size'][1] - 16 - sample['navTop'] - 50 >= 159.5, sample
+            if (width, height) in ((850, 600), (980, 600), (1920, 600), (850, 700), (850, 750), (980, 850), (850, 925), (1920, 789)):
                 if mobile:
                     page.locator('.au-pane').evaluate('e=>e.scrollTop=0')
                 page.screenshot(path=str(SHOTS / f'responsive-{width}x{height}.png'))
-        page.set_viewport_size({'width': 850, 'height': 750})
+        page.set_viewport_size({'width': 850, 'height': 925})
+        page.wait_for_function("!document.querySelector('.au-pane').classList.contains('au-mobile')")
         for name in ('All providers', 'Codex', 'Nous Portal', 'Ollama Cloud', 'OpenRouter'):
             providers.get_by_role('tab', name=name, exact=True).click()
             bounds=page.evaluate('''() => {
@@ -249,7 +271,7 @@ def run():
                     quality:r('.au-quality-line').bottom,chart:r('.au-chart svg').bottom,
                     nav:r('.au-subpage-tabs').top,plot:r('.au-plot-hit').height};
             }''')
-            print('750 FIT',name,bounds)
+            print('925 FIT',name,bounds)
             assert bounds['overflow']<=1 and bounds['quality']<=bounds['nav']+1, (name,bounds)
             assert bounds['chart']<=bounds['nav']+1 and bounds['plot']>=139.5, (name,bounds)
         subpages.get_by_role('tab', name='Skills usage', exact=True).click()
@@ -259,7 +281,7 @@ def run():
             positions.append(page.locator('.au-reader').evaluate('e=>e.getBoundingClientRect().top'))
         assert max(positions)-min(positions)<1, positions
         # Transfer a keyed visible row's viewport offset, not either owner's scrollTop.
-        transfer = browser.new_page(viewport={'width': 849, 'height': 850})
+        transfer = browser.new_page(viewport={'width': 849, 'height': 925})
         transfer.on('pageerror', lambda error: errors.append(str(error)))
         transfer.route('**/*', lambda route: route.abort())
         transfer.set_content(html)
@@ -279,9 +301,9 @@ def run():
         transfer.locator('.au-pane').evaluate('e=>e.scrollTop=979')
         transfer.wait_for_timeout(80)
         assert transfer.locator('.au-pane').evaluate('e=>e.scrollTop') == 979
-        transfer.set_viewport_size({'width': 850, 'height': 850})
+        transfer.set_viewport_size({'width': 850, 'height': 925})
         transfer.wait_for_function("!document.querySelector('.au-pane').classList.contains('au-mobile')")
-        transfer.set_viewport_size({'width': 849, 'height': 850})
+        transfer.set_viewport_size({'width': 849, 'height': 925})
         transfer.wait_for_function("document.querySelector('.au-pane').classList.contains('au-mobile')")
         transfer.wait_for_timeout(80)
         root_back=transfer.locator('.au-pane').evaluate('e=>e.scrollTop')
@@ -314,12 +336,12 @@ def run():
             assert 0 <= result['offset'] < 140 and result['top'] > 0, result
             return result
         position('root')
-        for width, height in ((850, 850), (849, 850), (850, 850), (850, 749),
-                              (850, 750), (851, 749), (851, 750)):
+        for width, height in ((850, 925), (849, 925), (850, 925), (850, 924),
+                              (850, 925), (851, 924), (851, 925), (980, 893), (980, 894)):
             oldmode='root' if transfer.locator('.au-pane.au-mobile').count() else 'reader'
             before=anchor(oldmode)
             transfer.set_viewport_size({'width': width, 'height': height})
-            newmode='root' if width<850 or height<750 else 'reader'
+            newmode='reader' if split_mode(width, height) else 'root'
             transfer.wait_for_function('(m)=>document.querySelector(".au-pane").classList.contains("au-mobile")===(m==="root")', arg=newmode)
             transfer.wait_for_timeout(80)
             after=anchor(newmode)
@@ -339,7 +361,7 @@ def run():
             return {key:row.dataset.scrollKey,offset:row.getBoundingClientRect().top-bounds.top,top:owner.scrollTop};
         }''')
         assert before['top'] == 250, before
-        transfer.set_viewport_size({'width': 849, 'height': 850})
+        transfer.set_viewport_size({'width': 849, 'height': 925})
         transfer.wait_for_function("document.querySelector('.au-pane').classList.contains('au-mobile')")
         transfer.wait_for_timeout(80)
         after = transfer.evaluate('''key => {
@@ -349,7 +371,7 @@ def run():
         }''', before['key'])
         print('READER250', before, '->', after)
         assert abs(after['offset']-before['offset'])<3 and after['top']>0, (before,after)
-        transfer.set_viewport_size({'width': 850, 'height': 850})
+        transfer.set_viewport_size({'width': 850, 'height': 925})
         transfer.wait_for_function("!document.querySelector('.au-pane').classList.contains('au-mobile')")
         transfer.wait_for_timeout(80)
         # Delete the actual first visible anchor, not a different row above it.
@@ -363,7 +385,7 @@ def run():
         transfer.wait_for_timeout(80)
         transfer.locator(f'.au-reader tbody tr[data-scroll-key="{deletion["anchor"]}"]').evaluate('e=>e.remove()')
         transfer.wait_for_timeout(80)
-        transfer.set_viewport_size({'width': 849, 'height': 850})
+        transfer.set_viewport_size({'width': 849, 'height': 925})
         transfer.wait_for_function("document.querySelector('.au-pane').classList.contains('au-mobile')")
         transfer.wait_for_timeout(80)
         fallback=transfer.evaluate('''key => {
@@ -376,8 +398,8 @@ def run():
         assert transfer.locator(f'.au-reader tbody tr[data-scroll-key="{deletion["anchor"]}"]').count()==0
         transfer.close()
         # A clamped mobile position is only retained within its original page/filter.
-        for mobile, desktop, change in (((849, 850), (850, 850), 'page'),
-                                        ((850, 749), (850, 750), 'filter')):
+        for mobile, desktop, change in (((849, 925), (850, 925), 'page'),
+                                        ((850, 924), (850, 925), 'filter')):
             scoped=browser.new_page(viewport={'width':mobile[0],'height':mobile[1]})
             scoped.on('pageerror', lambda error: errors.append(str(error)))
             scoped.route('**/*', lambda route: route.abort())
@@ -470,7 +492,7 @@ def run():
             check.close()
         assert not errors, errors
         browser.close()
-    print('PASS width/height-coupled 850×750 split, short single root, keyed transfer/fallback, quota/Skills fit and conditional paging')
+    print('PASS pane-size split breakpoints (850×925/933×903/972×894/1468×789), short medium single root, keyed transfer/fallback, quota/Skills fit and conditional paging')
 
 
 if __name__ == '__main__':

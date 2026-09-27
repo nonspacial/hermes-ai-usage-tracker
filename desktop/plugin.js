@@ -256,6 +256,22 @@ function useUsage(profile, intervalMs) {
 
 // ---------------------------------------------------------------- components
 
+// Quota windows reach the pane by host label only, and labels differ per
+// provider: Anthropic five_hour/seven_day are 'Current session'/'Current week'
+// (plus 'Opus week'/'Sonnet week'); Codex reports 'Session'/'Weekly'; Z.AI and
+// OpenCode 'Session (5h)'/'Rolling (5h)'. Every allowance bar fill uses the
+// provider colour (Codex keeps the host accent); tone badges keep their meaning.
+function compactWindowLabel(label){
+ const text=String(label||'').trim();
+ if(/^(current\s+)?week(ly)?$/i.test(text))return 'Weekly';
+ if(/\b5h\b|five[\s-]?hour|^(current\s+)?session$/i.test(text))return 'Five hour';
+ return text||'Limit';
+}
+// Only reported windows with an actual remaining percentage become bars;
+// unavailable quota, unlimited or missing values render nothing, never 0%.
+function measuredWindows(quota){
+ return quota?.available?(quota.windows||[]).filter(w=>Number.isFinite(w?.remaining_percent)):[];
+}
 function QuotaBar({ window, providerId }) {
   const remaining = window.remaining_percent
   if (remaining === null || remaining === undefined) {
@@ -293,7 +309,7 @@ function QuotaBar({ window, providerId }) {
         style: { background: 'var(--ui-stroke-secondary)' },
         children: jsx('div', {
           className: 'h-full rounded-[2px]',
-          style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: /\bweekly\b/i.test(window.label||'') ? providerAccent(providerId) : 'var(--ui-accent)' }
+          style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: providerAccent(providerId) }
         })
       })
     ]
@@ -792,6 +808,7 @@ const ledgerCss = `
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
 .au-ledger .au-provider-row .au-dot{background:var(--au-provider-accent)}
+.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-line{stroke:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-area{fill:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-point{fill:var(--au-provider-accent)}
@@ -967,7 +984,7 @@ ${tooltipCss}
 /* The split is a function of the available route tile alone. */
 .au-ledger.au-pane{height:100%;min-height:0;box-sizing:border-box;overflow:hidden;container:au-pane / size}
 .au-provider-pane{height:100%;min-height:0;display:flex;flex-direction:column}
-.au-upper{flex:0 0 clamp(55%,calc(560px + 1.5cqh),70%);min-height:0;display:flex;flex-direction:column;overflow:visible;overflow-anchor:none;position:relative}
+.au-upper{flex:0 0 max(clamp(55%,calc(560px + 1.5cqh),70%),var(--au-upper-floor,0px));min-height:0;display:flex;flex-direction:column;overflow:visible;overflow-anchor:none;position:relative}
 
 .au-upper>.au-usage-summary{flex:1;min-height:0;display:flex;flex-direction:column}
 .au-upper .au-hero{flex:1;min-height:min-content;align-items:stretch}
@@ -1040,7 +1057,7 @@ ${tooltipCss}
  .au-pane .au-provider-row{margin:0;gap:0;line-height:1.25;grid-template-columns:minmax(0,1fr) auto}
  .au-pane .au-provider-row>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  .au-pane .au-provider-row .au-muted{line-height:1.25}
- .au-pane .au-provider-row>small:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+ .au-pane .au-provider-row>small:last-of-type{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
  .au-pane .au-provider-cost{font-size:1.1rem}
  .au-pane .au-big{font-size:2.25rem;line-height:1.12;margin:1px 0}
  .au-pane .au-chart-title{margin:0 0 3px}
@@ -1089,8 +1106,9 @@ ${tooltipCss}
  .au-pane .au-totals .au-subagent-card{display:flex;gap:1px}
  .au-pane .au-totals .au-subagent-card .au-muted:nth-child(n+3){display:block;white-space:normal;overflow:visible;max-width:none}
 }
-/* At the approved 750px fixed-split boundary, reclaim chrome and card
-   spacing rather than moving the full-width quota or clipping the plot. */
+/* Short fixed-split panes (reachable only in the >=1436px content band, see
+   splitMinContentHeight) reclaim chrome and card spacing rather than moving the
+   full-width quota or clipping the plot. */
 @container au-pane (min-width:818px) and (max-height:850px){
  .au-pane:not(.au-mobile) .au-main-tabs{margin:0;padding-bottom:0}
  .au-pane:not(.au-mobile) .au-main-tabs button{padding-block:3px}
@@ -1108,6 +1126,23 @@ ${tooltipCss}
  .au-pane:not(.au-mobile) .au-chart-title{margin:0}
  .au-pane:not(.au-mobile) .au-usage-summary{padding-bottom:0}
 }
+/* Approved upper-height floors for provider row quota bars. The fixed split
+   is max(ratio, floor) of the pane's content box alone, never the provider,
+   page, row count or loading state. Each floor covers the tallest
+   fixture-known upper (five providers on All providers with 2/3-window
+   bars, the Anthropic 3-window card, Nous details) in its width band, plus
+   2px; two-column provider grids (content width 818-900px) assume the worst
+   row order. Bands follow the existing 901px one-column provider grid,
+   940px metric-row and 1436px provider-grid breakpoints and must match
+   splitMinContentHeight(): below that height the pane is a single root scroller,
+   so split mode always leaves a >=160px reader. Below 1436px that height is
+   above the compact-chrome range, so the floor is constant. At >=1436px the
+   compact floor (547px) applies up to 850px content height and rises 1:1
+   into the regular floor, so a taller pane never shrinks the reader. */
+@container au-pane (818px <= width <= 900px){.au-pane .au-upper{--au-upper-floor:683px}}
+@container au-pane (900px < width < 940px){.au-pane .au-upper{--au-upper-floor:661px}}
+@container au-pane (940px <= width < 1436px){.au-pane .au-upper{--au-upper-floor:652px}}
+@container au-pane (width >= 1436px){.au-pane .au-upper{--au-upper-floor:clamp(547px,calc(100cqh - 242px),608px)}}
 @container au-pane (min-width:1500px){
  .au-pane .au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(4,minmax(0,1fr))}
  .au-pane .au-chart svg{min-height:177px}
@@ -1130,12 +1165,12 @@ ${tooltipCss}
  .au-pane:not(.au-mobile) .au-provider-totals{grid-template-columns:repeat(2,minmax(0,1fr))}
  .au-pane:not(.au-mobile) .au-provider-row{grid-template-columns:minmax(0,1fr)}
  .au-pane:not(.au-mobile) .au-provider-row>span:first-child,
- .au-pane:not(.au-mobile) .au-provider-row>small:last-child{white-space:normal;overflow:visible;text-overflow:clip}
+ .au-pane:not(.au-mobile) .au-provider-row>small:last-of-type{white-space:normal;overflow:visible;text-overflow:clip}
 }
 @container (min-width:901px) and (max-width:1435px){
  .au-pane:not(.au-mobile) .au-provider-totals{grid-template-columns:minmax(0,1fr)}
  .au-pane:not(.au-mobile) .au-provider-row>span:first-child,
- .au-pane:not(.au-mobile) .au-provider-row>small:last-child{white-space:normal;overflow:visible;text-overflow:clip}
+ .au-pane:not(.au-mobile) .au-provider-row>small:last-of-type{white-space:normal;overflow:visible;text-overflow:clip}
 }
 
 .au-pane .au-custom-range{position:relative;z-index:16;font-size:.75rem}
@@ -1217,6 +1252,15 @@ function Reader({children,className='',label,id,resetKey,...props}){
  useEffect(()=>{if(state.root){state.root.scrollTop=0;state.snapshot=readerSnapshot(state.root)}},[resetKey]);
  return h('div',{...props,id,ref:state.attach,className:'au-reader '+className,tabIndex:0,'aria-label':label},h('div',{className:'au-reader-content'},children));
 }
+// Fixed split requires pane content height (pane height - 16px insets) >=
+// the width band's upper floor at that height (683/661/652px, or the compact
+// 547px at >=1436px content width; see ledgerCss) + 50px lower navigation +
+// a 160px usable reader including its lower controls. Shorter panes use the
+// single root scroller. Only the route tile's box decides, never page,
+// provider or content. Bands use the same content width as the CSS query.
+function splitMinContentHeight(content){
+ return content<=900?893:content<940?871:content<1436?862:757;
+}
 function AnalyticsPane({children,resetKey}){
  const [state]=useState(()=>({root:null,pending:null,scope:resetKey}));
  state.scope=resetKey;
@@ -1232,7 +1276,9 @@ function AnalyticsPane({children,resetKey}){
   const measure=()=>{
    frame=0;
    // Border-box dimensions stay stable when the root gains a scrollbar.
-   const box=root.getBoundingClientRect(),mobile=box.width<850||box.height<750;
+   const box=root.getBoundingClientRect(),cs=getComputedStyle(root);
+   const insetX=parseFloat(cs.paddingLeft)+parseFloat(cs.paddingRight),insetY=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom);
+   const mobile=box.width<850||box.height-insetY<splitMinContentHeight(box.width-insetX);
    const wasMobile=root.classList.contains('au-mobile');
    const reader=root.querySelector('.au-reader');
    const anchor=reader&&wasMobile!==mobile?readerSnapshot(wasMobile?root:reader):null;
@@ -1577,7 +1623,19 @@ function missingFieldNote(summary,key){
 function peakValue(value,coverage){return value?.value==null?'—':count(value.value)+(value.unmatched||coverage?.status==='partial'?' · partial':'')}
 function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
 function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
-function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders}){
+// Compact per-provider allowance bars under each All-providers summary row:
+// label above bar only, from the already-loaded /usage catalogue.
+function ProviderRowQuota({windows}){
+ if(!windows.length)return null;
+ return h('div',{className:'au-row-quota','data-testid':'provider-row-quota'},...windows.map((w,index)=>{
+  const text=compactWindowLabel(w.label),left=Math.max(0,Math.min(100,w.remaining_percent));
+  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label},
+   h('span',{className:'au-row-quota-label'},text),
+   h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining','aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
+    h('div',{className:'au-row-quota-fill',style:{width:Math.max(1,left)+'%'}})));
+ }));
+}
+function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,quotaProviders}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
  const t=key=>data?viewTokens(s,key):'—';
@@ -1585,11 +1643,13 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders})
   return h('span',{title:missingFieldNote(s,key)},awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
  const groups=data?.provider_groups||[];
  const providerIds=groups.map(row=>row.provider);
- const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row',style:{'--au-provider-accent':providerAccent(g.provider)}},
+ const quotaById=new Map((allProviders&&Array.isArray(quotaProviders)?quotaProviders:[]).filter(p=>p&&typeof p.id==='string').map(p=>[p.id,p.quota]));
+ const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row','data-provider':g.provider,style:{'--au-provider-accent':providerAccent(g.provider)}},
    h('span',{title:providerLabel(g.provider,providerIds)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
-   h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage))));
+   h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
+   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider))})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
  metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
@@ -2903,7 +2963,7 @@ function UsagePageScope({selected}){
    headerData?.tests?.length?h('select',{'aria-label':'Saved tests in actions',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null)),
   headerData?.tests?.length?h('select',{className:'au-saved-tests','aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
   h(Coverage,{data:headerData}),
-  h(Summary,{data:headerData,label,mode:displayMode,agent,allProviders:!provider,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  h(Summary,{data:headerData,label,mode:displayMode,agent,allProviders:!provider,quotaProviders:!aggregate&&quotaCurrent?quota.data.providers:null,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:scrollScope,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
