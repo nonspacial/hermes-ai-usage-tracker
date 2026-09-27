@@ -573,6 +573,93 @@ def _probe_standard(provider: str) -> dict[str, Any]:
     return _serialize_snapshot(snapshot)
 
 
+def _probe_anthropic() -> dict[str, Any]:
+    """Host snapshot (``_probe_standard``, preserved), windows replaced from ``limits[]`` when readable."""
+    serialized = _probe_standard("anthropic")
+    if serialized.get("available"):
+        windows = _anthropic_limit_windows()
+        if windows:
+            serialized["windows"] = windows
+    return serialized
+
+
+_ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_ANTHROPIC_LIMIT_LABELS = {"session": "Current session", "weekly_all": "Current week"}
+
+
+def _anthropic_limit_windows() -> Optional[list[dict[str, Any]]]:
+    """Windows from the OAuth usage ``limits[]`` array; ``None`` keeps the host's windows.
+
+    The host maps only the legacy ``five_hour``/``seven_day``/``seven_day_*``
+    keys, so model-scoped weekly limits (e.g. Fable) are absent from its
+    snapshot. Runs in the same probe worker, under the profile home and secret
+    scope already bound by ``_run_in_home``, and resolves the token with the
+    host resolver the host fetcher itself uses; the token is used only for the
+    request header and never returned, stored or logged. Any failure (no
+    resolver, non-OAuth token, HTTP/parse error, no usable limits) returns
+    ``None`` so the host snapshot is served unchanged.
+    """
+    try:
+        from agent.anthropic_adapter import _is_oauth_token, resolve_anthropic_token
+
+        token = str(resolve_anthropic_token() or "").strip()
+        if not token or not _is_oauth_token(token):
+            return None
+        payload = _get_json(_ANTHROPIC_USAGE_URL, {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "claude-code/2.1.0",
+        })
+        return _windows_from_limits(payload.get("limits") if isinstance(payload, dict) else None)
+    except Exception as exc:  # noqa: BLE001 - never worse than the host snapshot
+        log.debug("Anthropic limits[] unavailable (%s); using host windows", type(exc).__name__)
+        return None
+
+
+def _windows_from_limits(limits: Any) -> Optional[list[dict[str, Any]]]:
+    """Session, then all-model week, then model-scoped weeks in payload order."""
+    if not isinstance(limits, list):
+        return None
+    session: list[dict[str, Any]] = []
+    weekly: list[dict[str, Any]] = []
+    scoped: list[dict[str, Any]] = []
+    for item in limits:
+        if not isinstance(item, dict):
+            continue
+        percent = item.get("percent")
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)):
+            continue
+        kind = item.get("kind")
+        if kind in _ANTHROPIC_LIMIT_LABELS:
+            label = _ANTHROPIC_LIMIT_LABELS[kind]
+        elif kind == "weekly_scoped":
+            model = ((item.get("scope") or {}).get("model") or {}) if isinstance(item.get("scope"), dict) else {}
+            name = model.get("display_name") if isinstance(model, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                continue
+            label = f"{name.strip()} week"
+        else:
+            continue
+        window = _window(label, float(percent), _parse_reset(item.get("resets_at")))
+        (session if kind == "session" else weekly if kind == "weekly_all" else scoped).append(window)
+    windows = session + weekly + scoped
+    return windows or None
+
+
+def _parse_reset(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return _iso(parsed)
+
+
 def _probe_nous() -> dict[str, Any]:
     from agent.account_usage import build_nous_credits_snapshot
 
@@ -855,7 +942,7 @@ def _probe_deepseek() -> dict[str, Any]:
 
 
 _PROBES: dict[str, Callable[[], dict[str, Any]]] = {
-    "anthropic": lambda: _probe_standard("anthropic"),
+    "anthropic": _probe_anthropic,
     "openai-codex": lambda: _probe_standard("openai-codex"),
     "openrouter": lambda: _probe_standard("openrouter"),
     "nous": _probe_nous,
