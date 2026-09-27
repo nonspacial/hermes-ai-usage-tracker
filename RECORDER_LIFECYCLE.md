@@ -12,6 +12,8 @@ The Codex runtime wrapper snapshots request identity at entry and uses that iden
 
 Native API error hooks supply a dictionary. The recorder retains its validated error class name, not the dictionary's Python class and not the error message. Exit reasons outside the reviewed vocabulary become `other`; arbitrary strings are not retained.
 
+Auxiliary requests record the concrete provider the relay client actually targets. When Hermes core reports only a routing placeholder (`auto`, `main`, `auxiliary`, `custom`, empty/`unknown` or a fallback label), the recorder resolves it at request start from core's fallback label or the client's endpoint host, keeps the original label in `requested_provider`, and otherwise leaves the reported label unchanged. Rows recorded before this rule (e.g. provider `auto`) are immutable and are not rewritten. The resolution order is in [ledger_runtime/AGENTS.md](ledger_runtime/AGENTS.md).
+
 ## What unavailable values mean
 
 `missing_fields` remains the exact per-field unavailable count. Additive `missing_reasons` counts partition that count into:
