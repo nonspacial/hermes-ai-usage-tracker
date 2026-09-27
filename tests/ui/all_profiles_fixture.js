@@ -62,6 +62,20 @@ function fixtureProject(full,p){
   ...(p.has('list_mode')?{list_count:full.list_count,list_next_offset:full.list_next_offset,
     ...(full.list_rows?{list_rows:full.list_rows}:{}),...(full.list_provenance?{list_provenance:full.list_provenance}:{})}:{})};
 }
+// Opt-in synthetic Anthropic subscription shaped like the plugin's limits[]
+// windows (Current session, Current week, then the model-scoped Fable week) plus
+// one recorded request so it has an All-providers row. Not in the default
+// catalogue: call before the pane mounts (scripts inject it before register).
+function fixtureAnthropicFable({fable=true}={}){
+ const event=JSON.parse(JSON.stringify(events[0]));
+ Object.assign(event,{provider:'anthropic',id:'fixture-anthropic-fable',started:now-900,ended:now-899});
+ events.push(event);
+ const windows=[{label:'Current session',used_percent:38,remaining_percent:62,reset_at:new Date((now+3600)*1000).toISOString(),detail:null},
+  {label:'Current week',used_percent:45,remaining_percent:55,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null}];
+ if(fable)windows.push({label:'Fable week',used_percent:15,remaining_percent:85,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null});
+ demoProviders.push({id:'anthropic',label:'Anthropic',active:true,configured:true,quota:{available:true,source:'oauth_usage_api',
+  title:'Account limits',plan:'Max',details:[],windows}});
+}
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
 window.demoResets={infra:{profile:'infra',count:0,auto:false,binding:'fixture-infra',episode:null,exhausted:false,redeemable:false,blocked:false},
