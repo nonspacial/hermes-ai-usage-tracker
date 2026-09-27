@@ -332,24 +332,13 @@ def run():
         page.wait_for_function('held.length===1')
         page.evaluate('held.shift().deliver()')
         expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
-        # An out-of-band reload during a live view: background notify reads
-        # reuse the verified revision, so the displayed body stays (Updating)
-        # until the response itself reports the new revision. One cheap
-        # analytics-info check confirms it; no second full read is issued and
-        # the response is admitted under the confirmed revision.
         page.evaluate('''()=>{window.demoAnalyticsRevision='newer-generation';window.demoChange++;
-          window.infoBefore=demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length;
           for(const fn of demoSubscribers)fn({type:'changed',mode:'native-events'})}''')
         page.wait_for_function('held.length===1')
-        expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
-        expect(freshness(page)).to_contain_text('Updating')
-        assert page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length-infoBefore") == 0
+        expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Overview')
+        expect(page.locator('.au-breakdown tbody tr')).to_have_count(0)
         page.evaluate('held.shift().deliver()')
         expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
-        page.wait_for_function("()=>[...ledgerMemory.values()].some(e=>e.revision==='newer-generation')")
-        assert page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length-infoBefore") == 1
-        page.wait_for_timeout(700)
-        assert page.evaluate('held.length') == 0
         # Pane unmount keeps module RAM; full plugin disposal revokes it and
         # outstanding reads cannot repopulate the discarded generation.
         page.evaluate("ReactDOM.unmountComponentAtNode(document.getElementById('root'))")
