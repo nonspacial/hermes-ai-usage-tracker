@@ -22,6 +22,8 @@ PROBE = r'''async () => {
  Date.now=()=>wall;
  function setup({windowSeconds=86400,view='requests',extra={}}={}){
   let token='t1',revision='rev-1',reads=[],calls=[],publications=[],tasks=[],time=0,holdToken=null;
+  // pin: hold only the next change-token probe (later probes answer at once).
+  let pinNext=false,pinned=[];
   // body: extra top-level DTO fields merged into every response (per case).
   const shape={first:0,pending:0,unresolved:0,attempts:5,compressions:0,body:{}};
   const clock={now:()=>time,setTimeout(fn,ms){const task={fn,ms};tasks.push(task);return task},
@@ -34,10 +36,11 @@ PROBE = r'''async () => {
      read_only:true,token_kind:'opaque-filesystem-hint',change_token:token,coverage,capabilities:{change_check:true}});
     // A held probe answers with the token current at release time.
     if(holdToken)return new Promise(resolve=>holdToken.push(()=>resolve(answer())));
+    if(pinNext){pinNext=false;return new Promise(resolve=>pinned.push(()=>resolve(answer())))}
     return Promise.resolve(answer());
    }
    if(path.startsWith('/ledger/analytics'))return Promise.resolve({revision,restart_required:false});
-   if(path.startsWith('/ledger?'))return new Promise((resolve,reject)=>reads.push({path,reject,
+   if(path.startsWith('/ledger?'))return new Promise((resolve,reject)=>reads.push({path,reject,at:time,
     resolve:(extra={})=>{
      const q=new URLSearchParams(path.split('?')[1]),start=Number(q.get('start'));
      const end=windowSeconds?start+windowSeconds:wall/1000,step=3600,edge=(Math.floor(start/step)+1)*step;
@@ -61,6 +64,8 @@ PROBE = r'''async () => {
   const count=route=>calls.filter(c=>c===route).length;
   return {owner,reads,publications,run,count,shape,install,get tasks(){return tasks},
    hold:()=>{holdToken=[]},release:async()=>{const held=holdToken||[];holdToken=null;for(const fn of held)fn();await flush()},
+   pin:()=>{pinNext=true},get pinned(){return pinned.length},
+   unpin:async()=>{const held=pinned;pinned=[];for(const fn of held)fn();await flush()},
    get time(){return time},
    // The coordinator clock and the wall clock can move separately.
    advance:(ms,wallMs=ms)=>{time+=ms;wall+=wallMs},setToken:v=>token=v,setRevision:v=>revision=v};
@@ -195,7 +200,8 @@ PROBE = r'''async () => {
   reports.push('expiry during a flight re-evaluated on settle; recent read does not suppress a tick');
 
   // M1: a notify arriving while an expiry probe is held does not reuse that
-  // probe; its read takes a fresh pre-read token and publishes no stale shift.
+  // probe's answer; its read (no certifying token while the probe is held)
+  // publishes, and no stale shift follows.
   const held=setup();held.owner.start();await flush();await read(held);
   held.advance(60000);held.hold();const pending=held.owner.expire();await flush();
   held.setToken('t-notify');held.owner.hint();await held.run();
@@ -207,7 +213,70 @@ PROBE = r'''async () => {
   await read(held);
   if(held.publications.filter(p=>p.data).at(-1).received===undefined)throw Error('notify read not published');
   held.owner.dispose();
-  reports.push('notify during a held expiry probe reads with its own token; no stale shift');
+  reports.push('notify during a held expiry probe does not reuse it; no stale shift');
+
+  // I1 (probe joining): a notify never waits behind a probe that began before
+  // it. With an expiry or poll probe held (not released until the end), the
+  // notify's GET /ledger starts at the 150 ms debounce (a read's own check
+  // returns null while a probe is in flight, as on main) and its response is
+  // published without waiting for the held probe. Releasing the old probe
+  // afterwards adds at most one trailing read and publishes no stale shift.
+  // The reviewer's variant with every probe held is covered by `allHeld`.
+  const behindHeld=async(label,begin)=>{
+   const y=setup();y.owner.start();await flush();await read(y,{requests:[{id:'first'}]});
+   y.advance(60000);y.pin();const old=begin(y);await flush();
+   if(y.pinned!==1)throw Error(label+': probe not held');
+   const probes=y.count('/ledger/change-token'),analytics=y.count('/ledger/analytics');
+   // The notify announces a write; the held probe will answer with it too.
+   y.setToken('t-'+label);const hintAt=y.time;y.owner.hint();
+   if(y.tasks.length!==1||y.tasks[0].ms!==150)throw Error(label+': notify debounce '+JSON.stringify(y.tasks.map(t=>t.ms)));
+   y.advance(150,0);await y.run();
+   if(y.reads.length!==2)throw Error(label+': GET /ledger waited behind the held probe');
+   if(y.reads[1].at-hintAt!==150)throw Error(label+': GET /ledger started at '+(y.reads[1].at-hintAt)+' ms');
+   if(y.count('/ledger/change-token')>probes+1||y.count('/ledger/analytics')!==analytics+1)
+    throw Error(label+': expected at most one pre-read probe and one revision check');
+   if(y.pinned!==1)throw Error(label+': held probe released early');
+   await read(y,{requests:[{id:'notified'}]});
+   const painted=y.publications.filter(p=>p.data).at(-1);
+   if(painted.data.requests[0].id!=='notified'||painted.fetching!==false)
+    throw Error(label+': notified data not published while the old probe was held');
+   if(y.pinned!==1)throw Error(label+': publish waited on the held probe');
+   const settled=y.publications.length,readsBefore=y.reads.length;
+   // The held probe answers with the unchanged token: a stale shift would
+   // otherwise look certified.
+   await y.unpin();await old;await flush();
+   if(y.tasks.length>1)throw Error(label+': several trailing reads queued');
+   await y.run();
+   if(y.reads.length>readsBefore+1)throw Error(label+': more than one trailing read');
+   if(y.reads.length>readsBefore){await read(y);await y.run()}
+   if(y.reads.length>readsBefore+1||y.tasks.length)throw Error(label+': read chain after trailing read');
+   const late=y.publications.slice(settled).filter(p=>p.data);
+   // A read publishes fetching:false; only a local edge shift omits it.
+   if(late.some(p=>p.fetching===undefined))
+    throw Error(label+': stale shift published after release');
+   y.owner.dispose();
+   return readsBefore===y.reads.length?0:1;
+  };
+  const trailExpiry=await behindHeld('held expiry probe',y=>y.owner.expire());
+  const trailPoll=await behindHeld('held poll probe',y=>y.owner.checkForChanges());
+  // Every probe held (a saturated backend threadpool): GET /ledger still
+  // starts 150 ms after the notify and publishes while all probes are held.
+  const allHeld=setup();allHeld.owner.start();await flush();await read(allHeld);
+  allHeld.advance(60000);allHeld.hold();const heldExpiry=allHeld.owner.expire();await flush();
+  const heldPoll=allHeld.owner.checkForChanges();await flush();
+  allHeld.setToken('t-all');const allAt=allHeld.time;allHeld.owner.hint();allHeld.advance(150,0);await allHeld.run();
+  if(allHeld.reads.length!==2||allHeld.reads[1].at-allAt!==150)throw Error('all probes held: GET /ledger delayed');
+  await read(allHeld,{requests:[{id:'all-held'}]});
+  const allPainted=allHeld.publications.filter(p=>p.data).at(-1);
+  if(allPainted.data.requests[0].id!=='all-held'||allPainted.fetching!==false)throw Error('all probes held: publish waited');
+  const allSettled=allHeld.publications.length,allReads=allHeld.reads.length;
+  await allHeld.release();await heldExpiry;await heldPoll;await flush();await allHeld.run();
+  if(allHeld.reads.length>allReads+1)throw Error('all probes held: more than one trailing read');
+  if(allHeld.reads.length>allReads){await read(allHeld);await allHeld.run()}
+  if(allHeld.reads.length>allReads+1||allHeld.tasks.length)throw Error('all probes held: read chain');
+  if(allHeld.publications.slice(allSettled).some(p=>p.data&&p.fetching===undefined))throw Error('all probes held: stale shift');
+  allHeld.owner.dispose();
+  reports.push(`notify with a held expiry/poll probe: GET /ledger at 150 ms, published before release (also with every probe held); trailing reads after release ${trailExpiry}/${trailPoll}, no stale shift`);
 
   // (3) Overlapping hints, polls and expiry during one flight: exactly one
   // trailing read, then quiet.

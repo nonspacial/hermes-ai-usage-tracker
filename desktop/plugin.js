@@ -2337,10 +2337,13 @@ let liveLedgerOwnerId=0;
 function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis,connection=null}){
   let alive=true,active=false,dirty=false,manual=false,manualForNext=false,token=null;
   let unsupported=false,failures=0,checkFailures=0,followup=null,retry=null;
-  // checkFlight: the single in-flight change-token probe ({serial,promise}).
-  // lastCheck: its last result, reusable only as a pre-read check with no
-  // external hint since. hintSerial counts notify hints and manual Refresh.
-  let checkFlight=null,lastCheck=null,hintSerial=0;
+  // checkFlight: the most recently started change-token probe still in flight
+  // ({serial,reads,promise}); inflight counts every unanswered probe (older
+  // ones may still be running). lastCheck: the answer of the most recently
+  // started probe to answer, reusable only as a pre-read check with no
+  // external hint since. hintSerial counts notify hints and manual Refresh;
+  // readCount counts full read starts; probeSeq orders probes.
+  let checkFlight=null,inflight=0,lastCheck=null,hintSerial=0,readCount=0,probeSeq=0;
   // Last published response (full read or locally shifted rolling edges) and
   // the coordinator-clock start of the last full read.
   // shownToken: change hint certified (identical before and after) by the
@@ -2373,27 +2376,31 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
  const current=()=>alive&&memoryGeneration===ledgerMemoryGeneration&&
   (connection===null||ledgerMemoryConnection===connection);
  const clear=()=>{clock.clearTimeout(followup);clock.clearTimeout(retry);followup=retry=null};
- const check=async(fresh=false)=>{
-  // Concurrent callers share one in-flight probe, but only one that began
-  // after the latest notify hint/manual Refresh: an older probe may predate
-  // the write that hint announced. A `fresh` caller (the post-read check)
-  // must observe the hint after its read, so it never joins a probe that
-  // began while that read was still running.
-  while(checkFlight){
-   const pending=checkFlight;
-   if(!fresh&&pending.serial===hintSerial)return pending.promise;
-   await pending.promise;
-  }
+ const check=async(join=false)=>{
+  // Nothing ever waits for another caller's probe. A read's own pre- and
+  // post-read checks (`join` false) return null at once while any probe is
+  // in flight, as before this cadence work: a held or slow probe never delays
+  // a notify-driven GET /ledger or its repaint, and a read without both
+  // tokens simply certifies nothing (no cache admission, no later skip).
+  // Background callers (`join`: change poll, rolling expiry) share the latest
+  // in-flight probe only when it began after the latest notify hint/manual
+  // Refresh and the latest read start (it may otherwise predate either);
+  // else they start their own.
+  if(join){
+   if(checkFlight&&checkFlight.serial===hintSerial&&checkFlight.reads===readCount)
+    return checkFlight.promise;
+  }else if(inflight)return null;
   if(!current()||unsupported)return null;
-  const flight={serial:hintSerial,promise:probe()};checkFlight=flight;
-  try{return await flight.promise}finally{if(checkFlight===flight)checkFlight=null}
+  const flight={serial:hintSerial,reads:readCount,promise:probe(++probeSeq)};checkFlight=flight;
+  inflight++;
+  try{return await flight.promise}finally{inflight--;if(checkFlight===flight)checkFlight=null}
  };
  // A just-observed hint (poll, expiry or previous post-read check) was seen
  // before the next read starts, so it can stand in for that read's pre-read
  // check. An older one is refetched.
  const recentCheck=()=>lastCheck&&lastCheck.serial===hintSerial&&
   now()-lastCheck.at<=LEDGER_CHECK_REUSE_MS?lastCheck.result:null;
- const probe=async()=>{
+ const probe=async(seq)=>{
   const serial=hintSerial;
   try{
    const result=await rest(tokenPath,{timeoutMs:8000});
@@ -2402,7 +2409,8 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
       result?.token_kind!=='opaque-filesystem-hint'||typeof result?.change_token!=='string'||
       result?.capabilities?.change_check!==true)throw new Error('Unsupported change-check response');
    if(checkFailures){checkFailures=0;publish({checkLimited:false})}
-   lastCheck={result,at:now(),serial};
+   // A late answer from an older concurrent probe never replaces a newer one.
+   if(!lastCheck||seq>lastCheck.seq)lastCheck={result,at:now(),serial,seq};
    return result;
   }catch(error){
    if(current()){
@@ -2420,7 +2428,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
  let loaded=false,lastRevision=null,lastInventory=null;
  async function start(){
   if(!current()||active)return;
-  clear();active=true;dirty=false;expireAfter=false;
+  clear();active=true;dirty=false;expireAfter=false;readCount++;
   publish({fetching:true,manual});
   let before=null,after=null,failed=false,revision=null;
   try{
@@ -2498,7 +2506,9 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
        !validRecordPage(response,new URLSearchParams(readPath.split('?')[1])))
      throw new Error('Backend record paging unavailable or incomplete; update analytics code before using this view.');
    }
-   after=await check(true);
+   // Its own probe, begun after the response; null (no wait) while another
+   // probe is in flight.
+   after=await check();
    if(!current())return;
    if(before!==null&&after!==null&&before.change_token!==after.change_token)dirty=true;
    // A token observed only after the read cannot certify this response.
@@ -2563,12 +2573,12 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    if(retry||!lastShown||lastReadStarted===null||now()-lastReadStarted>=LEDGER_RECONCILE_MS||
       unsupported||checkFailures>=3||query.get('view')==='compressions'||
       !rollingEdgeStable(lastShown,windowSeconds,Date.now(),filtered)){schedule(LEDGER_HINT_DEBOUNCE_MS);return}
-   const shown=lastShown,serial=hintSerial;
-   const next=await check();
+   const shown=lastShown,serial=hintSerial,reads=readCount;
+   const next=await check(true);
    if(!current())return;
    if(active){expireAfter=true;return}
    // A hint, read or refresh since the probe began owns what is shown now.
-   if(followup||lastShown!==shown||hintSerial!==serial)return;
+   if(followup||lastShown!==shown||hintSerial!==serial||readCount!==reads)return;
    // Window edges follow the wall clock (Date.now(), as rollingPath samples
    // the read start); read ages and reconciliation use the coordinator clock.
    // Fake-clock tests move them separately.
@@ -2589,13 +2599,13 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   if(checkFailures>=3){
    if(now()-lastFallback<60000)return;
    lastFallback=now();
-   const recovered=await check();
+   const recovered=await check(true);
    if(!alive)return;
    if(recovered!==null){if(token!==recovered.change_token)queue();return}
    if(!windowSeconds&&document.visibilityState!=='hidden')hint();
    return;
   }
-  const next=await check();
+  const next=await check(true);
   if(!alive||next===null)return;
   if(token===null){token=next.change_token;queue();return}
   if(next.change_token!==token)queue();
