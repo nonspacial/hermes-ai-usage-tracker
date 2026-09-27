@@ -5,6 +5,8 @@ then take a consistent SQLite backup and independently record its SHA-256.
 An exclusive SQLite transaction excludes cooperating concurrent writers during
 this call, but does not prove they were stopped before or will stay stopped.
 Never called by Store startup, dashboard reads, or plugin installation.
+It is also the only path that adds the pure read indexes (storage.READ_INDEX_SQL)
+to an existing ledger, including one whose journal is already installed.
 """
 from __future__ import annotations
 
@@ -55,6 +57,32 @@ def _known_schema(connection: sqlite3.Connection) -> None:
             raise ValueError('Incompatible ledger schema, columns, constraints or indexes.')
     if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
         raise ValueError('Ledger integrity check failed.')
+
+
+def _add_read_indexes(connection: sqlite3.Connection) -> bool:
+    """Add any missing storage.READ_INDEX_SQL index inside the exclusive transaction.
+
+    This is the only path that builds them on an existing ledger: the build is
+    a full scan, which must never run under a live recorder's writer lock
+    (Store() builds them only for a fresh, empty ledger). Each is optional, so
+    a non-lock failure skips that index; reads have an unindexed plan.
+    Returns whether any index was created.
+    """
+    from .storage import READ_INDEX_SQL
+    created = False
+    for name, sql in READ_INDEX_SQL.items():
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone():
+            continue
+        connection.execute('SAVEPOINT read_index')
+        try:
+            connection.execute(sql)
+            created = True
+        except sqlite3.OperationalError as exc:
+            if (getattr(exc, 'sqlite_errorcode', 0) or 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise
+            connection.execute('ROLLBACK TO read_index')
+        connection.execute('RELEASE read_index')
+    return created
 
 
 def _readable_data(connection: sqlite3.Connection) -> None:
@@ -265,6 +293,11 @@ def migrate_offline(database: Path, *, confirmed: bool = False,
                 if supported(connection):
                     # Idempotent valid upgrade. Still require operator proof and
                     # a valid backup, never overwrite existing journal history.
+                    # Only missing pure read indexes may be added (no data change).
+                    if _add_read_indexes(connection):
+                        if not supported(connection):
+                            raise ValueError('Incremental journal validation failed.')
+                        connection.commit()
                     return
                 if connection.execute("SELECT 1 FROM sqlite_master WHERE name LIKE 'analytics_%' LIMIT 1").fetchone():
                     raise ValueError('Partial or incompatible analytics schema; manual review required.')
@@ -274,6 +307,7 @@ def migrate_offline(database: Path, *, confirmed: bool = False,
             _readable_data(connection)
             _reader_preflight(backup, backup_sha256)
             install(connection)
+            _add_read_indexes(connection)
             if not supported(connection):
                 raise ValueError('Incremental journal validation failed.')
             if (database.stat().st_dev, database.stat().st_ino) != (target_stat.st_dev, target_stat.st_ino):

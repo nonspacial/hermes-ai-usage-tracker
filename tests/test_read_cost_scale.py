@@ -202,10 +202,15 @@ def test_store_read_parity(small, tmp_path, monkeypatch, case, view, group):
     actual = small.read(**args, view=view, group=group, _delta_seed=view is not None,
                         _validate_costs=view is not None)
     old = unindexed_copy(small, tmp_path / 'old')
+    # New code on an existing (unindexed, never migrated) ledger.
+    unindexed = old.read(**args, view=view, group=group, _delta_seed=view is not None,
+                         _validate_costs=view is not None)
     with reference(monkeypatch, (storage, session_cache_writes)):
         expected = old.read(**args, view=view, group=group, _delta_seed=view is not None,
                             _validate_costs=view is not None)
-    assert json.dumps(strip(actual), sort_keys=True, default=str) == json.dumps(strip(expected), sort_keys=True, default=str)
+    dump = lambda result: json.dumps(strip(result), sort_keys=True, default=str)
+    assert dump(actual) == dump(expected)
+    assert dump(unindexed) == dump(expected)
     assert actual['summary']['session_cache_writes']['compared_requests'] > 0
 
 
@@ -247,20 +252,45 @@ def test_cost_admission_matches_ordered_python_scan():
             assert got == expected
 
 
-def test_read_indexes_on_existing_ledgers(tmp_path):
-    # An existing ledger created without the read indexes gains them on open,
-    # keeps signed-read eligibility, and a malformed legacy row never blocks it.
+def _drop_read_indexes(store):
+    with store.db() as c:
+        for name in storage.READ_INDEX_SQL:
+            c.execute('DROP INDEX IF EXISTS ' + name)
+
+
+def _index_names(c):
+    return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+
+
+def _offline_options(path, tmp_path):
+    import hashlib
+    backup = tmp_path / 'verified.sqlite3'
+    with contextlib.closing(sqlite3.connect(path)) as source, contextlib.closing(sqlite3.connect(backup)) as target:
+        source.backup(target)
+    proof = hashlib.sha256(backup.read_bytes()).hexdigest()
+    return dict(confirmed=True, offline_target=path, backup=backup, backup_sha256=proof)
+
+
+def test_read_indexes_fresh_only_and_offline_for_existing(tmp_path):
+    # A fresh ledger gets the read indexes at creation (empty tables, no scan).
+    # An existing ledger without them is never indexed by Store() (that is a
+    # full scan under the writer lock); only the writer-excluded offline path
+    # adds them, and presence stays optional-but-exact for signed reads.
+    from _hermes_ai_usage_ledger_v2.incremental_migration import migrate_offline
     root = tmp_path / 'legacy'
     store = build(root, 200)
     with store.db() as c:
-        for name in storage.READ_INDEX_SQL:
-            c.execute('DROP INDEX ' + name)
-        c.execute("INSERT INTO requests VALUES('bad',1,2,'p','m','s','main',NULL,'completed','{not-json')")
-        assert incremental.supported(c)
-        c.execute("DELETE FROM requests WHERE id='bad'")
+        assert set(storage.READ_INDEX_SQL) <= _index_names(c)
+    _drop_read_indexes(store)
     storage.Store(root)
     with store.db() as c:
-        names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not set(storage.READ_INDEX_SQL) & _index_names(c)
+        assert incremental.supported(c)
+        c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    options = _offline_options(store.path, tmp_path)
+    migrate_offline(store.path, **options)
+    with store.db() as c:
+        names = _index_names(c)
         assert set(storage.READ_INDEX_SQL) <= names
         assert incremental.supported(c)
         plan = ' '.join(str(tuple(r)) for r in c.execute(
@@ -272,6 +302,7 @@ def test_read_indexes_on_existing_ledgers(tmp_path):
         assert not incremental.supported(c)
         c.execute('DROP INDEX event_kind')
         c.execute(storage.READ_INDEX_SQL['event_kind'])
+        assert incremental.supported(c)
         # Invalid JSON can still be written with the expression index present,
         # and project options fall back to the original query's semantics.
         c.execute("INSERT INTO requests VALUES('bad2',1,2,'p','m','s','main',NULL,'completed','{not-json')")
@@ -288,6 +319,215 @@ def test_read_indexes_on_existing_ledgers(tmp_path):
                   'LEFT JOIN session_write_projection p ON p.id=r.id')
         assert 'last' in {o['id'] for o in storage.project_options(c)}
         assert storage.project_options(c) == _reference_options(c)
+
+
+def test_legacy_offline_migration_adds_read_indexes(tmp_path):
+    from _hermes_ai_usage_ledger_v2.incremental_migration import migrate_offline
+    from _hermes_ai_usage_ledger_v2.skills import SCHEMA as SKILLS_SCHEMA
+    folder = tmp_path / 'usage-ledger'
+    folder.mkdir()
+    path = folder / 'events.sqlite3'
+    with contextlib.closing(sqlite3.connect(path)) as c:
+        c.executescript(storage.SCHEMA + SKILLS_SCHEMA)
+        c.execute("INSERT INTO events(ts,kind,item_id,data) VALUES(1,'subagent_start','s','{}')")
+        c.commit()
+    storage.Store(tmp_path)  # existing legacy ledger: neither journal nor read indexes
+    with contextlib.closing(sqlite3.connect(path)) as c:
+        assert not incremental.supported(c)
+        assert not set(storage.READ_INDEX_SQL) & _index_names(c)
+    migrate_offline(path, **_offline_options(path, tmp_path))
+    with contextlib.closing(sqlite3.connect(path)) as c:
+        assert incremental.supported(c)
+        assert set(storage.READ_INDEX_SQL) <= _index_names(c)
+
+
+def test_existing_ledger_open_never_blocks_cross_process_writer(tmp_path, monkeypatch):
+    """Store() on an existing unindexed ledger (recorder/hook path) must not
+    build read indexes under its writer lock: a second-process writer with the
+    recorder's 2 s busy timeout must succeed promptly (else @safe drops a record).
+
+    The index build is made deterministically slow (0.3 s per events row via a
+    registered deterministic SQL function) so a regression holds the lock >2 s.
+    """
+    from _hermes_ai_usage_ledger_v2 import ownership
+    import threading
+    root = tmp_path / 'existing'
+    store = build(root, 400)
+    _drop_read_indexes(store)
+    with store.db() as c:
+        assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0] * 0.3 > 2.5
+    calls = []
+
+    def slow(value):
+        calls.append(value)
+        time.sleep(0.3)
+        return value
+    register = ownership.register_sql
+
+    def register_slow(c):
+        register(c)
+        c.create_function('slow_probe', 1, slow, deterministic=True)
+    monkeypatch.setattr(ownership, 'register_sql', register_slow)
+    monkeypatch.setitem(storage.READ_INDEX_SQL, 'event_kind',
+                        'CREATE INDEX IF NOT EXISTS event_kind ON events(slow_probe(kind))')
+    started, result = threading.Event(), {}
+
+    def writer():
+        started.wait(5)
+        time.sleep(0.05)
+        t = time.perf_counter()
+        with contextlib.closing(sqlite3.connect(store.path, timeout=2)) as w:
+            try:
+                w.execute('BEGIN IMMEDIATE')
+                w.execute("INSERT INTO health VALUES('probe',1,'{}') ON CONFLICT(process) DO UPDATE SET updated=2")
+                w.commit()
+                result['writer'] = ('ok', time.perf_counter() - t)
+            except sqlite3.OperationalError as exc:
+                result['writer'] = ('failed ' + str(exc), time.perf_counter() - t)
+    real_db = storage.Store.db
+
+    @contextlib.contextmanager
+    def signalling_db(self):
+        # Release the writer as soon as Store() opens its connection.
+        with real_db(self) as c:
+            started.set()
+            yield c
+    monkeypatch.setattr(storage.Store, 'db', signalling_db)
+    thread = threading.Thread(target=writer)
+    thread.start()
+    storage.Store(root)
+    thread.join(10)
+    assert result['writer'][0] == 'ok', result
+    assert result['writer'][1] < 1.0, result
+    assert not calls
+    with contextlib.closing(sqlite3.connect(store.path)) as c:
+        assert 'event_kind' not in _index_names(c)
+        assert c.execute("SELECT updated FROM health WHERE process='probe'").fetchone() is not None
+    # A fresh ledger indexes empty tables: the slow expression never runs.
+    storage.Store(tmp_path / 'fresh')
+    assert not calls
+
+
+def test_info_digest_cache_waits_for_settled_ctime(tmp_path, monkeypatch):
+    from _hermes_ai_usage_ledger_v2 import analytics_reload
+    runtime = object.__new__(analytics_reload.AnalyticsRuntime)
+    path = tmp_path / 'module.py'
+    path.write_text('a = 1\n')
+    first = runtime._digest(path)
+    assert path not in runtime._digests  # ctime within DIGEST_SETTLE: never cached
+    now = time.time()
+    monkeypatch.setattr(analytics_reload.time, 'time', lambda: now + analytics_reload.DIGEST_SETTLE + 1)
+    assert runtime._digest(path) == first
+    assert path in runtime._digests
+    path.write_text('b = 2\n')  # same size, new ctime: key differs, rehashed
+    assert runtime._digest(path) != first
+
+
+# Reviewer's adversarial predecessor fixture (ported from an out-of-tree
+# old-tree/new-tree comparison onto the in-repo reference mode).
+ADV_ORIGIN = 2_000_000.0
+ADV_RATE = dict(provider='synthetic', model='fixture', service_tier='standard', input_tokens='1.2',
+                output_tokens='9.8', cache_read_tokens='0.12', cache_write_tokens='1.5')
+
+
+def _adv_rows():
+    import random
+    rows = []
+
+    def add(sid, t, *, task='main', source='main_hook', reads=None, status='completed', sub='', model='m',
+            acct='a', rc=None, project='p1', agent='primary', provider='synthetic'):
+        usage = {} if reads is None else normalize(
+            {'input_tokens': 1000, 'output_tokens': 5,
+             'input_tokens_details': {'cached_tokens': reads, 'cache_write_tokens': 0}})
+        if rc is not None:
+            usage['request_count'] = rc
+        rows.append(dict(id=f'x{len(rows) + 1:05}', started=t, ended=None if status == 'pending' else t + 1,
+                         session_id=sid, provider=provider, model=model, response_model=model,
+                         api_mode='responses', account_id=acct, task=task, source=source, status=status,
+                         agent_kind=agent, subagent_id=sub, root_session_id=sid, project_id=project,
+                         project_label='L' + str(project), usage=usage, cost=costs(usage, ADV_RATE)))
+    O, W = ADV_ORIGIN, ADV_ORIGIN + 1000
+    # S1: several streams spanning W; pending rows (with and without reads) just before W.
+    add('S1', O + 10, reads=100)
+    add('S1', O + 20, reads=500, task='title', source='aux_hook')
+    add('S1', O + 30, reads=200, sub='c1')
+    add('S1', O + 900, status='pending')
+    add('S1', O + 950, reads=900, status='pending')
+    add('S1', O + 960, status='pending', task='title', source='aux_hook')
+    add('S1', O + 970, reads=50, rc=3)  # aggregate predecessor
+    add('S1', W, reads=400)  # ties at W
+    add('S1', W, reads=410, sub='c1')
+    add('S1', W + 5, reads=600, task='title', source='aux_hook')
+    add('S1', W + 6, reads=700, project='p2')  # filtered-out neighbour
+    add('S1', W + 7, reads=800)
+    # S2: a stream whose only prior rows are pending; a never-seen stream.
+    add('S2', O + 100, status='pending', model='m2')
+    add('S2', O + 200, status='pending', model='m2')
+    add('S2', O + 300, reads=77)
+    add('S2', W + 1, reads=90, model='m2')
+    add('S2', W + 2, reads=95, model='m3')
+    add('S2', W + 3, reads=10)
+    add('S3', O + 5, reads=1)
+    for k in range(40):
+        add('S3', O + 5 + k * 50, reads=(k * 37) % 300, task='h' if k % 3 == 0 else 'main',
+            source='aux_hook' if k % 3 == 0 else 'main_hook',
+            status=('pending' if k % 7 == 0 else 'completed') if k % 5 else 'failed',
+            acct='a' if k % 4 else 'b', agent='subagent' if k % 6 == 0 else 'primary', project='p' + str(k % 3))
+    for k in range(6):  # identical timestamps either side of W: id tie-break
+        add('S4', W - 1 if k < 3 else W, reads=k * 100 if k != 2 else None,
+            status='pending' if k == 2 else 'completed')
+    add('S5', O + 50, reads=300)
+    add('S5', O + 60)  # completed without usage: still a predecessor
+    add('S5', W + 50, reads=310)
+    rnd = random.Random(7)
+    for _ in range(600):
+        add('R' + str(rnd.randrange(12)), O + rnd.randrange(3000), reads=rnd.choice([None, 0, 100, 250, 1000, 5000]),
+            status=rnd.choice(['completed'] * 5 + ['pending', 'failed']), task=rnd.choice(['main', 'main', 'h1', 'h2']),
+            source=rnd.choice(['main_hook', 'aux_hook']), sub=rnd.choice(['', '', 'c1', 'c2']),
+            model=rnd.choice(['m', 'm2']), acct=rnd.choice(['a', 'b']), rc=rnd.choice([None] * 8 + [2]),
+            project=rnd.choice(['p1', 'p2', None]), agent=rnd.choice(['primary', 'subagent']),
+            provider=rnd.choice(['synthetic', 'other']))
+    return rows
+
+
+@pytest.fixture(scope='module')
+def adversarial(tmp_path_factory):
+    root = tmp_path_factory.mktemp('adversarial')
+    store = storage.Store(root)
+    with store.db() as c:
+        c.executemany('INSERT INTO requests VALUES(?,?,?,?,?,?,?,?,?,?)',
+                      [(r['id'], r['started'], r['ended'], r['provider'], r['model'], r['session_id'], r['task'],
+                        None, r['status'], storage.jd(r)) for r in _adv_rows()])
+        c.execute("INSERT INTO events(ts,kind,item_id,data) VALUES(?,?,?,?)", (ADV_ORIGIN + 1010, 'subagent_start', 'S1', '{}'))
+        c.execute("INSERT INTO events(ts,kind,item_id,data) VALUES(?,?,?,?)", (ADV_ORIGIN + 1100, 'subagent_stop', 'S1', '{}'))
+    return store
+
+
+def _adv_read(store, start, end, filt, view, group):
+    try:
+        r = store.read(start=start, end=end, **filt, view=view, group=group,
+                       _delta_seed=view is not None, _validate_costs=view is not None)
+    except Exception as exc:  # errors must match too
+        return 'ERR ' + type(exc).__name__ + ' ' + str(exc)
+    r.pop('generated_at', None)
+    return json.dumps(r, sort_keys=True, default=str)
+
+
+@pytest.mark.parametrize('bounds', [(1000, 3100), (999, 3100), (500, 1500), (1990, 2010), (None, 3100), (1006, 1007)])
+def test_adversarial_predecessor_parity(adversarial, tmp_path, monkeypatch, bounds):
+    start = 0 if bounds[0] is None else ADV_ORIGIN + bounds[0]
+    end = ADV_ORIGIN + bounds[1]
+    monkeypatch.setattr(storage.time, 'time', lambda: ADV_ORIGIN + 5000)
+    old = unindexed_copy(adversarial, tmp_path / 'old')
+    filters = [{}, dict(project='p1'), dict(agent='subagent'), dict(session='S1'), dict(provider='other'), dict(model='m2')]
+    views = [(None, None), ('overview', 'time'), ('overview', 'model'), ('overview', 'project')]
+    actual = [_adv_read(adversarial, start, end, f, v, g) for f in filters for v, g in views]
+    unindexed = [_adv_read(old, start, end, f, v, g) for f in filters for v, g in views]
+    with reference(monkeypatch, (storage, session_cache_writes)):
+        expected = [_adv_read(old, start, end, f, v, g) for f in filters for v, g in views]
+    assert actual == expected
+    assert unindexed == expected
+    assert not any(r.startswith('ERR') for r in actual)
 
 
 @pytest.mark.skipif(os.environ.get('HERMES_USAGE_READ_COST_SCALE') != '1',
@@ -311,14 +551,18 @@ def test_scale_overview_time_parity_and_timing(tmp_path, monkeypatch, capsys):
             t = time.perf_counter()
             actual = runtime.read(store.root, *positional, view='overview', group='time')
             timings[label + ' new'] = time.perf_counter() - t
+            t = time.perf_counter()
+            unindexed = runtime.read(old.root, *positional, view='overview', group='time')
+            timings[label + ' new-unindexed'] = time.perf_counter() - t
             with reference(monkeypatch, modules):
                 t = time.perf_counter()
                 expected = runtime.read(old.root, *positional, view='overview', group='time')
                 timings[label + ' reference'] = time.perf_counter() - t
-            for result in (actual, expected):
+            for result in (actual, unindexed, expected):
                 result.pop('generated_at')
                 result['incremental'].pop('resume_token', None)
             assert actual == expected
+            assert unindexed == expected
             timings[label + ' rows'] = actual['request_count']
     finally:
         runtime._discard(runtime.current)
