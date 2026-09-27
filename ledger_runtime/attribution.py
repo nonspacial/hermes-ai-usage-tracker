@@ -125,7 +125,8 @@ def resolve(c,sid,platform='',projects=()):
 def capture(store,sid,platform='',explicit=None):
     if not sid:return {}
     rows=state_rows(store.root,sid)
-    projects=read_projects(store.root)
+    from .storage import projects_for
+    projects=projects_for(store.root)
     with store.db() as c:
         c.execute('BEGIN IMMEDIATE')
         for row in reversed(rows):persist_state(c,row)

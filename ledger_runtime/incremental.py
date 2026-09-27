@@ -70,8 +70,25 @@ CHANGES_SQL = '''CREATE TABLE analytics_changes(
         revision INTEGER PRIMARY KEY AUTOINCREMENT,
         kind TEXT NOT NULL, item_id TEXT,
         old_row TEXT, new_row TEXT)'''
+# Running retained-byte total, maintained by journal triggers below, so the
+# byte bound needs no window sum over every retained row on each mutation.
+BYTES_SQL = 'CREATE TABLE analytics_change_bytes(total INTEGER NOT NULL)'
 
-def _triggers():
+
+def _size(alias):
+    """Accounted bytes of one journal row (same formula as the retention bound)."""
+    return (f"(length(CAST(COALESCE({alias}old_row,'') AS BLOB)) + "
+            f"length(CAST(COALESCE({alias}new_row,'') AS BLOB)) + "
+            f"length(CAST(COALESCE({alias}item_id,'') AS BLOB)) + "
+            f"length(CAST({alias}kind AS BLOB)) + 64)")
+
+
+def _triggers(legacy=False):
+    """Journal trigger DDL. ``legacy`` reproduces the original window-sum form
+    byte-for-byte: ledgers created with it stay supported unchanged (never
+    implicitly rewritten). Both forms retain the same newest suffix: at most
+    CAPACITY rows and MAX_JOURNAL_BYTES accounted bytes, always the newest row.
+    """
     definitions = {}
     for table in TRACKED:
         # Store exact SQL column values as a JSON object; data is a JSON string,
@@ -98,6 +115,37 @@ def _triggers():
             oversized = (f'(length(CAST({old_value} AS BLOB))>{MAX_ROW_BYTES} OR '
                          f'length(CAST({new_value} AS BLOB))>{MAX_ROW_BYTES})') if table == 'requests' else '0'
             name = f'analytics_{table}_{operation.lower()}'
+            if legacy:
+                trim = f'''DELETE FROM analytics_changes WHERE revision < COALESCE((
+                    SELECT MIN(revision) FROM (
+                        SELECT revision, SUM(length(CAST(COALESCE(old_row,'') AS BLOB)) +
+                            length(CAST(COALESCE(new_row,'') AS BLOB)) +
+                            length(CAST(COALESCE(item_id,'') AS BLOB)) +
+                            length(CAST(kind AS BLOB)) + 64)
+                            OVER (ORDER BY revision DESC) AS bytes
+                        FROM analytics_changes)
+                    WHERE bytes <= {MAX_JOURNAL_BYTES}),
+                    (SELECT MAX(revision) FROM analytics_changes));'''
+            else:
+                # Same cut as the suffix window sum: walk oldest-first while
+                # the retained total exceeds the bound, then drop every row
+                # before the first revision whose suffix fits. Only runs (and
+                # only visits evicted rows) when the running total is over.
+                trim = f'''DELETE FROM analytics_changes
+                    WHERE (SELECT total FROM analytics_change_bytes) > {MAX_JOURNAL_BYTES}
+                    AND revision < COALESCE((
+                    WITH RECURSIVE walk(revision, remaining) AS (
+                        SELECT MIN(revision), (SELECT total FROM analytics_change_bytes)
+                            FROM analytics_changes
+                        UNION ALL
+                        SELECT (SELECT MIN(revision) FROM analytics_changes AS later
+                                    WHERE later.revision > walk.revision),
+                               walk.remaining - (SELECT {_size('row.')} FROM analytics_changes AS row
+                                    WHERE row.revision = walk.revision)
+                            FROM walk
+                            WHERE walk.revision IS NOT NULL AND walk.remaining > {MAX_JOURNAL_BYTES})
+                    SELECT MAX(revision) FROM walk),
+                    (SELECT MAX(revision) FROM analytics_changes));'''
             definitions[name] = f'''CREATE TRIGGER {name}
                 AFTER {operation} ON {table} BEGIN
                 INSERT INTO analytics_changes(kind,item_id,old_row,new_row)
@@ -107,20 +155,36 @@ def _triggers():
                            CASE WHEN {oversized} THEN NULL ELSE {new_value} END);
                 DELETE FROM analytics_changes WHERE revision <=
                     (SELECT MAX(revision)-{CAPACITY} FROM analytics_changes);
-                DELETE FROM analytics_changes WHERE revision < COALESCE((
-                    SELECT MIN(revision) FROM (
-                        SELECT revision, SUM(length(CAST(COALESCE(old_row,'') AS BLOB)) +
-                            length(CAST(COALESCE(new_row,'') AS BLOB)) +
-                            length(CAST(COALESCE(item_id,'') AS BLOB)) +
-                            length(CAST(kind AS BLOB)) + 64)
-                            OVER (ORDER BY revision DESC) AS bytes
-                        FROM analytics_changes)
-                    WHERE bytes <= {MAX_JOURNAL_BYTES}),
-                    (SELECT MAX(revision) FROM analytics_changes));
+                {trim}
+                END'''
+    if not legacy:
+        # Every journal row change, including raw writers outside Store,
+        # keeps the running total exact in the same transaction.
+        for operation, delta in (('INSERT', '+' + _size('NEW.')),
+                                 ('UPDATE', '+' + _size('NEW.') + '-' + _size('OLD.')),
+                                 ('DELETE', '-' + _size('OLD.'))):
+            name = f'analytics_journal_bytes_{operation.lower()}'
+            definitions[name] = f'''CREATE TRIGGER {name}
+                AFTER {operation} ON analytics_changes BEGIN
+                UPDATE analytics_change_bytes SET total = total {delta};
                 END'''
     return definitions
 
 TRIGGERS = _triggers()
+LEGACY_TRIGGERS = _triggers(legacy=True)
+
+# Pure read-cost indexes (storage.READ_INDEX_SQL). Store creates them on open,
+# including for existing ledgers; one may be absent (not yet reopened, or a
+# legacy row it cannot index), but a present one must match exactly.
+@lru_cache(maxsize=1)
+def read_index_schema():
+    from .storage import SCHEMA, READ_INDEX_SQL
+    with sqlite3.connect(':memory:') as connection:
+        connection.executescript(SCHEMA)
+        for sql in READ_INDEX_SQL.values():
+            connection.execute(sql)
+        return {name: connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                                         (name,)).fetchone()[0] for name in READ_INDEX_SQL}
 
 @lru_cache(maxsize=1)
 def _source_schema():
@@ -139,6 +203,9 @@ def install(connection: sqlite3.Connection) -> None:
     connection.execute(META_SQL)
     connection.execute('INSERT INTO analytics_change_meta VALUES(2,?)', (uuid.uuid4().hex,))
     connection.execute(CHANGES_SQL)
+    # The journal is created empty here, so the running total starts exact.
+    connection.execute(BYTES_SQL)
+    connection.execute('INSERT INTO analytics_change_bytes VALUES(0)')
     for sql in TRIGGERS.values():
         connection.execute(sql)
 
@@ -163,9 +230,23 @@ def supported(connection: sqlite3.Connection) -> bool:
             "SELECT type,name,sql FROM sqlite_master "
             "WHERE type IN ('table','index','trigger') AND name NOT LIKE 'sqlite_%'")}
         expected = dict(_source_schema())
+        # Optional-but-exact read-cost indexes; see read_index_schema().
+        for name, sql in read_index_schema().items():
+            if ('index', name) in actual:
+                expected[('index', name)] = sql
         expected.update({('table', 'analytics_changes'): CHANGES_SQL,
                          ('table', 'analytics_change_meta'): META_SQL})
-        expected.update({('trigger', name): sql for name, sql in TRIGGERS.items()})
+        # Exactly one complete generation: the current running-total journal,
+        # or the original window-sum journal of ledgers created before it
+        # (accepted as-is, never rewritten). Never a mixture of the two.
+        if ('table', 'analytics_change_bytes') in actual:
+            expected[('table', 'analytics_change_bytes')] = BYTES_SQL
+            expected.update({('trigger', name): sql for name, sql in TRIGGERS.items()})
+            totals = connection.execute('SELECT total FROM analytics_change_bytes').fetchall()
+            if len(totals) != 1 or type(totals[0][0]) is not int:
+                return False
+        else:
+            expected.update({('trigger', name): sql for name, sql in LEGACY_TRIGGERS.items()})
         return actual == expected
     except sqlite3.Error:
         return False
