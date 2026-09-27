@@ -29,6 +29,7 @@ The root owns plugin integration (`bootstrap.py`, `install.py`, `build_preview.p
 ## Verification
 
 - Isolated environment: `.venv/bin/python -m pytest -q -p no:cacheprovider tests --ignore=tests/ui` (the UI scripts are standalone and duplicate a backend test module name). `.venv/bin/python build_preview.py` regenerates preview **and writes it**; only run when preview edits are in scope. `node --check --input-type=module < desktop/plugin.js` checks module syntax.
+- Opt-in read-cost benchmark: `HERMES_USAGE_READ_COST_SCALE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_read_cost_scale.py -k scale -s` builds a ~50k-row synthetic ledger and prints timings; it asserts parity only, and its numbers are host-dependent evidence, not a guarantee.
 - Standalone browser scripts accept `CHROMIUM_PATH` (locally `/home/nope/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome` when present). Tests require synthetic fixtures; success does not prove live Hermes/provider operation. `requirements-dev.txt` declares PyYAML for the activation-policy gate. Use existing test tools and report exact results rather than inventing checks.
 
 ## Child DOX Index
