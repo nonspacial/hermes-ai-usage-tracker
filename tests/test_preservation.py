@@ -16,8 +16,9 @@ def test_original_desktop_components_unchanged():
         # selection and scoped reads. The all-profiles browser suites cover
         # persistence, individual profiles, stale replies and read-only polling.
         # Keep the original-source manifest hashes as historical evidence.
-        # UsageChip's approved display labels changed; normalise only those
-        # exact strings before checking its immutable historical fingerprint.
+        # UsageChip's approved display labels and shared-tooltip hook changed;
+        # normalise only those exact strings before checking its immutable
+        # historical fingerprint.
         if name in ('PageHeader', 'ProviderCard', 'ProfilePicker', 'useUsage'):
             continue
         start=source.index('function '+name+'(');body=source[start:source.index('\n}',start)+2]
@@ -30,6 +31,12 @@ def test_original_desktop_components_unchanged():
                 (' (pinned on the AI usage + page)', ' (pinned on the AI usage page)'),
                 ('`AI usage +: ${detail}`', '`AI usage: ${detail}`'),
                 (" : data ? 'AI usage +' : 'AI usage +…'", " : data ? 'AI usage' : 'AI usage…'"),
+                # Approved shared-tooltip wiring (f237f68): the chip installs the
+                # delegated tooltip on its own class. Covered by
+                # test_token_tooltip_refresh_browser; behaviour otherwise unchanged.
+                ("function UsageChip() {\n useEffect(()=>installTooltips(document.querySelector('.au-usage-chip')),[])\n",
+                 'function UsageChip() {\n'),
+                ("className: 'au-usage-chip px-1.5 ", "className: 'px-1.5 "),
             ):
                 assert body.count(approved)==1,(name,approved)
                 body=body.replace(approved,historical)

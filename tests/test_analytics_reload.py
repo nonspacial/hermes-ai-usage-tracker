@@ -208,7 +208,9 @@ def test_reload_routes_profile_validation_readback_and_no_producer_start(runtime
 def test_read_routes_do_not_construct_writer_or_start_pricing(runtime, tmp_path, monkeypatch):
     store = fixture_store(tmp_path)
     with store.db() as connection:
-        connection.execute('INSERT INTO tests VALUES(?,?,?,?,?)', ('window', 1.5, 3, 'fixture', '{}'))
+        # Recorded test rows always carry their id/bounds/label in data (Store.test).
+        connection.execute('INSERT INTO tests VALUES(?,?,?,?,?)', ('window', 1.5, 3, 'fixture',
+                           json.dumps({'id': 'window', 'started': 1.5, 'ended': 3, 'label': 'fixture'})))
     before = store.path.read_bytes()
     monkeypatch.setattr(api, 'AnalyticsRuntime', lambda: runtime)
     monkeypatch.setattr(api, 'Store', lambda *_a, **_k: pytest.fail('read route constructed writer'))
