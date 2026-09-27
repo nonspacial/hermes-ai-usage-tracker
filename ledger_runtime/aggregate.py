@@ -427,11 +427,18 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
     if data:
         out['trend'] = {k: v for k, v in data[0]['trend'].items() if k != 'buckets'}
         buckets = {}
+        provider_buckets = {}
         for report in data:
             for bucket in report['trend']['buckets']:
                 key = (bucket['start'], bucket['end'])
-                buckets.setdefault(key, []).append({k: v for k, v in bucket.items() if k not in ('start', 'end')})
-        out['trend']['buckets'] = [dict(start=key[0], end=key[1], **merge_summaries(buckets[key])) for key in sorted(buckets)]
+                buckets.setdefault(key, []).append({k: v for k, v in bucket.items() if k not in ('start', 'end', 'provider_buckets')})
+                for row in bucket['provider_buckets']:
+                    provider_buckets.setdefault(key, {}).setdefault(row['provider'], []).append(
+                        {k:v for k,v in row.items() if k!='provider'})
+        out['trend']['buckets'] = [dict(start=key[0], end=key[1], **merge_summaries(buckets[key]),
+            provider_buckets=[dict(provider=provider, **merge_summaries(parts))
+                              for provider,parts in sorted(provider_buckets.get(key,{}).items())])
+            for key in sorted(buckets)]
         for bucket in out['trend']['buckets']:
             bucket['peak_observed']=measured(all_intervals,bucket['start'],bucket['end'])
     if include('project_groups') or include('session_groups'):

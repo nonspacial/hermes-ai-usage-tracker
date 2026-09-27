@@ -285,9 +285,15 @@ class AnalyticsRuntime:
                 current_generation[:2]!=tuple(source_generation[:2])):
             return self.read(root,*args,view=view,group=group,profile_key=profile_key,**options)
         with self.lease() as generation:
+            buckets=base.get('trend',{}).get('buckets')
             if (revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None
                     and 'peak_observed' in base.get('subagent_summary',{})
-                    and all('peak_observed' in bucket for bucket in base.get('trend',{}).get('buckets',[]))):
+                    and isinstance(buckets,list) and all(
+                        isinstance(bucket,dict) and 'peak_observed' in bucket
+                        and isinstance(bucket.get('provider_buckets'),list)
+                        and all(isinstance(row,dict) and isinstance(row.get('provider'),str)
+                                for row in bucket['provider_buckets'])
+                        for bucket in buckets)):
                 from .incremental_refresh import replace_buckets
                 with selected_snapshot_root(root) as copied_root:
                     if signature(source_file)!=current_generation:

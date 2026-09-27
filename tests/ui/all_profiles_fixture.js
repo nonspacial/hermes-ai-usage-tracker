@@ -35,7 +35,8 @@ function fixtureProject(full,p){
    model_groups:full.model_groups.map(fixtureOverviewSummary),
    ...(fixtureGroups[group]?{[fixtureGroups[group]]:full[fixtureGroups[group]].map(fixtureOverviewSummary)}:{}),
    trend:{...full.trend,buckets:full.trend.buckets.map(row=>({
-    ...fixtureOverviewSummary(row),start:row.start,end:row.end}))}};
+    ...fixtureOverviewSummary(row),start:row.start,end:row.end,
+    provider_buckets:row.provider_buckets.map(fixtureOverviewSummary)}))}};
  }
  if(view===null){if(group!==null)throw new Error('Group requires a view');return full}
  if(p.has('list_mode')){
@@ -121,6 +122,7 @@ async function fixtureAggregate(u){
   out.compression_count=active.length?out.compressions.length:null;
   out.compression_truncated=false;
   out.provider_groups=grouped(rows,['provider']);out.model_groups=grouped(rows.map(r=>({...r,model:r.response_model||r.model||'unknown'})),['provider','model']);out.applied_rate_groups=appliedRateGroups(rows);
+  out.trend=trendFor(rows,base.window.start,base.window.end);
  }
  return u.pathname==='/ledger'?fixtureProject(out,p):out;
 }

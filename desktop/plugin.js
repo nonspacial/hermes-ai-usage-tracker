@@ -256,7 +256,7 @@ function useUsage(profile, intervalMs) {
 
 // ---------------------------------------------------------------- components
 
-function QuotaBar({ window }) {
+function QuotaBar({ window, providerId }) {
   const remaining = window.remaining_percent
   if (remaining === null || remaining === undefined) {
     return jsxs('div', {
@@ -293,7 +293,7 @@ function QuotaBar({ window }) {
         style: { background: 'var(--ui-stroke-secondary)' },
         children: jsx('div', {
           className: 'h-full rounded-[2px]',
-          style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: 'var(--ui-accent)' }
+          style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: /\bweekly\b/i.test(window.label||'') ? providerAccent(providerId) : 'var(--ui-accent)' }
         })
       })
     ]
@@ -312,7 +312,7 @@ function installTooltips(root){
  const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
  tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
  let active=null,svgTitle=null,original=null,previousDescription=null,previousLabel=null;
- const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning','--ui-accent'];
+ const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning','--ui-accent','--ui-cyan','--ui-green','--ui-blue','--ui-orange','--ui-yellow','--ui-red','--ui-purple','--ui-warm'];
  function syncTheme(){
   if(!active)return;
   const source=getComputedStyle(active);
@@ -356,6 +356,14 @@ function installTooltips(root){
   if(chartSummary){
    const row=document.createElement('span');row.className='au-tooltip-chart-summary';row.setAttribute('data-testid','chart-point-summary');
    row.textContent=chartSummary;tip.appendChild(row);
+   const providers=active.getAttribute('data-au-chart-providers');
+   if(providers){
+    for(const entry of JSON.parse(providers)){
+     const line=document.createElement('span');line.className='au-tooltip-provider';
+     const marker=document.createElement('i');marker.className='au-tooltip-provider-dot';
+     marker.style.background=providerAccent(entry.provider);line.append(marker,document.createTextNode(entry.label+' · '+entry.value));tip.appendChild(line);
+    }
+   }
   }
   const freshness=active?.getAttribute('data-au-freshness');
   if(freshness){
@@ -397,7 +405,7 @@ function installTooltips(root){
     const current=active.getAttribute('title');
     if(current){original=current;active.dataset.auTooltip=current;renderTip();active.removeAttribute('title');position()}
    }
-   if(record.target===active&&(record.attributeName==='data-au-chart-summary'||record.attributeName?.startsWith('data-au-freshness'))){
+   if(record.target===active&&(['data-au-chart-summary','data-au-chart-providers'].includes(record.attributeName)||record.attributeName?.startsWith('data-au-freshness'))){
     renderTip();position();
    }
    if(svgTitle&&(record.target===svgTitle||svgTitle.contains(record.target))&&svgTitle.textContent){
@@ -408,7 +416,7 @@ function installTooltips(root){
   }
   if(active)position();
  });
- changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-chart-summary','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
+ changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-chart-summary','data-au-chart-providers','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
  for(let node=root.parentElement;node;node=node.parentElement)changes.observe(node,{attributes:true,attributeFilter:['style','class']});
  window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
  return()=>{hide();root.removeEventListener('mouseover',enter);root.removeEventListener('mouseout',leave);
@@ -508,6 +516,7 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
       'au-quota-card flex flex-col gap-2 rounded-[5px] border border-(--ui-stroke-secondary) p-3',
       isHidden && 'opacity-60'
     ),
+    style: { '--au-provider-accent': providerAccent(provider.id) },
     children: [
       jsxs('div', {
         className: 'flex items-center gap-2',
@@ -522,7 +531,7 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
               })
             : jsx('span', { className: 'au-provider-name-static text-sm font-medium', children: provider.label }),
           provider.quota?.plan
-            ? jsx(Badge, { variant: 'muted', size: 'xs', children: provider.quota.plan })
+            ? jsx('span', { className: 'au-provider-type-badge', children: provider.quota.plan })
             : null,
           jsx(Badge, { variant: status.variant, size: 'xs', children: status.label }),
           provider.active
@@ -548,7 +557,7 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
           className: 'au-quota-rows',
           'data-columns': windows.length + details.length >= 6 ? 'multiple' : 'single',
           children: [
-            ...windows.map((window, index) => jsx(QuotaBar, { window }, `window-${index}`)),
+            ...windows.map((window, index) => jsx(QuotaBar, { window, providerId:provider.id }, `window-${index}`)),
             ...details.map((detail, index) =>
               jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, `detail-${index}`)
             )
@@ -782,6 +791,11 @@ const ledgerCss = `
 .au-ledger .au-big{font-size:3rem;letter-spacing:-1.8px;font-weight:650;line-height:1.2;margin:4px 0 8px}
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
+.au-ledger .au-provider-row .au-dot{background:var(--au-provider-accent)}
+.au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-line{stroke:var(--au-provider-accent)}
+.au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-area{fill:var(--au-provider-accent)}
+.au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-point{fill:var(--au-provider-accent)}
+.au-ledger .au-provider-type-badge{display:inline-flex;align-items:center;padding:2px 4px;border-radius:4px;font-size:smaller;font-weight:normal;border:1px solid var(--au-provider-accent);background:color-mix(in srgb,var(--au-provider-accent) 8%,var(--au-card-bg));color:var(--ui-text-secondary)}
 .au-ledger .au-provider-cost{font-size:1.5rem;line-height:1.1;font-weight:700;color:var(--ui-text-primary)}
 .au-ledger .au-timeline-entry{background:var(--au-table-bg);border:1px solid var(--ui-stroke-secondary);border-radius:8px;margin:8px 0;overflow-wrap:anywhere}
 .au-ledger .au-timeline-scroll{padding-right:4px}
@@ -805,6 +819,8 @@ const ledgerCss = `
 .au-ledger .au-chart-title{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;margin:5px 0 10px}
 .au-ledger .au-axis{font-size:.6875rem;fill:var(--ui-text-tertiary)}.au-ledger .au-gridline{stroke:var(--ui-stroke-secondary);stroke-width:1}
 .au-ledger .au-line{fill:none;stroke:var(--ui-accent);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}.au-ledger .au-area{fill:var(--ui-accent);opacity:.10}
+.au-tooltip-provider{display:flex;align-items:center;gap:6px;color:var(--ui-text-secondary)}
+.au-tooltip-provider-dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}
 .au-ledger .au-crosshair{stroke:var(--ui-text-tertiary);stroke-dasharray:4 4}.au-ledger .au-point{fill:var(--ui-accent);stroke:var(--au-surface-bg);stroke-width:2}
 .au-ledger .au-chart-tip{min-height:26px;font-size:.6875rem;color:var(--ui-text-secondary);text-align:right;padding-right:10px}
 .au-ledger .au-totals{gap:12px;grid-template-columns:repeat(7,minmax(0,1fr));margin:10px 0 20px}
@@ -1391,11 +1407,75 @@ function knownTokens(summary,key,format=short){
 
 const dollars = n => n == null ? '—' : Number(n).toLocaleString(undefined,{style:'currency',currency:'USD',currencyDisplay:'narrowSymbol',minimumFractionDigits:2,maximumFractionDigits:2})
 const uiNames = {'openai-codex':'Codex',nous:'Nous Portal',ollama:'Ollama Cloud','ollama-cloud':'Ollama Cloud',openrouter:'OpenRouter'}
+function providerLabel(id,ids){const label=uiNames[id]||id;
+ return ids.some(other=>other!==id&&(uiNames[other]||other)===label)?label+' ('+id+')':label}
+// Reserve stable named offsets from the host accent; never change controls or
+// the Codex accent. Generated identities use hue, chroma AND lightness, rather
+// than reducing a 32-bit identity hash to one of 360 rendered hues.
+const providerReserved=new Map([['nous',0],['ollama',1],['ollama-cloud',2],['openrouter',3]]);
+const providerColourSlots=new Map(providerReserved);
+function providerColourHash(id){let hash=2166136261;
+ for(const char of id)hash=Math.imul(hash^char.codePointAt(0),16777619);
+ return hash>>>0;
+}
+function providerSlotColour(slot){
+ if(slot<4)return `oklch(from var(--ui-accent) l c calc(h + ${[60,132,204,276][slot]}))`;
+ const value=slot-16,hash=value%4294967296,attempt=Math.floor(value/4294967296);
+ let hue=(hash%360+attempt*137.508)%360;
+ // Leave room around the Codex/known-provider hue spokes even when a light
+ // theme's accent chroma clips several neighbouring OKLCH colours to sRGB.
+ if([0,60,132,204,276,360].some(spoke=>Math.abs(hue-spoke)<22))hue=(hue+25)%360;
+ const light=[.83,.95,.74][((hash>>>10)+attempt)%3];
+ const chroma=[.12,.16][((hash>>>16)+attempt)%2];
+ return `oklch(from var(--ui-accent) calc(l * ${light}) ${chroma} calc(h + ${hue}))`;
+}
+function providerRenderedColour(css,accent){
+ const probe=document.createElement('i');probe.style.color=css;
+ if(accent)probe.style.setProperty('--ui-accent',accent);
+ (document.querySelector('.au-ledger')||document.body).append(probe);
+ const computed=getComputedStyle(probe).color;probe.remove();
+ const canvas=document.createElement('canvas'),context=canvas.getContext('2d');
+ context.fillStyle=computed;context.fillRect(0,0,1,1);
+ return [...context.getImageData(0,0,1,1).data].slice(0,3);
+}
+function registerProviderColours(ids){
+ const catalogue=new Set([...providerColourSlots.keys(),...ids].filter(id=>typeof id==='string'&&id&&id!=='unknown'&&id!=='openai-codex'));
+ if(catalogue.size===providerColourSlots.size)return;
+ // Resolve against *rendered* sRGB, including gamut clipping and reserved
+ // colours. Rebuild in canonical order so opposite catalogue arrival orders
+ // converge; only actual candidate conflicts may move an earlier identity.
+ // Check the live host accent and the two shipped host-theme accents. These
+ // are collision probes only; rendered colours still inherit --ui-accent.
+ const accents=[null,'#a799ef','#0053fd'];
+ const occupied=accents.map(accent=>[providerRenderedColour('var(--ui-accent)',accent),
+  ...[...providerReserved.values()].map(slot=>providerRenderedColour(providerSlotColour(slot),accent))]);
+ const next=new Map(providerReserved);
+ for(const id of [...catalogue].filter(id=>!providerReserved.has(id)).sort()){
+  const hash=providerColourHash(id);
+  for(let attempt=0;attempt<4096;attempt++){
+   const slot=16+hash+attempt*4294967296;
+   const colour=providerSlotColour(slot);
+   const rgbs=accents.map(accent=>providerRenderedColour(colour,accent));
+   if(rgbs.every((rgb,index)=>occupied[index].every(other=>
+       rgb.reduce((sum,value,i)=>sum+(value-other[i])**2,0)>=28**2))){
+    next.set(id,slot);rgbs.forEach((rgb,index)=>occupied[index].push(rgb));break;
+   }
+  }
+  if(!next.has(id))throw new Error('Provider colour catalogue exceeds available contrast');
+ }
+ providerColourSlots.clear();for(const [id,slot] of next)providerColourSlots.set(id,slot);
+}
+function providerAccent(id){
+ if(id==='unknown')return 'var(--ui-text-secondary)';
+ if(!id||id==='openai-codex')return 'var(--ui-accent)';
+ registerProviderColours([id]);
+ return providerSlotColour(providerColourSlots.get(id));
+}
 function selectedCost(s){return !s?.attempts?'$0.00':Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]||0)<s.attempts)?dollars(s.known_cost_usd):'—'}
 function savingsValue(s,key='cache_savings_usd'){return !s?.attempts?'$0.00':s.attempts>(s.savings_missing?.[key]??s.attempts)?dollars(s.savings?.[key]):'—'}
 function viewTokens(s,key,format=short){return !s?.attempts?'0':knownTokens(s,key,format)}
 function valueFor(s,mode){if(!s?.attempts)return 0;if(mode==='Cost')return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]||0)<s.attempts)?Number(s.known_cost_usd):null;return s.attempts>(s.missing_fields?.total_tokens||0)?Number(s.known?.total_tokens):null}
-function UsageChart({data,mode,onSelectRange}){
+function UsageChart({data,mode,onSelectRange,allProviders=false}){
  const drag=useRef(null),chartRef=useRef(null),[selection,setSelection]=useState(null);
  const [chartWidth,setChartWidth]=useState(760),[plotSize,setPlotSize]=useState(null);
  useEffect(()=>{
@@ -1420,7 +1500,11 @@ function UsageChart({data,mode,onSelectRange}){
   return()=>document.removeEventListener('pointerdown',blurOutside,true);
  },[]);
  useEffect(()=>{drag.current=null;setSelection(null);setHover(null)},[data?.window?.start,data?.window?.end,mode]);
- const [hover,setHover]=useState(null),points=data?.trend?.buckets||[],unit=data?.trend?.unit||'day',cost=mode==='Cost',vals=points.map(p=>valueFor(p,mode)),max=Math.max(1,...vals.filter(v=>v!=null)),top=max*1.15;
+ const [hover,setHover]=useState(null),points=data?.trend?.buckets||[],unit=data?.trend?.unit||'day',cost=mode==='Cost',vals=points.map(p=>valueFor(p,mode));
+ const series=allProviders?(data?.provider_groups||[]).map(group=>({provider:group.provider,
+  values:points.map(bucket=>valueFor(bucket.provider_buckets?.find(row=>row.provider===group.provider),mode))})):[];
+ const seriesIds=series.map(item=>item.provider);
+ const max=Math.max(1,...(allProviders?series.flatMap(s=>s.values):vals).filter(v=>v!=null)),top=max*1.15;
  const compact=chartWidth<760,mobilePlot=!!chartRef.current?.closest('.au-mobile'),measuredPlot=!!plotSize;
  const W=measuredPlot?plotSize.width:compact?Math.max(180,chartWidth):760,H=measuredPlot?plotSize.height:compact?160:258;
  // Retain the 849px plot height below the pane breakpoint. Compact labels
@@ -1442,10 +1526,18 @@ function UsageChart({data,mode,onSelectRange}){
   return previous==null?null:[previous,start];
  };
  const chartHelp='Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.')+' Peak observed excludes missing/unmatched child lifecycle events; it is not a true maximum.';
- let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
- vals.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();
+ function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
+  values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
+ const {line,area}=allProviders?{line:'',area:''}:traces(vals);
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
  const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
+ const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
+  const row=active.provider_buckets.find(item=>item.provider===s.provider);
+  return {provider:s.provider,label:providerLabel(s.provider,seriesIds),
+   value:(cost?selectedCost(row):viewTokens(row,'total_tokens',count))+(cost?'':' tokens')+' · '+count(row?.attempts||0)+' requests'+
+    (cost&&row?.unpriced_requests?' · partial price coverage':row?.missing_usage?' · includes missing usage':'')+
+    (data?.coverage?.status==='partial'?' · partial profile coverage':'')};
+ })):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
  const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
  const move=e=>{const x=plotX(e),time=plotStart+(x-L)/w*(plotEnd-plotStart),index=points.findIndex(p=>p.end>time);setHover(index<0?points.length-1:index);const d=drag.current;if(d&&d.id===e.pointerId){d.end=nearestBoundary(x);d.moved=Math.abs(e.clientX-d.clientX)>=5&&Math.abs(time-d.start)>=minZoom/2&&Math.abs(time-d.pointerTime)>=minZoom/2;
@@ -1457,16 +1549,18 @@ function UsageChart({data,mode,onSelectRange}){
   const range=d.moved?zoomRange(d.start,d.end):null;
   if(range&&onSelectRange)onSelectRange(...range);
  };
- return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
+ return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
  h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
- h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'}),
+ ...(allProviders?series.map(s=>h('path',{key:s.provider,d:traces(s.values).line,className:'au-line au-provider-series','data-provider':s.provider,style:{stroke:providerAccent(s.provider)}})):
+  [h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'})]),
  ...[0,Math.floor((points.length-1)/2),points.length-1].filter((n,i,a)=>n>=0&&n<points.length&&a.indexOf(n)===i).map(i=>h('text',{key:i,x:xx(i),y:compact?H-2:H-10,textAnchor:i===0?'start':i===points.length-1?'end':'middle',className:'au-axis'},stamp(points[i].start))),
  active?h('line',{x1:xx(hover),x2:xx(hover),y1:T,y2:H-B,className:'au-crosshair'}):null,
- active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null,
+ ...(allProviders?active?series.filter(s=>s.values[hover]!=null).map(s=>h('circle',{key:s.provider,cx:xx(hover),cy:yy(s.values[hover]),r:4,className:'au-point au-provider-point','data-provider':s.provider,style:{fill:providerAccent(s.provider)}})):[]:
+  [active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null]),
  selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
- h('rect',{key:'hit',className:'au-plot-hit','data-au-chart-summary':pointSummary,x:L,y:T,width:w,height:hg,
+ h('rect',{key:'hit',className:'au-plot-hit','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,x:L,y:T,width:w,height:hg,
   onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});if(!canZoom)return;const x=plotX(e),start=nearestBoundary(x);drag.current={id:e.pointerId,start,end:start,pointerTime:plotStart+(x-L)/w*(plotEnd-plotStart),clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
   onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
   h('title',{},chartHelp))),
@@ -1483,15 +1577,16 @@ function missingFieldNote(summary,key){
 function peakValue(value,coverage){return value?.value==null?'—':count(value.value)+(value.unmatched||coverage?.status==='partial'?' · partial':'')}
 function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
 function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
-function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
+function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders}){
  const s=data?.summary,k=s?.known||{},missing=s?.missing_fields||{};
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
  const t=key=>data?viewTokens(s,key):'—';
  const note=key=>{const awaiting=s.missing_reasons?.[key]?.awaiting_usage||0;
   return h('span',{title:missingFieldNote(s,key)},awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
  const groups=data?.provider_groups||[];
- const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row'},
-   h('span',{title:(uiNames[g.provider]||g.provider)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),uiNames[g.provider]||g.provider,h('small',{},' '+count(g.sessions)+' sessions')),
+ const providerIds=groups.map(row=>row.provider);
+ const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row',style:{'--au-provider-accent':providerAccent(g.provider)}},
+   h('span',{title:providerLabel(g.provider,providerIds)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage))));
@@ -1512,7 +1607,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange}){
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
  mode==='Cost'&&s?.supplemental_requests?h('div',{className:'au-muted','data-testid':'retrospective-overview-note'},count(s.supplemental_requests)+' past request(s) valued at currently published provider rates, not historical charges'):null,
  h('div',{className:'au-provider-totals'},...providerRows)),
- h(UsageChart,{data,mode,onSelectRange})):null,
+ h(UsageChart,{data,mode,onSelectRange,allProviders})):null,
  h('div',{className:'au-quality-line'},h('span',{className:'au-muted'},count(s?.attempts||0)+' requests · '+count(s?.pending||0)+' open · '+count(data?.compression_count||0)+' compressions'),
  h('details',{'data-testid':'usage-diagnostics'},h('summary',{},'Usage diagnostics'),
  h('div',{className:'au-muted'},count(s?.pending||0)+' open (owner observed live) · '+count(s?.unresolved||0)+' unresolved · '+count(s?.abandoned||0)+' abandoned'),
@@ -1789,6 +1884,7 @@ function QuotaHome({quota,selected,hiddenIds,showHidden,onNavigate}){
  if(!data)return h('div',{},h(Skeleton,{}),h(Skeleton,{}));
  if(isAllProfiles(selected))return h('section',{'data-testid':'quota-home'},notice('Combined subscription quota unavailable. Accounts may be shared across profiles; no quota probes are performed. Select an individual profile for its quota.'));
  const providers=Array.isArray(data.providers)?data.providers:[],visible=providers.filter(p=>!hiddenIds.includes(p.id)),hidden=providers.filter(p=>hiddenIds.includes(p.id));
+ registerProviderColours(providers.map(p=>p.id));
  const live=visible.filter(p=>p.quota?.available).length,profile=selected||data.profile||'this profile';
  return h('section',{className:'au-quota-home','data-testid':'quota-home'},
   error?h('p',{className:'au-muted'},'Showing the last good response — refresh failed: '+String(error.message||error)):null,
@@ -2042,7 +2138,12 @@ function validOverviewDto(dto,group,expected,revision,refresh=false){
     !trend.buckets.every(row=>isObject(row)&&Number.isFinite(row.start)&&
      Number.isFinite(row.end)&&row.start>=window.start&&row.end<=window.end&&
      (row.end>row.start||window.start===window.end&&row.start===window.start&&
-      row.end===window.end&&row.attempts===0)&&validOverviewSummary(row)&&validPeak(row.peak_observed))||
+      row.end===window.end&&row.attempts===0)&&validOverviewSummary(row)&&validPeak(row.peak_observed)&&
+     Array.isArray(row.provider_buckets)&&row.provider_buckets.every((entry,index)=>
+      isObject(entry)&&identityText(entry.provider)&&validOverviewSummary(entry)&&
+      dto.provider_groups.some(group=>group.provider===entry.provider)&&
+      (index===0||row.provider_buckets[index-1].provider<entry.provider))&&
+     exactAttempts(row.provider_buckets,row.attempts))||
     (breakdown[group]&&(!Array.isArray(dto[breakdown[group]])||
      !dto[breakdown[group]].every(row=>isObject(row)&&validOverviewSummary(row)&&
       (group==='subagent'||validPeak(row.peak_observed))&&
@@ -2672,6 +2773,7 @@ function UsagePageScope({selected}){
  // The ledger catalogues attribution, including its `unknown` sentinel; that
  // sentinel has no provider destination. Keep it in summaries and requests.
  const names=[...new Set([...providers.map(p=>p.id),...(headerData?.providers||[]),...(!isQuota&&provider?[provider]:[])])].filter(v=>v&&v!==QUOTA_HOME&&String(v).toLowerCase()!=='unknown')
+ registerProviderColours([...names,...(data?.provider_groups||[]).map(row=>row.provider)]);
  const label=provider?(labels[provider]||provider):'All providers'
  const [manualQuotaBusy,setManualQuotaBusy]=useState(false);
  const refresh=()=>{if(reloadControl.busy||ledger.manual||manualQuotaBusy)return;pendingRefresh=true;
@@ -2747,7 +2849,7 @@ function UsagePageScope({selected}){
  if(tab==='Skills usage')body=h(SkillsUsageView,{params:params.toString(),scope:navigationContext+JSON.stringify(requestFilters),view:skillsView,setView:setSkillsView,model:skillsModel,setModel:setSkillsModel,skill:skillsSkill,setSkill:setSkillsSkill,refreshKey:skillsRefresh,windowSeconds});
  const scrollScope=navigationContext+JSON.stringify(requestFilters)+tab+(tab==='Compressions'?compMode:'');
  return h(AnalyticsPane,{resetKey:scrollScope},h('style',{},ledgerCss),
-  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane'},
+  h('section',{id:'au-main-panel',role:'tabpanel','aria-labelledby':mainId(provider),'data-testid':'provider-page','data-provider':provider||'all',className:'au-provider-pane',style:{'--au-provider-accent':providerAccent(provider)}},
   h('div',{className:'au-upper',tabIndex:0,'aria-label':'Usage summary and filters'},pageHeader,mainNav,
   provider?h(ProviderLimits,{quota,providerId:provider,label,selected,hiddenIds}):null,
   h('div',{className:'au-analytics-controls'},
@@ -2779,7 +2881,7 @@ function UsagePageScope({selected}){
    headerData?.tests?.length?h('select',{'aria-label':'Saved tests in actions',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null)),
   headerData?.tests?.length?h('select',{className:'au-saved-tests','aria-label':'Saved tests',defaultValue:'',onChange:e=>chooseTest(e.target.value)},h('option',{value:''},'Saved test windows'),...headerData.tests.map(t=>h('option',{key:t.id,value:t.id},t.label+provenance(t)+(t.ended?' · ended':' · open')))):null),
   h(Coverage,{data:headerData}),
-  h(Summary,{data:headerData,label,mode:displayMode,agent,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
+  h(Summary,{data:headerData,label,mode:displayMode,agent,allProviders:!provider,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
   h(Reader,{resetKey:scrollScope,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,

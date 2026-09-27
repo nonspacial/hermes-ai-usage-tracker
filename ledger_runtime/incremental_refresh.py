@@ -150,7 +150,12 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
         if part.get('incremental',{}).get('revision') != high:
             return None
         target=buckets.index(bucket)
-        new['trend']['buckets'][target] = {'start':low,'end':high_bound,**part['summary']}
+        # The narrow read may use finer trend edges than the original bucket.
+        # Its full-window provider groups cover the entire clipped original bucket.
+        new['trend']['buckets'][target] = {'start':low,'end':high_bound,**part['summary'],
+            'provider_buckets':sorted(
+                ({k:v for k,v in row.items() if k!='latest_started'}
+                 for row in part['provider_groups']),key=lambda row:row['provider'])}
         new_seed['provider'][bucket] = {r['provider']:{k:v for k,v in r.items() if k!='provider'}
                                         for r in part['provider_groups']}
         new_seed['subagent'][bucket] = {k:v for k,v in part['subagent_summary'].items() if k!='agents'}
@@ -164,7 +169,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
             return None
         where,params,_ = request_predicate(start,end,args[2],args[5],args[6],args[7],
                                            args[8],args[9],args[10],args[11])
-        new['summary']=merge_summaries([{k:v for k,v in r.items() if k not in ('start','end','peak_observed')}
+        new['summary']=merge_summaries([{k:v for k,v in r.items() if k not in ('start','end','peak_observed','provider_buckets')}
                                         for r in new['trend']['buckets']])
         new['summary']['sessions']=connection.execute('SELECT COUNT(DISTINCT NULLIF(session_id,\'\')) '
                                                       'FROM requests WHERE '+where,params).fetchone()[0]

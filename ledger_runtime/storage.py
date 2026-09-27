@@ -597,8 +597,15 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
     lo=int(start//step)*step
     rows={int(row['bucket']):summary_from_sql(row) for row in c.execute(
       'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
+    provider_rows={}
+    for row in c.execute('SELECT CAST(started / ? AS INTEGER) * ? AS bucket,provider,'+summary_sql+
+                         ' FROM requests WHERE '+where+' GROUP BY bucket,provider', [step,step]+params):
+        provider_rows.setdefault(int(row['bucket']), []).append(
+            {'provider':row['provider'], **summary_from_sql(row)})
     blank=summary([])
-    buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank)) for t in range(lo,int(end)+1,step) if t<end]
+    buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank),
+                  provider_buckets=sorted(provider_rows.get(t,[]),key=lambda r:r['provider']))
+             for t in range(lo,int(end)+1,step) if t<end]
     return {'unit':'minute' if step==60 else ('2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'))),'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
