@@ -134,7 +134,15 @@ def costs(usage,rate):
     for k in BUCKETS:
         n=usage.get(k);p=decimal_value(rate.get(k)) if rate else None
         ttl=(usage.get('raw_usage') or {}).get('cache_creation',{})
-        if k=='cache_write_tokens' and ttl.get('ephemeral_1h_input_tokens',0)>0:
+        if k=='cache_write_tokens' and rate and rate.get('cache_ttl_breakdown_required') and n:
+            # Anthropic bills 5m and 1h writes at different published rates.
+            # Without an exact provider TTL split the component stays unknown;
+            # never price every write at the cheaper (or dearer) TTL.
+            one=num(ttl.get('ephemeral_1h_input_tokens'));five=num(ttl.get('ephemeral_5m_input_tokens'))
+            hour=decimal_value(rate.get('cache_write_1h_tokens'))
+            val=(Decimal(one)*hour+Decimal(five)*p)/Decimal(1000000) if (one is not None and five is not None and one+five==n
+                 and hour is not None and p is not None) else None
+        elif k=='cache_write_tokens' and ttl.get('ephemeral_1h_input_tokens',0)>0:
             one=ttl['ephemeral_1h_input_tokens'];five=ttl.get('ephemeral_5m_input_tokens')
             hour=decimal_value(rate.get('cache_write_1h_tokens')) if rate else None
             val=(Decimal(one)*hour+Decimal(five)*p)/Decimal(1000000) if hour is not None and p is not None and five is not None and one+five==n else None

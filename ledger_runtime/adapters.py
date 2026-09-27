@@ -51,7 +51,26 @@ def raw_wrapper(original):
         return result
     return wrapped
 
-def aux_metadata(module,kwargs,options):
+def aux_endpoint(provider,client):
+    """Direct-Anthropic endpoint class for one auxiliary call, content-free.
+
+    Hermes' relay funnel (``_relay_sync_completion``/``_relay_async_completion``)
+    passes the concrete client; ``AnthropicAuxiliaryClient`` and its async
+    mirror expose the configured ``base_url`` (the same value Hermes' own
+    ``pre_auxiliary_call`` payload reports). Classify it with the validated
+    host-exact helper. An unreadable/absent endpoint is ``unverified`` and
+    stays unpriced: an auxiliary Anthropic call can be a configured custom
+    gateway, so it is never assumed first-party. Only the class is stored.
+    """
+    if provider!='anthropic':return {}
+    from .pricing import anthropic_endpoint
+    try:
+        raw=getattr(client,'base_url',None)
+        kind=anthropic_endpoint(raw if isinstance(raw,str) else str(raw)) if raw is not None else None
+    except Exception:kind=None
+    return {'anthropic_endpoint':kind or 'unverified'}
+
+def aux_metadata(module,kwargs,options,client=None):
     context={}
     var=getattr(module,'_RELAY_AUX_CALL_CONTEXT',None)
     if var is not None:
@@ -64,18 +83,19 @@ def aux_metadata(module,kwargs,options):
         except Exception:pass
     comp=r.COMPRESSION.get()
     cur=r.CURRENT.get() or {}
+    provider=r.text(options.get('provider') or context.get('provider') or 'unknown')
     return {'id':f'{r.PROCESS}:aux:{uuid.uuid4().hex}','started':time.time(),'status':'pending','source':'auxiliary_adapter',
-      'process':r.PROCESS,'owner':r.identity(),'provider':r.text(options.get('provider') or context.get('provider') or 'unknown'),
+      'process':r.PROCESS,'owner':r.identity(),'provider':provider,
       'api_mode':r.text(options.get('api_mode') or context.get('api_mode')),
       'model':r.text(kwargs.get('model') or context.get('model')),
       'session_id':r.text((comp or {}).get('session_id') or runtime.get('session_id') or cur.get('session_id')),
       'task':r.text(context.get('task') or ('compression' if comp else 'auxiliary')),
       'compression_id':comp.get('id') if comp else None,
-      **r.body_settings({'_request_kwargs':kwargs})}
+      **r.body_settings({'_request_kwargs':kwargs}),**aux_endpoint(provider,client)}
 
 @r.safe
-def aux_begin(module,kwargs,options):
-    rec=aux_metadata(module,kwargs,options); root=str(r.home())
+def aux_begin(module,kwargs,options,client=None):
+    rec=aux_metadata(module,kwargs,options,client); root=str(r.home())
     from .attribution import capture
     rec.update(capture(r.store(root),rec['session_id']))
     r.store(root).request(rec,'request_started')
@@ -100,7 +120,7 @@ def auxiliary_wrapper(module,asynchronous=False):
         if asynchronous:
             @functools.wraps(original)
             async def wrapped(client,kwargs,**opts):
-                item=aux_begin(module,kwargs,opts);token=r.AUX.set(item)
+                item=aux_begin(module,kwargs,opts,client);token=r.AUX.set(item)
                 try:
                     try:result=await original(client,kwargs,**opts)
                     except BaseException as exc:aux_end(item,exc=exc);raise
@@ -109,7 +129,7 @@ def auxiliary_wrapper(module,asynchronous=False):
         else:
             @functools.wraps(original)
             def wrapped(client,kwargs,**opts):
-                item=aux_begin(module,kwargs,opts);token=r.AUX.set(item)
+                item=aux_begin(module,kwargs,opts,client);token=r.AUX.set(item)
                 try:
                     try:result=original(client,kwargs,**opts)
                     except BaseException as exc:aux_end(item,exc=exc);raise
@@ -382,12 +402,16 @@ def observe_anthropic_usage(event):
     kind=payload.get('type')
     if kind=='message_start':
         message=native_mapping(payload.get('message'))
-        scope['usage']={}
+        scope['usage']={};scope['enums']={}
         scope['response']={k:message[k] for k in ('id','model') if isinstance(message.get(k),str)}
-        raw=safe_usage(native_mapping(message.get('usage')))
+        native=native_mapping(message.get('usage'))
     elif kind=='message_delta':
-        raw=safe_usage(native_mapping(payload.get('usage')))
+        native=native_mapping(payload.get('usage'))
     else:return
+    raw=safe_usage(native)
+    # Documented billing enums (speed/inference_geo/service_tier) only; the
+    # recorder maps them to fixed values before anything is persisted.
+    scope.setdefault('enums',{}).update({k:native[k] for k in r.USAGE_ENUMS if native.get(k) is not None})
     if not raw:return
     # Anthropic reports cumulative snapshots, NOT additive deltas. Retain the
     # start's cache categories when a later event only reports output_tokens.
@@ -395,7 +419,7 @@ def observe_anthropic_usage(event):
     # The existing native evidence priority protects these reported snapshots
     # from later lossy assembled usage. This does NOT mark a request completed;
     # an interrupted stream retains the last provider-reported snapshot only.
-    r.capture_raw({**scope['response'],'usage':dict(scope['usage'])},
+    r.capture_raw({**scope['response'],'usage':{**scope['usage'],**scope['enums']}},
                   source='native_anthropic_stream_usage',context=scope['context'])
 
 def anthropic_observe_wrapper(original):

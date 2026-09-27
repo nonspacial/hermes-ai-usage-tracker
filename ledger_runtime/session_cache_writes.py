@@ -214,6 +214,7 @@ def project(c, where, params, end):
                     'catalog_revision': snapshot[0], 'observed_at': rate['observed_at'],
                     'request_ended_at': data['ended'], 'model': rate['model'],
                     'service_tier': rate['service_tier'], 'context_band': rate.get('context_band'),
+                    'inference_geo': rate.get('inference_geo'),
                     'source_url': rate['source_url'], 'content_sha256': rate['content_sha256']}
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',
                   (r['id'], json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))

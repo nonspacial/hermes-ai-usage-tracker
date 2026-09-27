@@ -137,18 +137,18 @@ def test_daily_success_retry_failure_and_manual_interval(tmp_path, monkeypatch):
         if url==pricing.OPENAI_TABLE_URL:return openai_fixture()
         raise ConnectionError('fixture failure')
     pricing.refresh(s,fetcher=fetch)
-    assert len(calls)==5
+    assert len(calls)==6
     clock[0]+=8
     pricing.refresh(s,fetcher=fetch)
-    assert len(calls)==5  # successful same day; failures still within retry bound
+    assert len(calls)==6  # successful same day; failures still within retry bound
     clock[0]+=3
     pricing.refresh(s,fetcher=fetch)
-    assert len(calls)==7  # UTC rollover refreshes OpenAI, failures remain bounded
+    assert len(calls)==8  # UTC rollover refreshes OpenAI, failures remain bounded
     pricing.refresh(s,force=True,fetcher=fetch)
-    assert len(calls)==7  # explicit refresh retains a minute floor
+    assert len(calls)==8  # explicit refresh retains a minute floor
     clock[0]+=61
     pricing.refresh(s,force=True,fetcher=fetch)
-    assert len(calls)==12
+    assert len(calls)==14
 
 
 def test_concurrent_refresh_coalesces_per_profile(tmp_path):

@@ -24,8 +24,14 @@ and dispatch seams, not authenticated providers or the complete SDK/Relay stack.
 counts, Gemini thinking and authoritative totals without Hermes core imports.
 
 Cost and quota coverage are separate from recording. Automatic price catalogues
-currently cover OpenAI, OpenRouter, Nous and Ollama; other providers, including
-direct Anthropic and Gemini, may record tokens while remaining unpriced. Missing
+currently cover OpenAI, OpenRouter, Nous, Ollama and the direct Anthropic API.
+Anthropic rates are not used for routers, Bedrock/Vertex or custom base URLs.
+Other providers, including Gemini, may record tokens while remaining unpriced.
+Anthropic capture additionally keeps only the documented `usage.speed`,
+`usage.inference_geo` and `usage.service_tier` enums (undocumented values become
+`unrecognised`), a requested `fast`/`standard` speed, and a
+`first_party`/`custom` endpoint class; no base URL or other raw field is stored.
+Missing
 prices are not zero costs. Subscription cards use only provider-reported quota
 windows. Nous supplies a subscription gauge when monthly allowance/remaining
 credits are available, plus a renewal detail when supplied; no weekly window is

@@ -1742,12 +1742,34 @@ function cacheCostValue(s){
  return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]??s.attempts)<s.attempts)?money(s.known_cost_usd):'—';
 }
 function cacheAmount(s){return h('span',{title:s?.unpriced_requests?'Known cost subtotal; '+count(s.unpriced_requests)+' requests pending, incomplete or unpriced':''},cacheCostValue(s),s?.unpriced_requests?' *':'')}
+// Direct Anthropic rates carry inference_geo plus recorded assumption flags.
+// Show them instead of an indistinguishable 'Standard' (US-only is 1.1x).
+function anthropicRate(rate){return !!rate&&(rate.inference_geo==='global'||rate.inference_geo==='us')}
+function speedInferred(rate){return rate.speed_inferred??(rate.speed_basis!=null&&rate.speed_basis!=='usage.speed')}
 function rateContext(rate){
  if(!rate)return '—';
  if(rate.context_band&&rate.threshold_tokens!=null)return (rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens);
  if(rate.min_prompt_tokens)return '≥'+count(rate.min_prompt_tokens);
- return 'Standard';
+ if(!anthropicRate(rate))return 'Standard';
+ const assumed=[rate.geo_assumption&&'geo',rate.endpoint_assumption&&'endpoint',rate.tier_assumption&&'standard speed'].filter(Boolean);
+ return [rate.inference_geo==='us'?'US-only 1.1×':'Global',
+  rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,
+  assumed.length?'assumed '+assumed.join('/'):null].filter(Boolean).join(' · ');
 }
+function rateContextNote(rate){
+ if(!anthropicRate(rate))return undefined;
+ const fast=rate.service_tier==='fast';
+ return ['Direct Anthropic API list rate.',
+  rate.inference_geo==='us'?'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).':
+   rate.geo_assumption?'Global routing assumed: no usage.inference_geo was reported.':'Global routing.',
+  rate.endpoint_assumption?'Endpoint not recorded; api.anthropic.com assumed.':'Endpoint recorded as api.anthropic.com.',
+  !speedInferred(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':
+   fast?'Fast speed inferred from the request; the response did not report usage.speed.':
+   'Standard speed assumed: no fast request and no usage.speed reported.',
+  rate.long_context_flat?'One rate across the full context window.':rate.max_prompt_tokens?'Priced up to '+count(rate.max_prompt_tokens)+' prompt tokens.':null
+ ].filter(Boolean).join(' ');
+}
+function rateContextCell(rate){const note=rateContextNote(rate),text=rateContext(rate);return note?h('span',{title:note},text):text}
 // All four component rows and the total row are represented once, as cards.
 // Counters/prices still use the same full-window backend aggregates.
 function ComponentCostCards({summary:s}){
@@ -1790,7 +1812,7 @@ function CacheView({data,profile,provider,refresh,onError}){
  const applied=data.applied_rate_groups;
  const rows=(applied||[]).map(g=>{
   const r=g.rate,source=r?[r.retrospective?'Retrospective current-published-rate estimate; not a historical charge': 'Saved rate at request',r.source,r.source_url,r.observed_at?when(r.observed_at):r.pricing_version].filter(Boolean).join(' · '):'No rate: pending or unpriced request';
-  return [uiNames[g.provider]||g.provider,h('span',{title:source},g.model),g.service_tier||'unspecified',rateContext(r),count(g.attempts),
+  return [uiNames[g.provider]||g.provider,h('span',{title:source},g.model),g.service_tier||'unspecified',rateContextCell(r),count(g.attempts),
    money(r?.input_tokens),money(r?.output_tokens),money(r?.cache_read_tokens),money(r?.cache_write_tokens),viewTokens(g,'total_tokens',count),cacheAmount(g)];
  });
  return h('section',{'data-testid':'cache-costs','aria-label':'Cache costs'},

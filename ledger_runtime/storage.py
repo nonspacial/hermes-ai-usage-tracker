@@ -124,7 +124,8 @@ class Store:
                 weaker=usage_priority(incoming.get('usage_source'))<usage_priority(previous_usage.get('usage_source'))
                 empty=all(incoming.get(k) is None for k in METRICS) and any(previous_usage.get(k) is not None for k in METRICS)
                 if weaker or empty:
-                    for field in ('usage','response_model','returned_service_tier','provider_response_id'):
+                    for field in ('usage','response_model','returned_service_tier','provider_response_id',
+                                  'returned_speed','returned_inference_geo','returned_usage_service_tier'):
                         rec.pop(field,None)
             if old and 'owner' in data:rec.pop('owner',None)
             data.update({k:v for k,v in rec.items() if v is not None})

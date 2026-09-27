@@ -21,9 +21,14 @@ SOURCES={
  'openrouter':{'label':'OpenRouter','url':'https://openrouter.ai/api/v1/models','format':'catalog'},
  'nous':{'label':'Nous Portal','url':'https://inference-api.nousresearch.com/v1/models','format':'catalog'},
  'ollama':{'label':'Ollama Cloud','url':'https://ollama.com/pricing','format':'ollama'},
+ # Anthropic's official Markdown representation of its public pricing page.
+ 'anthropic':{'label':'Anthropic','url':'https://platform.claude.com/docs/en/about-claude/pricing.md','format':'anthropic'},
 }
+# Serving-provider identity only. Direct first-party Claude API ('anthropic')
+# never lends its rates to routers, Bedrock, Vertex, Foundry or custom hosts.
 PROVIDERS={'openai-codex':'openai','openai-api':'openai','openai':'openai',
-           'openrouter':'openrouter','nous':'nous','ollama-cloud':'ollama','ollama':'ollama'}
+           'openrouter':'openrouter','nous':'nous','ollama-cloud':'ollama','ollama':'ollama',
+           'anthropic':'anthropic'}
 # OpenAI publishes all tier rows in its pricing.md representation. The pricing
 # page's short/long column tooltips publish the boundary, not the model name.
 OPENAI_TABLE_URL=SOURCES['openai']['url']+'.md'
@@ -183,6 +188,308 @@ def parse_ollama(body):
         raise ValueError('Time-dependent Ollama pricing needs parser update; retained last good catalog')
     return out
 
+# --- Anthropic (direct Claude API) -------------------------------------------
+# Prices come only from the public pricing.md; exact model IDs come only from
+# the public per-model overview pages (discovered from models/overview.md).
+# Display names are never slugified into IDs. Any schema drift fails closed.
+ANTHROPIC_OVERVIEW_URL='https://platform.claude.com/docs/en/models/overview.md'
+_ANTHROPIC_PAGE=re.compile(r'https://platform\.claude\.com/docs/en/models/([a-z0-9]+(?:-[a-z0-9]+)*)/overview\.md')
+_ANTHROPIC_PAGE_LINK=re.compile(r'https://platform\.claude\.com/docs/en/models/([a-z0-9]+(?:-[a-z0-9]+)*)/overview\b(?!\.)')
+_ANTHROPIC_ID=re.compile(r'claude-[a-z0-9]+(?:-[a-z0-9]+)*')
+_ANTHROPIC_NAME=re.compile(r'Claude ([A-Z][a-z]+) (\d+)(?:\.(\d+))?')
+_ANTHROPIC_MONEY=re.compile(r'\$(\d+(?:\.\d+)?)(?: USD)? / MTok(?:<sup>(\d+)</sup>)?')
+_ANTHROPIC_COLUMNS=['Model','Base input tokens','5m cache writes','1h cache writes','Cache hits and refreshes','Output tokens']
+ANTHROPIC_MAX_PAGES=40
+
+def _md_section(text,heading,level):
+    """Body under one exact Markdown heading, ending at a same-or-higher heading."""
+    found=re.search(r'(?m)^'+'#'*level+' '+re.escape(heading)+r'[ \t]*$',text)
+    if not found:raise ValueError('Anthropic section unavailable: '+heading)
+    rest=text[found.end():]
+    end=re.search(r'(?m)^#{1,'+str(level)+r'} ',rest)
+    return rest[:end.start()] if end else rest
+
+def _md_tables(section):
+    tables=[];current=[]
+    for line in section.splitlines()+['']:
+        s=line.strip()
+        if s.startswith('|') and s.endswith('|') and len(s)>1:
+            current.append([c.strip() for c in s[1:-1].split('|')])
+        elif current:
+            tables.append(current);current=[]
+    out=[]
+    for t in tables:
+        if (len(t)<2 or any(len(r)!=len(t[0]) for r in t)
+                or not all(re.fullmatch(r':?-{3,}:?',c) for c in t[1])):
+            raise ValueError('Anthropic table shape changed')
+        out.append((t[0],t[2:]))
+    return out
+
+def _version(name):
+    m=_ANTHROPIC_NAME.fullmatch(name)
+    if not m:raise ValueError('Unrecognised Anthropic model name')
+    return (int(m.group(2)),int(m.group(3) or 0))
+
+def _decimal(text):
+    v=price(text)
+    if v is None:raise ValueError('Anthropic price missing')
+    return Decimal(v)
+
+def _multiplier(section,label):
+    for header,rows in _md_tables(section):
+        if header[:2]!=['Cache operation','Multiplier']:continue
+        for row in rows:
+            if row[0]==label:
+                m=re.match(r'(\d+(?:\.\d+)?)x base input price',row[1])
+                if m:return Decimal(m.group(1))
+    raise ValueError('Anthropic prompt-caching multiplier unavailable: '+label)
+
+def _anthropic_names(text):
+    """'A, B and C' -> [A,B,C]; every item must be a strict Claude display name."""
+    names=[x.strip() for x in re.split(r',\s*(?:and\s+)?|\s+and\s+',text) if x.strip()]
+    if not names or not all(_ANTHROPIC_NAME.fullmatch(x) for x in names):
+        raise ValueError('Anthropic footnote model list changed')
+    return names
+
+def parse_anthropic_model_page(text):
+    """Exact Claude API ID (+documented alias) for one public model page."""
+    title=re.search(r'(?m)^title: (.+?)\s*$',text)
+    name=title.group(1).strip('"') if title else ''
+    if not _ANTHROPIC_NAME.fullmatch(name):raise ValueError('Anthropic model page title changed')
+    declared=re.search(r'(?m)^Model ID: `([^`]+)`\s*$',text)
+    ids={}
+    for header,rows in _md_tables(_md_section(text,'Model IDs',3)):
+        if header!=['Platform','Model ID']:raise ValueError('Anthropic model ID table changed')
+        for row in rows:
+            m=re.fullmatch(r'`([^`]+)`',row[1])
+            if row[0] in ('Claude API','Claude API alias'):
+                if not m or not _ANTHROPIC_ID.fullmatch(m.group(1)):raise ValueError('Anthropic model ID changed')
+                ids[row[0]]=m.group(1)
+    api=ids.get('Claude API')
+    if not api or not declared or declared.group(1)!=api:raise ValueError('Anthropic Claude API ID unavailable')
+    alias=ids.get('Claude API alias')
+    if alias is not None and alias==api:alias=None
+    window=re.search(r'(?m)^Context window: (\d+)(K|M) tokens\b',text)
+    if not window:raise ValueError('Anthropic context window unavailable')
+    return {'name':name,'id':api,'alias':alias,
+            'context_window_tokens':int(window.group(1))*(1000 if window.group(2)=='K' else 1000000)}
+
+def anthropic_page_links(text):
+    return sorted(set(_ANTHROPIC_PAGE_LINK.findall(text)))
+
+def _anthropic_overview_ids(text):
+    """Cross-check table from models/overview.md: display name -> (API ID, alias)."""
+    for header,rows in _md_tables(_md_section(text,'Compare models',2)):
+        if header[0]!='Feature':continue
+        table={r[0]:r[1:] for r in rows}
+        pages,api,alias=table.get('Model page'),table.get('Claude API ID'),table.get('Claude API alias')
+        if not pages or not api or not alias:raise ValueError('Anthropic model overview table changed')
+        out={}
+        for page,i,a in zip(pages,api,alias):
+            n=re.fullmatch(r'\[(Claude [^\]]+)\]\([^)]+\)',page)
+            ii=re.fullmatch(r'`([^`]+)`',i);aa=re.fullmatch(r'`([^`]+)`',a)
+            if not n or not ii or not aa:raise ValueError('Anthropic model overview row changed')
+            out[n.group(1)]=(ii.group(1),aa.group(1))
+        return out
+    raise ValueError('Anthropic model overview table unavailable')
+
+def parse_anthropic(body,overview,pages):
+    """Direct Claude API text-token rates: standard and fast speed, global and US geo.
+
+    ``pages`` are public model overview Markdown pages. A price row is only
+    emitted for a display name with an exact documented ID; retired rows and
+    rows without a model page stay unpriced. Batch, Priority Tier, cloud
+    platforms, tools and session runtime are outside this catalogue.
+    """
+    if not re.search(r'(?m)^This page provides detailed pricing information for Anthropic\'s models and features\. All prices are in USD\.\s*$',body):
+        raise ValueError('Anthropic currency statement unavailable')
+    model_section=_md_section(body,'Model pricing',2)
+    tables=_md_tables(model_section)
+    if len(tables)!=1 or tables[0][0]!=_ANTHROPIC_COLUMNS:raise ValueError('Anthropic price column schema changed')
+    notes=dict(re.findall(r'<sup>(\d+) ([^<]+)</sup>',model_section))
+    default=re.search(r'All other models use the standard (\d+(?:\.\d+)?)x multiplier',model_section)
+    if not default:raise ValueError('Anthropic cache-hit multiplier unavailable')
+    caching=_md_section(body,'Prompt caching',3)
+    write5=_multiplier(caching,'5-minute cache write');write1h=_multiplier(caching,'1-hour cache write')
+    standard={};retired=[];limited=set()
+    for row in tables[0][1]:
+        m=re.fullmatch(r'(Claude [A-Z][a-z]+ \d+(?:\.\d+)?)(?: \(\[([^\]]+)\]\(https://[^)\s]+\)\))?',row[0])
+        if not m:raise ValueError('Anthropic model row changed')
+        name,annotation=m.group(1),(m.group(2) or '').lower()
+        if annotation.startswith('retired'):retired.append(name);continue
+        if annotation=='limited availability':limited.add(name)
+        elif annotation:raise ValueError('Unrecognised Anthropic model availability annotation')
+        if name in standard:raise ValueError('Duplicate Anthropic model price')
+        cells=[_ANTHROPIC_MONEY.fullmatch(c) for c in row[1:]]
+        if not all(cells):raise ValueError('Anthropic price cell changed')
+        base,w5,w1,hit,out=(_decimal(c.group(1)) for c in cells)
+        refs=[c.group(2) for c in cells]
+        for position,ref in enumerate(refs):
+            if ref is None:continue
+            text=notes.get(ref)
+            if text is None:raise ValueError('Anthropic footnote unavailable')
+            if position==3:
+                hm=re.fullmatch(r'Cache hits and refreshes on (.+?) (?:is|are) priced at (\d+(?:\.\d+)?)x the base input price\.',text)
+                if not hm or name not in _anthropic_names(hm.group(1)) or hit!=base*Decimal(hm.group(2)):
+                    raise ValueError('Anthropic cache-hit footnote inconsistent')
+            elif position in (0,4):
+                # Time-limited/introductory prices are accepted only once the
+                # provider states they are now the standard price.
+                if name not in text or 'is now the standard price' not in text:
+                    raise ValueError('Time-limited Anthropic price needs review')
+            else:raise ValueError('Unexpected Anthropic cache-write footnote')
+        if refs[3] is None and hit!=base*Decimal(default.group(1)):raise ValueError('Anthropic cache-hit price inconsistent')
+        if w5!=base*write5 or w1!=base*write1h:raise ValueError('Anthropic cache-write price inconsistent')
+        standard[name]=dict(input=base,output=out,read=hit,write=w5,write_1h=w1)
+    if not standard:raise ValueError('Anthropic price table has no supported models')
+    fast_section=_md_section(body,'Fast mode pricing',3)
+    if 'Prompt caching multipliers' not in fast_section or 'apply on top of fast mode pricing' not in fast_section:
+        raise ValueError('Anthropic fast-mode caching statement changed')
+    fast_tables=_md_tables(fast_section)
+    if len(fast_tables)!=1 or fast_tables[0][0]!=['Model','Input','Output']:raise ValueError('Anthropic fast-mode schema changed')
+    fast={}
+    for row in fast_tables[0][1]:
+        cells=[_ANTHROPIC_MONEY.fullmatch(c) for c in row[1:]]
+        if not all(cells) or any(c.group(2) for c in cells):raise ValueError('Anthropic fast-mode price cell changed')
+        for name in [x.strip() for x in row[0].split(' / ')]:
+            if name not in standard or name in fast:raise ValueError('Anthropic fast-mode model unmatched')
+            fast[name]=(_decimal(cells[0].group(1)),_decimal(cells[1].group(1)))
+    residency=_md_section(body,'Data residency pricing',3)
+    geo=re.search(r'For Claude (\d+)\.(\d+) and later models, specifying US-only inference through the `inference_geo` parameter incurs a (\d+(?:\.\d+)?)x multiplier on all token pricing categories',residency)
+    if not geo or 'Global routing (the default) uses standard pricing' not in residency:
+        raise ValueError('Anthropic data-residency pricing changed')
+    geo_from,geo_mult=(int(geo.group(1)),int(geo.group(2))),Decimal(geo.group(3))
+    long=re.search(r'Claude (\d+)\.(\d+) and later models .*?include the full \[1M token context window\]\([^)]*\) at standard pricing',
+                   _md_section(body,'Long context pricing',3))
+    flat_from=(int(long.group(1)),int(long.group(2))) if long else None
+    by_name={}
+    for page in pages:
+        parsed=parse_anthropic_model_page(page)
+        if parsed['name'] in by_name and by_name[parsed['name']]!=parsed:raise ValueError('Conflicting Anthropic model pages')
+        by_name[parsed['name']]=parsed
+    for name,(api,alias) in _anthropic_overview_ids(overview).items():
+        page=by_name.get(name)
+        if not page or page['id']!=api or (page['alias'] or page['id'])!=alias:
+            raise ValueError('Anthropic model overview disagrees with model page')
+    out=[]
+    for name,std in standard.items():
+        page=by_name.get(name)
+        if not page:continue  # published price without a documented exact ID
+        version=_version(name)
+        flat=bool(flat_from and version>=flat_from)
+        speeds:list=[('standard',std,None)]
+        if name in fast:
+            f_in,f_out=fast[name]
+            ratio=std['read']/std['input']
+            speeds.append(('fast',dict(input=f_in,output=f_out,read=f_in*ratio,write=f_in*write5,write_1h=f_in*write1h),
+                           'Fast-mode input/output published; cache prices apply the published prompt-caching multipliers.'))
+        geos=[('global',Decimal(1))]+([('us',geo_mult)] if version>=geo_from else [])
+        for model_id in [page['id']]+([page['alias']] if page['alias'] else []):
+            for tier,values,derivation in speeds:
+                for region,mult in geos:
+                    v={k:str(x*mult) for k,x in values.items()}
+                    notes_=[n for n in (derivation,('US-only inference: published '+str(geo_mult)+'x data-residency multiplier applied to every token category.') if region=='us' else None) if n]
+                    extra=dict(cache_write_1h_tokens=v['write_1h'],inference_geo=region,display_name=name,
+                               api_model_id=page['id'],max_prompt_tokens=page['context_window_tokens'],
+                               long_context_flat=flat,cache_ttl_breakdown_required=True,
+                               availability='limited' if name in limited else 'general')
+                    if model_id!=page['id']:extra['alias_of']=page['id']
+                    if notes_:extra['note']=' '.join(notes_)
+                    out.append(rate(model_id,tier,[v['input'],v['output'],v['read'],v['write']],**extra))
+    if not out:raise ValueError('Anthropic catalogue has no documented model IDs')
+    return out
+
+def anthropic_catalog(fetcher):
+    """Fetch pricing plus a bounded, same-host model-page crawl; all-or-nothing."""
+    body=fetcher(SOURCES['anthropic']['url'])
+    overview=fetcher(ANTHROPIC_OVERVIEW_URL)
+    pending=anthropic_page_links(overview);seen=set();pages=[]
+    while pending:
+        slug=pending.pop(0)
+        if slug in seen:continue
+        seen.add(slug)
+        if len(seen)>ANTHROPIC_MAX_PAGES:raise ValueError('Anthropic model page discovery exceeded bound')
+        text=fetcher('https://platform.claude.com/docs/en/models/'+slug+'/overview.md')
+        pages.append(text)
+        pending.extend(x for x in anthropic_page_links(text) if x not in seen)
+    return parse_anthropic(body,overview,pages)
+
+def anthropic_model_id(model):
+    """Hermes' native wire normalisation for direct Claude requests, and no more.
+
+    Mirrors hermes-agent ``normalize_model_name``: strip a leading
+    ``anthropic/`` (any case) and turn version dots into hyphens for
+    ``claude-`` names. Bedrock/regional IDs are left untouched (and so unpriced).
+    """
+    if not isinstance(model,str):return None
+    if model.lower().startswith('anthropic/'):model=model[len('anthropic/'):]
+    if model.lower().startswith('claude-'):model=model.replace('.','-')
+    return model
+
+def anthropic_endpoint(base_url):
+    """Content-free endpoint class for direct Anthropic pricing eligibility.
+
+    Exact host only. Hermes canonicalises hostnames with ``lower().rstrip('.')``
+    (``utils._hostname_of``, ``auxiliary_client._is_anthropic_compatible_host``);
+    the single trailing-dot absolute-DNS form ``api.anthropic.com.`` is the
+    same first-party host. Only that one dot is removed: ``..`` is not a valid
+    DNS name and stays ``custom`` (fail-closed). Nothing else is loosened:
+    subdomains, look-alikes, ``/anthropic`` gateway paths and scheme-less
+    strings remain ``custom`` (unpriced).
+    """
+    if not isinstance(base_url,str) or not base_url.strip():return None
+    try:host=(urlsplit(base_url.strip()).hostname or '').lower()
+    except ValueError:return 'custom'
+    if host.endswith('.'):host=host[:-1]
+    return 'first_party' if host=='api.anthropic.com' else 'custom'
+
+# Anthropic's documented usage.speed / usage.inference_geo enumerations.
+_ANTHROPIC_SPEEDS={'fast','standard'}
+_ANTHROPIC_GEOS={'global','us'}
+_ANTHROPIC_REQUESTED_STANDARD={'unspecified','','auto','default','standard','standard_only'}
+
+def _select_anthropic(s,rec,revision,stamp,retrospective):
+    endpoint=rec.get('anthropic_endpoint')
+    # custom host, or an auxiliary client whose endpoint could not be read
+    # ('unverified'): never borrow direct first-party rates.
+    if endpoint not in (None,'first_party'):return None
+    model=anthropic_model_id(rec.get('response_model') or rec.get('model'))
+    if not model:return None
+    if rec.get('returned_usage_service_tier') not in (None,'standard'):return None  # Priority/Batch: unpublished here
+    requested=str(rec.get('service_tier') or 'unspecified')
+    asked_fast=requested=='fast' or rec.get('requested_speed')=='fast'
+    speed=rec.get('returned_speed');speed_basis='usage.speed'
+    if speed is None:
+        if asked_fast:speed,speed_basis='fast','requested fast; completed fast requests report fast'
+        elif requested in _ANTHROPIC_REQUESTED_STANDARD:speed,speed_basis='standard','assumed standard speed (no fast request)'
+        else:return None
+    if speed not in _ANTHROPIC_SPEEDS:return None
+    geo=rec.get('returned_inference_geo')
+    if geo is not None and geo not in _ANTHROPIC_GEOS:return None
+    candidates=[r for r in s['rates'] if r['model']==model and r['service_tier']==speed
+                and r.get('inference_geo')==(geo or 'global')]
+    prompt=(rec.get('usage') or {}).get('prompt_tokens')
+    # 4.6+ models publish one flat rate over the whole window. Earlier models
+    # publish no long-context rate, so price only a known prompt within the
+    # documented window; anything else stays unknown rather than guessed.
+    candidates=[r for r in candidates if r.get('long_context_flat') or
+                (prompt is not None and r.get('max_prompt_tokens') is not None and prompt<=r['max_prompt_tokens'])]
+    if len(candidates)!=1:return None
+    r=copy.deepcopy(candidates[0])
+    geo_possible=any(x['model']==model and x.get('inference_geo')=='us' for x in s['rates'])
+    return {**r,'provider':rec['provider'],'source':s['source']+' public pricing','source_url':s['source_url'],
+       'catalog_revision':revision,'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
+       'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
+       'retrospective':retrospective,'requested_service_tier':requested,
+       'tier_assumption':rec.get('returned_speed') is None and not asked_fast,
+       # True whenever the provider did not return usage.speed: a requested
+       # fast speed is an inference, not a confirmed returned speed.
+       'speed_inferred':rec.get('returned_speed') is None,
+       'speed_basis':speed_basis,'geo_assumption':geo is None and geo_possible,'endpoint_assumption':endpoint is None,
+       'basis':'API-equivalent estimate at Anthropic public list prices; not a subscription debit or provider-reported charge',
+       'pricing_basis':'provider_catalog_estimate',
+       'scope':'text tokens; excludes Batch/Priority Tier, tools, web search, runtime, tax and negotiated discounts'}
+
 class SafeRedirect(HTTPRedirectHandler):
     def redirect_request(self,req,fp,code,msg,headers,newurl):
         target=urljoin(req.full_url,newurl)
@@ -195,8 +502,10 @@ class SafeRedirect(HTTPRedirectHandler):
 
 def fetch(url):
     # No browser cookies, no credentials, no environment proxy credentials.
-    if url not in {s['url'] for s in SOURCES.values()}|{OPENAI_TABLE_URL}:raise ValueError('Unapproved public source')
-    accept='text/html' if url==SOURCES['openai']['url'] else 'text/markdown' if url==OPENAI_TABLE_URL else 'application/json,text/html'
+    anthropic_page=bool(_ANTHROPIC_PAGE.fullmatch(url)) if isinstance(url,str) else False
+    if url not in {s['url'] for s in SOURCES.values()}|{OPENAI_TABLE_URL,ANTHROPIC_OVERVIEW_URL} and not anthropic_page:
+        raise ValueError('Unapproved public source')
+    accept='text/html' if url==SOURCES['openai']['url'] else 'text/markdown' if url.endswith('.md') else 'application/json,text/html'
     request=Request(url,headers={'User-Agent':'Hermes-AI-Usage-Ledger/2.0','Accept':accept})
     with build_opener(ProxyHandler({}),SafeRedirect()).open(request,timeout=12) as response:
         payload=response.read(MAX_BYTES+1)
@@ -239,11 +548,14 @@ def refresh(store,force=False,fetcher=fetch):
             if now-previous.get('attempted_at',0)<minimum_interval:continue
             state={**previous,'source_id':sid,'label':source['label'],'source_url':source['url'],'attempted_at':now}
             try:
-                text=fetcher(source['url'])
-                if sid=='openai':
-                    entries=parse_openai(fetcher(OPENAI_TABLE_URL),text)
+                if sid=='anthropic':
+                    entries=anthropic_catalog(fetcher)
                 else:
-                    entries={'catalog':parse_catalog,'ollama':parse_ollama}[source['format']](text)
+                    text=fetcher(source['url'])
+                    if sid=='openai':
+                        entries=parse_openai(fetcher(OPENAI_TABLE_URL),text)
+                    else:
+                        entries={'catalog':parse_catalog,'ollama':parse_ollama}[source['format']](text)
                 s=_snapshot(sid,entries,time.time())
                 with store.db() as c:
                     c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',(sid,s['observed_at'],json.dumps(s)))
@@ -304,6 +616,7 @@ def select_rate(s,rec,revision,stamp,*,retrospective=False):
     """
     sid=PROVIDERS.get(rec.get('provider'));model=rec.get('response_model') or rec.get('model')
     if not sid or s.get('source_id')!=sid or not model:return None
+    if sid=='anthropic':return _select_anthropic(s,rec,revision,stamp,retrospective)
     t=rec.get('returned_service_tier') or rec.get('service_tier') or 'unspecified'
     tier={'priority':'fast','default':'standard','unspecified':'standard','auto':'standard','':'standard'}.get(t,t)
     # Catalogs from routed providers are standard list prices; no multiplier guessed.

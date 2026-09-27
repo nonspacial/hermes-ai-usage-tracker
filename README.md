@@ -106,7 +106,7 @@ Usage refreshes automatically while the pane is open. Click **Refresh** for an i
 
 Subscription cards show what the provider reports about your account allowance. The usage pages show requests captured by the local recorder. Their dollar values are API-equivalent estimates, not subscription charges or a conversion of quota into money.
 
-A provider can report tokens without offering a quota API or a matching price catalogue. Automatic pricing currently has adapters for OpenAI, OpenRouter, Nous and Ollama. A usable catalogue and an exact model match are still required. Direct Anthropic and Gemini requests can have token counts but no price.
+A provider can report tokens without offering a quota API or a matching price catalogue. Automatic pricing currently has adapters for OpenAI, OpenRouter, Nous, Ollama and direct Anthropic. A usable catalogue and an exact model match are still required. Anthropic prices are API-equivalent estimates, not Claude subscription charges. Gemini requests can have token counts but no price.
 
 A missing value means unknown, not zero. A subtotal with missing fields may be less than the complete cost.
 

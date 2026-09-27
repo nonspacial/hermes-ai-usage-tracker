@@ -96,7 +96,29 @@ def response_metadata(response):
     out={}
     for field,target in (('model','response_model'),('service_tier','returned_service_tier'),('id','provider_response_id')):
         if isinstance(obj.get(field),str) and obj[field]:out[target]=text(obj[field])
+    out.update(usage_enums(obj.get('usage')))
     return out
+
+# Anthropic reports these billing-relevant usage enums. Only documented values
+# are copied; anything else becomes a fixed sentinel so pricing fails closed.
+USAGE_ENUMS={'speed':('returned_speed',{'fast','standard'}),
+             'inference_geo':('returned_inference_geo',{'global','us'}),
+             'service_tier':('returned_usage_service_tier',{'standard','priority','batch'})}
+
+def usage_enums(usage):
+    u=mapping(usage)
+    out={}
+    for field,(target,allowed) in USAGE_ENUMS.items():
+        value=u.get(field)
+        if value is None:continue
+        out[target]=value if isinstance(value,str) and value in allowed else 'unrecognised'
+    return out
+
+def endpoint_class(kw):
+    if text(kw.get('provider'))!='anthropic':return {}
+    from .pricing import anthropic_endpoint
+    kind=anthropic_endpoint(kw.get('base_url'))
+    return {'anthropic_endpoint':kind} if kind else {}
 
 def body_settings(kw):
     body=mapping(mapping(kw.get('request')).get('body'))
@@ -104,8 +126,10 @@ def body_settings(kw):
     if not body:body=kw.get('_request_kwargs') or {}
     extra=mapping(body.get('extra_body'))
     reasoning=mapping(body.get('reasoning') or extra.get('reasoning'))
+    speed=body.get('speed') or extra.get('speed')
     return {'service_tier':text(body.get('service_tier') or extra.get('service_tier') or extra.get('speed') or 'unspecified',80),
-            'reasoning_effort':text(reasoning.get('effort') or body.get('reasoning_effort'),80)}
+            'reasoning_effort':text(reasoning.get('effort') or body.get('reasoning_effort'),80),
+            **({'requested_speed':speed} if speed in ('fast','standard') else {})}
 
 def meta(kw):
     return {k:text(kw.get(k)) for k in ('session_id','turn_id','task_id','platform','model','provider','api_mode')}
@@ -120,7 +144,7 @@ def pre(**kw):
     rec={'id':key,**meta(kw),'started':started,'provider':text(kw.get('provider')) or 'unknown',
          'task':text(kw.get('task_id')) or 'main','source':'main_hook','status':'pending','process':PROCESS,'owner':identity(),
          'api_request_id':aid,'approx_input_tokens':num(kw.get('approx_input_tokens')),
-         'retry_count':num(kw.get('retry_count')),**body_settings(kw)}
+         'retry_count':num(kw.get('retry_count')),**body_settings(kw),**endpoint_class(kw)}
     root=str(home()); CURRENT.set({'id':key,'root':root,'session_id':rec['session_id'],'provider':rec['provider'],'api_mode':rec['api_mode'],'api_request_id':aid})
     with _LOCK:
         _LOOKUP[(root,rec['session_id'],aid)]=key

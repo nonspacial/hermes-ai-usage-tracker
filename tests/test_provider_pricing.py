@@ -225,7 +225,7 @@ def test_refresh_uses_only_public_urls_keeps_last_good(tmp_path):
     d=s.read();status={c['source_id']:c for c in d['price_catalogs']}
     assert status['openai']['status']=='ok' and status['openai']['origin']=='live_public_provider'
     assert status['ollama']['status']=='unavailable' and status['ollama']['rates']
-    assert 'fake secret' not in json.dumps(d) and len(calls)==5
+    assert 'fake secret' not in json.dumps(d) and len(calls)==6
     assert set(calls)=={r['url'] for r in p.SOURCES.values()}|{p.OPENAI_TABLE_URL}
     n=len(calls);p.refresh(s,force=True,fetcher=fetch);assert len(calls)==n # button rate limiting
 

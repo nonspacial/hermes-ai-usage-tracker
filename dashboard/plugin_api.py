@@ -16,6 +16,8 @@ own. Secrets are resolved in-process and never serialized: the wire carries
 
 from __future__ import annotations
 
+import contextvars
+import inspect
 import logging
 import os
 import sqlite3
@@ -26,7 +28,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, NamedTuple, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -167,13 +170,154 @@ _ENV_HINTS = {
 # --------------------------------------------------------------------------
 
 
-def _run_in_home(home: Optional[Path], fn: Callable[[], Any]) -> Any:
-    """Run ``fn`` with ``home`` bound as this thread's Hermes home.
+class _ScopeUnavailable(RuntimeError):
+    """The host cannot bind the selected profile's secret scope; credentials were not read."""
 
-    The override lives in a ContextVar, so it is thread-local: a request can
-    resolve another profile's credentials/state without disturbing the server's
-    own profile (and ThreadPoolExecutor workers do NOT inherit the caller's
-    context, so every worker binds it itself).
+
+class _SecretBinding(NamedTuple):
+    """One prepared, immutable secret-scope snapshot for a selected profile.
+
+    Prepared once (hydration + scope build happen then); ``bind`` installs a
+    private copy in the calling worker so one worker's host-side mirror write
+    cannot reach a sibling. Never stored beyond the operation that prepared it.
+    (NamedTuple, not dataclass: the host loads this file without registering it
+    in ``sys.modules``.)
+    """
+
+    secrets: Mapping[str, str]
+    stamp: Optional[str]
+    set_scope: Callable[..., Any]
+    reset: Callable[[Any], None]
+
+    def __repr__(self) -> str:  # never render secret values into logs/tracebacks
+        return f'_SecretBinding(stamp={self.stamp!r}, keys={len(self.secrets)})'
+
+    def bind(self) -> Any:
+        if self.stamp and 'profile_home' in inspect.signature(self.set_scope).parameters:
+            return self.set_scope(dict(self.secrets), profile_home=self.stamp)
+        return self.set_scope(dict(self.secrets))
+
+
+class _PreparedHome(NamedTuple):
+    """A selected home plus its secret binding prepared once for one payload build.
+
+    Passed explicitly as ``home`` to every worker of that build (never through
+    inherited thread context); ``_bound_call`` unwraps it, binds the real home
+    path and the prepared scope, and never hydrates again. ``binding`` is
+    ``None`` only where the host has no scope API (home-only binding).
+    """
+
+    path: Path
+    binding: Optional[_SecretBinding]
+
+
+def _home_path(home: Any) -> Any:
+    return home.path if isinstance(home, _PreparedHome) else home
+
+
+def _home_and_scope(home: Any) -> tuple[Path, Optional[_SecretBinding]]:
+    """A prepared home's path and binding; a plain home is prepared now (reset/monitor ops)."""
+    if isinstance(home, _PreparedHome):
+        return home.path, home.binding
+    return home, _selected_secret_scope(home)
+
+
+def _prepare_home(home: Optional[Path]) -> Optional[Any]:
+    """Prepare ``home``'s secret scope once for a whole ``/usage`` build.
+
+    Mirrors the host route, which enters one scope per request: at most one
+    hydration of the selected profile's external secret sources per build, so
+    a failing helper is not re-run by every probe worker. Raises
+    ``_ScopeUnavailable`` exactly where per-worker binding would have.
+    """
+    if home is None:
+        return None
+    try:
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override  # noqa: F401
+    except Exception:  # noqa: BLE001 - same legacy fallback as _run_in_home: nothing is bound
+        return home
+    return _PreparedHome(Path(home), _selected_secret_scope(home))
+
+
+def _selected_secret_scope(home: Path) -> Optional[_SecretBinding]:
+    """Prepared binding for ``home``'s host secret scope; ``None`` on a pre-scope host.
+
+    Mirrors ``hermes_cli.web_server_profiles._config_profile_scope``: the
+    process's own profile gets the host launch scope (its ``.env`` over the
+    launch env, frozen once multi-profile hosting is active); any other profile
+    gets a scope built only from that profile's own files, stamped with its home.
+    ``get_secret`` then never falls back to another profile's ``os.environ``.
+    A host that ships the guard module but not this binding API fails closed.
+    """
+    try:
+        import agent.secret_scope as scope
+    except ModuleNotFoundError as exc:
+        if exc.name not in ('agent', 'agent.secret_scope'):
+            raise _ScopeUnavailable('Selected profile credential scope unavailable.') from exc
+        return None  # pre-scope host: no guard, credentials follow the home override
+    try:
+        set_scope, reset_scope = scope.set_secret_scope, scope.reset_secret_scope
+        from hermes_constants import get_process_hermes_home
+        try:
+            from hermes_constants import get_routing_process_hermes_home as own_home
+        except ImportError:
+            own_home = get_process_hermes_home
+        if Path(home).resolve() == Path(own_home()).resolve():
+            try:
+                from tui_gateway.launch_profile_policy import launch_secret_scope
+            except ImportError:
+                # Older host without launch policy: unscoped reads are the launch
+                # env unless multiplexing is on, when they must not proceed.
+                if getattr(scope, 'is_multiplex_active', lambda: True)():
+                    raise
+                return None
+            secrets, stamp = launch_secret_scope(Path(home)), None  # own home: no foreign stamp
+        else:
+            build = scope.build_profile_secret_scope
+            try:
+                from hermes_cli.env_loader import hydrate_profile_secret_sources
+            except ImportError:
+                hydrate_profile_secret_sources = None
+            if hydrate_profile_secret_sources is not None:
+                hydrate_profile_secret_sources(Path(home))  # host-owned, never touches os.environ
+            secrets, stamp = build(Path(home)), str(home)
+    except (ImportError, AttributeError) as exc:
+        raise _ScopeUnavailable('Selected profile credential scope unavailable.') from exc
+    return _SecretBinding(MappingProxyType(dict(secrets)), stamp, set_scope, reset_scope)
+
+
+def _bound_call(home: Any, fn: Callable[[], Any], set_home: Callable[[Any], Any],
+                reset_home: Callable[[Any], None], check: Optional[Callable[[], None]] = None) -> Any:
+    """Bind home override then secret scope in this worker; reset both in reverse.
+
+    A ``_PreparedHome`` reuses its build-wide binding; a plain home is prepared
+    here, once per separate operation (Codex reset routes and monitor).
+    """
+    home, secret = _home_and_scope(home)
+    home_token = set_home(home)
+    secret_token = None
+    try:
+        if secret is not None:
+            secret_token = secret.bind()
+        if check is not None:
+            check()
+        return fn()
+    finally:
+        if secret is not None and secret_token is not None:
+            secret.reset(secret_token)
+        reset_home(home_token)
+
+
+def _run_in_home(home: Optional[Path], fn: Callable[[], Any]) -> Any:
+    """Run ``fn`` with ``home``'s Hermes home and secret scope bound to this worker.
+
+    Both are ContextVars, so a request can resolve another profile's
+    credentials/state without disturbing the server's own profile; executor
+    workers do NOT inherit the caller's context, so every worker binds them.
+    ``home`` may be a ``_PreparedHome`` (bind its build-wide scope, no
+    re-hydration) or a plain path (prepare now, for a standalone operation).
+    Home alone is not enough on a multi-profile host: ``get_secret`` refuses
+    unscoped reads and the host quota fetcher swallows that as ``None``.
     """
     if home is None:
         return fn()
@@ -181,7 +325,23 @@ def _run_in_home(home: Optional[Path], fn: Callable[[], Any]) -> Any:
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     except Exception:  # noqa: BLE001
         return fn()
-    token = set_hermes_home_override(home)
+    return _bound_call(home, fn, set_hermes_home_override, reset_hermes_home_override)
+
+
+def _run_in_home_only(home: Optional[Path], fn: Callable[[], Any]) -> Any:
+    """Bind only ``home``'s Hermes home override — no secret scope, no hydration.
+
+    For source-file reads that never resolve credentials (activity discovery from
+    the selected profile's ``state.db``). Same fallback as the historical
+    ``_run_in_home``; the selected home is reset in ``finally``.
+    """
+    if home is None:
+        return fn()
+    try:
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    except Exception:  # noqa: BLE001
+        return fn()
+    token = set_hermes_home_override(_home_path(home))
     try:
         return fn()
     finally:
@@ -195,13 +355,11 @@ def _run_reset_home(home: Path, fn: Callable[[], Any]) -> Any:
                                       set_hermes_home_override)
     except (ImportError, AttributeError) as exc:
         raise RuntimeError('Selected profile context unavailable.') from exc
-    token = set_hermes_home_override(home)
-    try:
-        if Path(get_hermes_home()).resolve() != Path(home).resolve():
+
+    def check() -> None:
+        if Path(get_hermes_home()).resolve() != Path(_home_path(home)).resolve():
             raise RuntimeError('Selected profile context unavailable.')
-        return fn()
-    finally:
-        reset_hermes_home_override(token)
+    return _bound_call(home, fn, set_hermes_home_override, reset_hermes_home_override, check)
 
 
 def _server_home() -> Path:
@@ -408,7 +566,10 @@ def _probe_standard(provider: str) -> dict[str, Any]:
 
     snapshot = fetch_account_usage(provider)
     if snapshot is None:
-        return _unavailable("No credentials for this provider in this profile.", source="usage_api")
+        # Host account_usage also returns None when its quota request fails;
+        # it does not establish whether this profile has usable credentials.
+        return _unavailable("Subscription limits unavailable — quota could not be read for this profile.",
+                            source="usage_api")
     return _serialize_snapshot(snapshot)
 
 
@@ -421,7 +582,8 @@ def _probe_nous() -> dict[str, Any]:
         return get_nous_portal_account_info(force_fresh=True)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        info = pool.submit(_fetch).result(timeout=_PROBE_TIMEOUT)
+        # Carry the caller's bound profile home and secret scope into this worker.
+        info = pool.submit(contextvars.copy_context().run, _fetch).result(timeout=_PROBE_TIMEOUT)
     snapshot = build_nous_credits_snapshot(info)
     if snapshot is None:
         return _unavailable("Not signed in to Nous Portal, or the portal returned no subscription data.",
@@ -746,7 +908,7 @@ def _configured_providers() -> set[str]:
 def _build_payload(home: Optional[Path], profile_name: Optional[str]) -> dict[str, Any]:
     started = time.time()
     labels = _provider_labels()
-    active, last_seen = _run_in_home(home, _active_providers)
+    active, last_seen = _run_in_home_only(home, _active_providers)
     configured = _run_in_home(home, _configured_providers)
 
     targets = sorted((active | configured) & _QUOTA_CAPABLE)
@@ -792,6 +954,54 @@ def _build_payload(home: Optional[Path], profile_name: Optional[str]) -> dict[st
     }
 
 
+_SCOPE_UNAVAILABLE_REASON = ("Subscription limits not read — this Hermes host cannot bind the selected "
+                             "profile's credential scope, so no credential was accessed.")
+
+
+def _scope_unavailable_payload(home: Optional[Path], profile_name: Optional[str]) -> dict[str, Any]:
+    """Truthful result when the host's secret-scope binding API is partial.
+
+    Credential discovery and every quota probe stay fail-closed (never attempted).
+    Source-only activity discovery reads the selected home's ``state.db`` under a
+    home-only binding, so recently used providers still render as unavailable.
+    With no such activity the provider set is unknown, not empty: refuse (503).
+    """
+    unknown = HTTPException(503, "Selected profile credential scope unavailable on this Hermes host; "
+                                 "provider discovery was not performed.")
+    if home is None:
+        raise unknown
+    try:
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    except (ImportError, AttributeError):
+        raise unknown from None
+    token = set_hermes_home_override(home)
+    try:
+        active, last_seen = _active_providers()
+    finally:
+        reset_hermes_home_override(token)
+    if not active:
+        raise unknown
+    labels = _provider_labels()
+    providers = [{
+        "id": pid,
+        "label": labels.get(pid, pid.replace("-", " ").title()),
+        "configured": None,  # unknown: credential discovery was not performed
+        "quota_capable": pid in _QUOTA_CAPABLE,
+        "active": True,
+        "last_active_at": last_seen.get(pid),
+        "quota": _unavailable(_SCOPE_UNAVAILABLE_REASON, source="scope_unavailable"),
+    } for pid in sorted(active, key=lambda pid: labels.get(pid, pid).lower())]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "profile": profile_name,
+        "probe_seconds": 0.0,
+        "profiles": _profile_rows(),
+        "providers": providers,
+        "credential_discovery": {"status": "unavailable", "reason": "secret_scope_unavailable",
+                                 "note": "Only providers with recent recorded activity are listed."},
+    }
+
+
 # --------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------
@@ -826,9 +1036,16 @@ def get_usage(
             payload["cached"] = True
             payload["cache_age_seconds"] = round(now - entry["at"], 1)
             return payload
-    payload = _build_payload(home, resolved)
     try:
-        if _ledger_store is not None:
+        # One prepared scope per build, passed explicitly to every worker.
+        payload = _build_payload(_prepare_home(home), resolved)
+        degraded = False
+    except _ScopeUnavailable:
+        # Raised only by discovery binding (probe failures are caught per probe);
+        # any other exception still propagates.
+        payload, degraded = _scope_unavailable_payload(home, resolved), True
+    try:
+        if _ledger_store is not None and not degraded:  # not a quota observation
             _ledger_store(home or _server_home()).save_quota(payload)
     except Exception:
         log.warning("AI usage quota snapshot could not be stored; quota display still works.")
