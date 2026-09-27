@@ -444,13 +444,36 @@ def anthropic_endpoint(base_url):
     return 'first_party' if host=='api.anthropic.com' else 'custom'
 
 # Anthropic's documented usage.speed / usage.inference_geo enumerations.
-# 'not_available' is documented (Usage & Cost API) for requests where the
-# inference_geo parameter does not apply; standard (global) pricing applies,
-# so it selects the global rate. The recorder's 'unrecognised' sentinel and any
-# other value stay unpriced.
+# 'not_available' is documented (Usage & Cost API) for models that do not
+# accept the inference_geo parameter; standard (global) pricing applies. It
+# selects the global rate, flagged geo_assumption on models with a published
+# US rate (see _select_anthropic). The recorder's 'unrecognised' sentinel and
+# any other value stay unpriced, except the bounded read-time rule below.
 _ANTHROPIC_SPEEDS={'fast','standard'}
 _ANTHROPIC_GEOS={'global':'global','us':'us','not_available':'global'}
 _ANTHROPIC_REQUESTED_STANDARD={'unspecified','','auto','default','standard','standard_only'}
+# Documented-value gap in the recorder allow-list, admitted in 0d5ade4: before
+# then Anthropic's documented 'not_available' geo was stored as the
+# 'unrecognised' sentinel (raw value not kept). Anthropic documents only
+# global/us/not_available, 'us' is returned only when requested and Hermes
+# never sends inference_geo, so such a row is estimated at the global rate
+# (a workspace default geo cannot be excluded, so it is always flagged). The rule is
+# read-time only (retrospective projection; never a saved completion rate),
+# bounded to a returned 'standard' service tier and standard speed that was
+# neither returned nor requested as fast, and is flagged as an assumption.
+# Trade-off: it is not date-bounded, so a future genuinely new geo value is
+# also estimated at the global rate (labelled) until the allow-list admits it.
+ANTHROPIC_UNRECOGNISED_GEO_AS_GLOBAL='unrecognised_as_global'
+ANTHROPIC_NOT_AVAILABLE_GEO_AS_GLOBAL='not_available_as_global'
+_ANTHROPIC_UNRECOGNISED_GEO_TIERS={'standard'}
+
+def _unrecognised_geo_as_global(rec,speed,asked_fast,retrospective):
+    return (retrospective and rec.get('provider')=='anthropic'
+            and rec.get('returned_inference_geo')=='unrecognised'
+            and rec.get('returned_usage_service_tier') in _ANTHROPIC_UNRECOGNISED_GEO_TIERS
+            and rec.get('returned_speed') in (None,'standard') and speed=='standard' and not asked_fast
+            # The recorder keeps no requested geo today; any recorded one disqualifies.
+            and rec.get('requested_inference_geo') is None)
 
 def _select_anthropic(s,rec,revision,stamp,retrospective):
     endpoint=rec.get('anthropic_endpoint')
@@ -469,8 +492,11 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
         else:return None
     if speed not in _ANTHROPIC_SPEEDS:return None
     geo=rec.get('returned_inference_geo')
-    if geo is not None and geo not in _ANTHROPIC_GEOS:return None
-    rate_geo='global' if geo is None else _ANTHROPIC_GEOS[geo]
+    geo_basis=None
+    if geo is not None and geo not in _ANTHROPIC_GEOS:
+        if not _unrecognised_geo_as_global(rec,speed,asked_fast,retrospective):return None
+        geo_basis=ANTHROPIC_UNRECOGNISED_GEO_AS_GLOBAL
+    rate_geo='global' if geo is None or geo_basis else _ANTHROPIC_GEOS[geo]
     candidates=[r for r in s['rates'] if r['model']==model and r['service_tier']==speed
                 and r.get('inference_geo')==rate_geo]
     prompt=(rec.get('usage') or {}).get('prompt_tokens')
@@ -482,6 +508,11 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
     if len(candidates)!=1:return None
     r=copy.deepcopy(candidates[0])
     geo_possible=any(x['model']==model and x.get('inference_geo')=='us' for x in s['rates'])
+    # 'not_available' is documented for models that do not accept
+    # inference_geo (standard pricing, no assumption). On a model with a
+    # published US rate it is observed but undocumented: the workspace default
+    # geo could be 'us', so global is an assumption and flagged as such.
+    if geo=='not_available' and geo_possible:geo_basis=ANTHROPIC_NOT_AVAILABLE_GEO_AS_GLOBAL
     return {**r,'provider':rec['provider'],'source':s['source']+' public pricing','source_url':s['source_url'],
        'catalog_revision':revision,'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
        'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
@@ -490,7 +521,8 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
        # True whenever the provider did not return usage.speed: a requested
        # fast speed is an inference, not a confirmed returned speed.
        'speed_inferred':rec.get('returned_speed') is None,
-       'speed_basis':speed_basis,'geo_assumption':geo is None and geo_possible,'endpoint_assumption':endpoint is None,
+       'speed_basis':speed_basis,'geo_assumption':bool(geo_basis) or (geo is None and geo_possible),
+       **({'geo_basis':geo_basis} if geo_basis else {}),'endpoint_assumption':endpoint is None,
        'basis':'API-equivalent estimate at Anthropic public list prices; not a subscription debit or provider-reported charge',
        'pricing_basis':'provider_catalog_estimate',
        'scope':'text tokens; excludes Batch/Priority Tier, tools, web search, runtime, tax and negotiated discounts'}

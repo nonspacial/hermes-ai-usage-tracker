@@ -314,18 +314,25 @@ def test_standard_fast_geo_and_tier_boundaries():
 @pytest.mark.parametrize('model', ['claude-opus-9-5', 'claude-opus-9', 'claude-sonnet-9', 'claude-haiku-4-5'])
 @pytest.mark.parametrize('extra', [{}, {'returned_speed': 'standard'}, {'returned_speed': 'fast'},
                                    {'anthropic_endpoint': 'first_party'}])
-def test_not_available_geo_prices_exactly_as_global(model, extra):
-    # Anthropic's Usage & Cost API documents 'not_available' for requests on
-    # which the inference_geo parameter does not apply; standard pricing applies.
+def test_not_available_geo_prices_at_global_rate_flagged_where_geo_is_possible(model, extra):
+    # Anthropic's Usage & Cost API documents 'not_available' for models that do
+    # not accept inference_geo (standard pricing, no assumption). On a model
+    # with a published US rate it is undocumented: global is assumed, flagged.
     s = snap()
     base = {'model': model, 'returned_usage_service_tier': 'standard', **extra}
     glob = select({**base, 'returned_inference_geo': 'global'}, s)
     na = select({**base, 'returned_inference_geo': 'not_available'}, s)
-    assert na == glob
+    strip = lambda r: {k: v for k, v in r.items() if k not in ('geo_assumption', 'geo_basis')}
     if glob is not None:
-        assert na['inference_geo'] == 'global' and na['geo_assumption'] is False
-        assert na != select({**base, 'returned_inference_geo': 'us'}, s) or model.startswith('claude-haiku')
+        assert strip(na) == strip(glob) and glob['geo_assumption'] is False and 'geo_basis' not in glob
+        assert na['inference_geo'] == 'global'
+        if model.startswith('claude-haiku'):  # pre-4.6: documented case, no assumption
+            assert na == glob and na['geo_assumption'] is False and 'geo_basis' not in na
+        else:  # 4.6+: workspace default geo could be 'us'
+            assert na['geo_assumption'] is True and na['geo_basis'] == p.ANTHROPIC_NOT_AVAILABLE_GEO_AS_GLOBAL
+            assert strip(na) != strip(select({**base, 'returned_inference_geo': 'us'}, s))
     else:  # e.g. fast on a model without a published fast rate: still unpriced
+        assert na is None
         assert model in ('claude-sonnet-9', 'claude-haiku-4-5') and extra.get('returned_speed') == 'fast'
 
 
@@ -333,12 +340,84 @@ def test_not_available_geo_standard_rate_values():
     na = select({'model': 'claude-opus-9-5', 'returned_inference_geo': 'not_available',
                  'returned_usage_service_tier': 'standard'})
     assert (na['service_tier'], na['inference_geo']) == ('standard', 'global')
+    assert na['geo_assumption'] is True and na['geo_basis'] == 'not_available_as_global'
     assert [Decimal(na[k]) for k in ('input_tokens', 'output_tokens', 'cache_read_tokens')] == [4, 20, Decimal('0.2')]
     # The sentinel for undocumented geo values is never priced, nor is a
     # near-miss spelling of the documented value.
     for geo in ('unrecognised', 'eu', 'Not_Available', 'not-available', ''):
         assert select({'model': 'claude-opus-9-5', 'returned_inference_geo': geo,
                        'returned_usage_service_tier': 'standard'}) is None, geo
+
+
+def retro(record, snapshot=None):
+    record = {'provider': 'anthropic', 'usage': {'prompt_tokens': 1000}, **record}
+    return p.select_rate(snapshot or snap(), record, 1, 200.0, retrospective=True)
+
+
+SENTINEL = {'returned_inference_geo': 'unrecognised', 'returned_usage_service_tier': 'standard'}
+
+
+@pytest.mark.parametrize('model', ['claude-opus-9-5', 'claude-opus-9', 'claude-sonnet-9', 'claude-haiku-4-5'])
+@pytest.mark.parametrize('extra', [{}, {'returned_speed': 'standard'}, {'anthropic_endpoint': 'first_party'},
+                                   {'service_tier': 'auto'}, {'requested_speed': 'standard'}])
+def test_unrecognised_geo_retrospectively_prices_as_global_with_flag(model, extra):
+    # (a) Pre-0d5ade4 rows stored documented 'not_available' as 'unrecognised'.
+    s = snap()
+    base = {'model': model, **extra}
+    na = retro({**base, **SENTINEL, 'returned_inference_geo': 'not_available'}, s)
+    got = retro({**base, **SENTINEL}, s)
+    assert got['inference_geo'] == 'global' and got['service_tier'] == 'standard'
+    assert got['geo_assumption'] is True and got['geo_basis'] == p.ANTHROPIC_UNRECOGNISED_GEO_AS_GLOBAL == 'unrecognised_as_global'
+    # Identical rate and every other flag; only the labelled geo assumption differs.
+    strip = lambda r: {k: v for k, v in r.items() if k not in ('geo_assumption', 'geo_basis')}
+    assert strip(got) == strip(na) and got['geo_basis'] != na.get('geo_basis')
+    got_cost, na_cost = a.costs(USAGE, got), a.costs(USAGE, na)
+    assert got_cost['complete'] is True and got_cost['total_usd'] is not None
+    assert {k: v for k, v in got_cost.items() if k != 'rate'} == {k: v for k, v in na_cost.items() if k != 'rate'}
+
+
+def test_unrecognised_geo_rule_is_bounded():
+    s = snap()
+    base = {'model': 'claude-opus-9-5', **SENTINEL}
+    assert retro(base, s) is not None
+    # Never a saved completion-time rate: the sentinel is unpriced at save.
+    assert select(base, s) is None
+    # (b) fast returned, or fast requested with no returned speed: unpriced.
+    assert retro({**base, 'returned_speed': 'fast'}, s) is None
+    assert retro({**base, 'requested_speed': 'fast'}, s) is None
+    assert retro({**base, 'service_tier': 'fast'}, s) is None
+    assert retro({**base, 'returned_speed': 'unrecognised'}, s) is None
+    # (c) Safe tier set is exactly {'standard'}: priority/batch/absent/sentinel stay unpriced.
+    for tier in ('priority', 'batch', 'unrecognised', None):
+        row = {**base, 'returned_usage_service_tier': tier}
+        if tier is None:
+            row.pop('returned_usage_service_tier')
+        assert retro(row, s) is None, tier
+    # Any recorded requested geo disqualifies (the recorder keeps none today).
+    assert retro({**base, 'requested_inference_geo': 'us'}, s) is None
+    # Only the literal sentinel; other undocumented spellings stay unpriced.
+    for geo in ('eu', 'Unrecognised', 'unrecognised ', ''):
+        assert retro({**base, 'returned_inference_geo': geo}, s) is None, geo
+    # Custom or unverified endpoints still never borrow first-party rates.
+    for endpoint in ('custom', 'unverified'):
+        assert retro({**base, 'anthropic_endpoint': endpoint}, s) is None
+    # Documented values carry no unrecognised geo_basis ('global'/'us' none at all).
+    for geo in ('global', 'us'):
+        assert 'geo_basis' not in retro({**base, 'returned_inference_geo': geo}, s)
+    assert retro({**base, 'returned_inference_geo': 'not_available'}, s)['geo_basis'] == 'not_available_as_global'
+
+
+@pytest.mark.parametrize('provider', ['openrouter', 'nous', 'openai-api', 'ollama-cloud'])
+def test_unrecognised_geo_rule_ignores_other_providers(provider):
+    # (d) The sentinel on another provider's row has no effect on its selection.
+    sid = p.PROVIDERS[provider]
+    other = p._snapshot(sid, [p.rate('m-1', 'standard', ['1', '2', '0.1', None])], 100.0, 'fixture_provider_catalog')
+    rec = {'provider': provider, 'model': 'm-1', 'usage': {'prompt_tokens': 10}}
+    plain = p.select_rate(other, rec, 1, 200.0, retrospective=True)
+    flagged = p.select_rate(other, {**rec, **SENTINEL}, 1, 200.0, retrospective=True)
+    assert plain == flagged and plain is not None and 'geo_basis' not in flagged and 'geo_assumption' not in flagged
+    # Nor can an Anthropic-shaped sentinel row on a router borrow direct rates.
+    assert p.select_rate(snap(), {**rec, 'model': 'claude-opus-9-5', **SENTINEL}, 1, 200.0, retrospective=True) is None
 
 
 def test_context_window_boundaries():
@@ -580,7 +659,7 @@ def test_retrospective_projection_parity_and_unchanged_bytes(tmp_path):
             assert [tuple(r) for r in c.execute('SELECT id,data FROM requests ORDER BY id').fetchall()] == before
 
 
-def test_not_available_geo_ledger_saved_and_retrospective_but_unrecognised_stays_unpriced(tmp_path):
+def test_not_available_geo_ledger_saved_and_retrospective_and_sentinel_estimated_at_read(tmp_path):
     s = Store(tmp_path)
     insert(s, catalog(), time.time()-10)
     now = time.time()-1
@@ -589,30 +668,59 @@ def test_not_available_geo_ledger_saved_and_retrospective_but_unrecognised_stays
     s.request(record('na', now, returned_inference_geo='not_available', **live), 'request_completed')
     s.request(record('sentinel', now, returned_inference_geo='unrecognised', **live), 'request_completed')
     rows = {r['id']: r for r in s.read()['requests']}
-    assert rows['na']['cost'] == rows['global']['cost'] and rows['na']['cost']['complete'] is True
+    nocost = lambda c: {k: v for k, v in c.items() if k != 'rate'}
+    assert nocost(rows['na']['cost']) == nocost(rows['global']['cost']) and rows['na']['cost']['complete'] is True
+    assert rows['na']['cost']['rate']['geo_basis'] == 'not_available_as_global'
+    assert rows['na']['cost']['rate']['geo_assumption'] is True and rows['global']['cost']['rate']['geo_assumption'] is False
     assert Decimal(rows['na']['cost']['total_usd']) == Decimal('0.039')
-    assert rows['sentinel']['cost']['rate'] is None and rows['sentinel']['cost']['total_usd'] is None
-    # The recorded field stays literal.
+    # A sentinel recorded with a catalogue present is saved unpriced at
+    # completion; the read-time estimate below never becomes a saved rate.
     with s.db() as c:
         data = {k: json.loads(v) for k, v in c.execute('SELECT id,data FROM requests')}
     assert data['na']['returned_inference_geo'] == 'not_available'
-    # Historical rows recorded without a catalogue: 'not_available' gains the
-    # labelled read-side estimate; the pre-fix sentinel cannot be recovered.
+    assert data['sentinel']['cost']['rate'] is None and data['sentinel']['returned_inference_geo'] == 'unrecognised'
+    # That is the live-ledger shape (catalogue present, saved unpriced): the
+    # read projection values it retrospectively at the global rate, flagged.
+    assert rows['sentinel']['cost']['rate']['geo_basis'] == 'unrecognised_as_global'
+    assert rows['sentinel']['cost']['components'] == rows['na']['cost']['components']
+    # Historical rows recorded without a catalogue (pre-0d5ade4 shape): both
+    # gain the labelled read-side estimate at the global rate; the sentinel is
+    # additionally flagged as a geo assumption. Stored bytes never change.
     old = time.time()-86400
     t = Store(tmp_path/'profiles'/'hist')
     with t.db() as c:
         c.execute("DELETE FROM provider_catalog WHERE source_id='anthropic'")
     for key, geo in (('na', 'not_available'), ('sentinel', 'unrecognised')):
         t.request(record(key, old, returned_inference_geo=geo, **live), 'request_completed')
+    t.request(record('sentinel-fast', old, returned_inference_geo='unrecognised', returned_speed='fast', **live),
+              'request_completed')
+    t.request(record('sentinel-priority', old, returned_inference_geo='unrecognised', anthropic_endpoint='first_party',
+                     returned_usage_service_tier='priority'), 'request_completed')
+    t.request(record('sentinel-router', old, provider='openrouter', returned_inference_geo='unrecognised',
+                     returned_usage_service_tier='standard'), 'request_completed')
     with t.db() as c:
         before = [tuple(r) for r in c.execute('SELECT id,data FROM requests ORDER BY id')]
+        events = c.execute('SELECT COUNT(*) FROM events').fetchone()[0]
     insert(t, catalog(), time.time()-5)
-    rows = {r['id']: r for r in t.read(start=old-10, end=time.time())['requests']}
+    d = t.read(start=old-10, end=time.time())
+    rows = {r['id']: r for r in d['requests']}
     assert rows['na']['cost']['rate']['retrospective'] is True
     assert Decimal(rows['na']['cost']['total_usd']) == Decimal('0.039')
-    assert 'supplemental_valuation' not in rows['sentinel'] and rows['sentinel']['cost']['rate'] is None
+    sent = rows['sentinel']
+    assert sent['supplemental_valuation']['inference_geo'] == 'global'
+    assert sent['cost']['rate']['retrospective'] is True and sent['cost']['rate']['inference_geo'] == 'global'
+    assert sent['cost']['rate']['geo_assumption'] is True and sent['cost']['rate']['geo_basis'] == 'unrecognised_as_global'
+    assert rows['na']['cost']['rate']['geo_basis'] == 'not_available_as_global' and rows['na']['cost']['rate']['geo_assumption'] is True
+    assert sent['cost']['components'] == rows['na']['cost']['components']
+    assert sent['cost']['total_usd'] == rows['na']['cost']['total_usd']
+    assert sent['stored_accounting']['cost']['rate'] is None
+    for key in ('sentinel-fast', 'sentinel-priority', 'sentinel-router'):
+        assert 'supplemental_valuation' not in rows[key] and rows[key]['cost']['rate'] is None, key
+    assert d['summary'] == summary(d['requests'])
+    assert d['summary']['supplemental_requests'] == 2
     with t.db() as c:
         assert [tuple(r) for r in c.execute('SELECT id,data FROM requests ORDER BY id')] == before
+        assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0] == events
 
 
 # --- Auxiliary capture path -------------------------------------------------------
