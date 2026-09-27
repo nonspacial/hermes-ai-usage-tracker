@@ -27,6 +27,19 @@ CREATE TABLE IF NOT EXISTS tests(id TEXT PRIMARY KEY, started REAL NOT NULL, end
 CREATE TABLE IF NOT EXISTS health(process TEXT PRIMARY KEY, updated REAL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS quota(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, data TEXT NOT NULL);
 '''
+# Pure read-cost indexes: no data semantics, so reads are identical with or
+# without them. Store() adds each one to new and existing ledgers on open (in
+# its own savepoint, so a legacy row an expression cannot index skips that
+# index instead of failing the open). Schema inventories treat each as
+# optional-but-exact: absent is admissible, any other definition is not.
+READ_INDEX_SQL={
+    'event_kind':'CREATE INDEX IF NOT EXISTS event_kind ON events(kind)',
+    # json_valid guards keep writes from ever failing on this index.
+    'request_project_options':'CREATE INDEX IF NOT EXISTS request_project_options ON requests('+','.join(
+        "CASE WHEN json_valid(data) THEN "+expr+" END" for expr in (
+            "COALESCE(json_extract(data,'$.project_id'),'unattributed')", "json_extract(data,'$.project_label')",
+            "json_extract(data,'$.project_path')", "json_extract(data,'$.project_source')"))+')',
+}
 
 def home():
     try:
@@ -73,6 +86,15 @@ class Store:
                             statement=''
                     if statement.strip():
                         raise ValueError('Incomplete ledger schema statement.')
+                    for sql in READ_INDEX_SQL.values():
+                        c.execute('SAVEPOINT read_index')
+                        try:
+                            c.execute(sql)
+                        except sqlite3.OperationalError as exc:
+                            if 'locked' in str(exc).lower() or 'busy' in str(exc).lower():
+                                raise
+                            c.execute('ROLLBACK TO read_index')
+                        c.execute('RELEASE read_index')
                     if fresh:
                         from .incremental import install
                         install(c)
@@ -242,7 +264,7 @@ class Store:
             revision = watermark(c) if view is not None else None
             legacy_read_view(c,where,params)
             from .session_cache_writes import project as project_session_writes
-            project_session_writes(c,where,params,end)
+            projected_costs=project_session_writes(c,where,params,end)
             from .session_cache_writes import materialise_summary
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)
@@ -338,9 +360,19 @@ class Store:
                 # Decimal(28) legacy sums can round. Group reassociation is
                 # safe only when every partial sum fits in that context.
                 from .incremental import safe_cost
-                precise=(total['attempts']<=100000 and all(
-                    safe_cost(json.loads(r[0])) for r in
-                    c.execute('SELECT data FROM requests WHERE '+where,params)))
+                precise=False
+                if total['attempts']<=100000:
+                    # Reuse the projection's decoded costs (same rows, same
+                    # values). Any raising row makes the outcome depend on scan
+                    # order, so that case re-runs the original ordered check;
+                    # so does any row-set difference from the original query.
+                    precise=cost_admission(projected_costs,safe_cost)
+                    if precise is not None and set(projected_costs)!={r[0] for r in
+                            c.execute('SELECT id FROM requests WHERE '+where,params)}:
+                        precise=None
+                    if precise is None:
+                        precise=all(safe_cost(json.loads(r[0])) for r in
+                                    c.execute('SELECT data FROM requests WHERE '+where,params))
             if _delta_seed and precise:
                 step=trend['seconds']
                 # Same projected SQL and read transaction as public totals.
@@ -410,7 +442,9 @@ class Store:
             # once even if it is older than the bounded list.
             if _selected_test is not None and not any(t['id']==_selected_test['id'] for t in tests):
                 tests.append(_selected_test)
-            providers=[r[0] for r in c.execute('SELECT DISTINCT provider FROM requests ORDER BY provider')]
+            # temp.requests is main.requests LEFT JOIN a PK-keyed projection with
+            # r.provider, so the covering request_provider index gives the same list.
+            providers=[r[0] for r in c.execute('SELECT DISTINCT provider FROM main.requests ORDER BY provider')]
             seq=c.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
             quota=[dict(ts=r['ts'],**json.loads(r['data'])) for r in c.execute('SELECT ts,data FROM quota WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 200',(start,end))] if include('quota_observations') else None
             crossing_end=c.execute('SELECT COUNT(*) FROM requests WHERE '+where+' AND (ended IS NULL OR ended>=?)',params+[end]).fetchone()[0] if include('crossing_end') else None
@@ -652,8 +686,53 @@ def attribution_groups(c,where,params,summary_sql=SUMMARY_SQL,*,fields=None,page
         source_where,source_params=(selected[1],selected[2]) if selected is not None and name==selected[0] else (where,params)
         rows=c.execute('SELECT '+expr+' AS key'+more+extra+',MAX(started) AS latest_started,'+summary_sql+' FROM requests WHERE '+source_where+condition+' GROUP BY '+expr+' ORDER BY latest_started DESC,key'+(' LIMIT ? OFFSET ?' if bounded else ''),source_params+list(bounded) if bounded else source_params)
         out[name]=[dict(**{k:r[k] for k in r.keys() if k in ('key','label','path','basis','project_label','session_id','parent_session_id','root_session_id','agent_role','subagent_tokens','subagents','latest_started')},**summary_from_sql(r)) for r in rows]
-    out['project_options']=[dict(id=r[0],label=r[1] or 'Unattributed project',path=r[2],basis=r[3]) for r in c.execute('SELECT '+project+",MAX(json_extract(data,'$.project_label')),MAX(json_extract(data,'$.project_path')),MAX(json_extract(data,'$.project_source')) FROM requests GROUP BY "+project)]
+    out['project_options']=project_options(c)
     return out
+
+
+def project_options(c):
+    """All-time project filter options (never window- or filter-scoped).
+
+    The json_valid-guarded expressions match request_project_options, so an
+    indexed ledger answers from main.requests without decoding every payload
+    (an unindexed one scans as before). The original query read the TEMP
+    ``requests`` view; its window-bounded projected rows are checked to carry
+    the same project fields as main.requests. A NULL guarded key (a row
+    json_valid rejects) or any projected difference/error runs the original
+    unguarded query, preserving its exact result or error.
+    """
+    project="COALESCE(json_extract(data,'$.project_id'),'unattributed')"
+    fields=(project,"json_extract(data,'$.project_label')","json_extract(data,'$.project_path')","json_extract(data,'$.project_source')")
+    guarded=["CASE WHEN json_valid(data) THEN "+expr+" END" for expr in fields]
+    exact=True
+    try:
+        for table in ('session_write_projection','usage_legacy_projection'):
+            if exact and c.execute("SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name=?",(table,)).fetchone():
+                exact=not c.execute('SELECT 1 FROM temp.'+table+' p JOIN main.requests r ON r.id=p.id WHERE NOT ('+
+                                    ' AND '.join(expr.replace('data','p.data')+' IS '+expr.replace('data','r.data') for expr in fields)+
+                                    ') LIMIT 1').fetchone()
+    except sqlite3.Error:
+        exact=False
+    rows=c.execute('SELECT '+guarded[0]+' AS key,'+','.join('MAX('+expr+')' for expr in guarded[1:])+
+                   ' FROM main.requests GROUP BY '+guarded[0]+' ORDER BY key').fetchall() if exact else None
+    if rows is None or any(r[0] is None for r in rows):
+        rows=c.execute('SELECT '+project+' AS key,'+','.join('MAX('+expr+')' for expr in fields[1:])+
+                       ' FROM requests GROUP BY '+project+' ORDER BY key').fetchall()
+    return [dict(id=r[0],label=r[1] or 'Unattributed project',path=r[2],basis=r[3]) for r in rows]
+
+
+def cost_admission(projected_costs,safe_cost):
+    """safe_cost over already-decoded projected costs, without re-decoding rows.
+
+    safe_cost reads only record['cost']. Returns the same boolean as the
+    ordered all() scan when no value raises; None when any value raises, since
+    the original outcome (False versus the exception) then depends on order.
+    """
+    results=[]
+    for cost in projected_costs.values():
+        try:results.append(safe_cost({'cost':cost}))
+        except Exception:return None
+    return all(results)
 
 
 def sql_applied_rate_groups(c,where,params,summary_sql=SUMMARY_SQL,*,page=None):

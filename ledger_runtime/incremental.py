@@ -122,6 +122,19 @@ def _triggers():
 
 TRIGGERS = _triggers()
 
+# Pure read-cost indexes (storage.READ_INDEX_SQL). Store creates them on open,
+# including for existing ledgers; one may be absent (not yet reopened, or a
+# legacy row it cannot index), but a present one must match exactly.
+@lru_cache(maxsize=1)
+def read_index_schema():
+    from .storage import SCHEMA, READ_INDEX_SQL
+    with sqlite3.connect(':memory:') as connection:
+        connection.executescript(SCHEMA)
+        for sql in READ_INDEX_SQL.values():
+            connection.execute(sql)
+        return {name: connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?",
+                                         (name,)).fetchone()[0] for name in READ_INDEX_SQL}
+
 @lru_cache(maxsize=1)
 def _source_schema():
     from .storage import SCHEMA
@@ -163,6 +176,10 @@ def supported(connection: sqlite3.Connection) -> bool:
             "SELECT type,name,sql FROM sqlite_master "
             "WHERE type IN ('table','index','trigger') AND name NOT LIKE 'sqlite_%'")}
         expected = dict(_source_schema())
+        # Optional-but-exact read-cost indexes; see read_index_schema().
+        for name, sql in read_index_schema().items():
+            if ('index', name) in actual:
+                expected[('index', name)] = sql
         expected.update({('table', 'analytics_changes'): CHANGES_SQL,
                          ('table', 'analytics_change_meta'): META_SQL})
         expected.update({('trigger', name): sql for name, sql in TRIGGERS.items()})

@@ -11,6 +11,8 @@ def intervals(connection):
     active = {}  # session -> (timestamp, identity, starts since last stop)
     matched = []
     unmatched = 0
+    # Pairing and the unmatched count span all lifecycle history, so this scan
+    # is not window-bounded; the event_kind index limits it to lifecycle rows.
     for row in connection.execute("SELECT ts,kind,item_id,data FROM events WHERE kind IN ('subagent_start','subagent_stop') ORDER BY seq"):
         sid = row['item_id']
         if not sid:
@@ -42,7 +44,13 @@ def apply(connection, report, where, params, *, scoped_filter=False):
     """
     matched, unmatched, seen = intervals(connection)
     evidence = {}
-    for row in connection.execute('SELECT session_id,provider,model,data FROM requests WHERE '+where,params):
+    # Same query/plan and row order as before. A payload whose decoded
+    # agent_kind is "subagent" must contain that literal JSON string unless it
+    # uses an escape, so other payloads are skipped without a Python decode.
+    for row in connection.execute("SELECT session_id,provider,model,CASE WHEN instr(data,'\"subagent\"')>0 "
+                                  "OR instr(data,'\\')>0 THEN data END AS data FROM requests WHERE "+where,params):
+        if row['data'] is None:
+            continue
         record = json.loads(row['data'])
         if record.get('agent_kind') != 'subagent':
             continue

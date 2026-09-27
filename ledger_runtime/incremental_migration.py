@@ -43,9 +43,15 @@ def _known_schema(connection: sqlite3.Connection) -> None:
     if connection.execute('PRAGMA user_version').fetchone()[0] != 0:
         raise ValueError('Unknown ledger schema version; future migration needs explicit approval.')
     from .skills import SCHEMA as SKILLS_SCHEMA
+    from .incremental import read_index_schema
     with closing(sqlite3.connect(':memory:')) as expected:
         expected.executescript(SCHEMA + SKILLS_SCHEMA)
-        if _schema(connection) != _schema(expected):
+        actual, canonical = _schema(connection), _schema(expected)
+        # Read-cost indexes are optional-but-exact (absent, or the exact DDL).
+        for name, sql in read_index_schema().items():
+            if name in actual:
+                canonical[name] = sql
+        if actual != canonical:
             raise ValueError('Incompatible ledger schema, columns, constraints or indexes.')
     if connection.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
         raise ValueError('Ledger integrity check failed.')

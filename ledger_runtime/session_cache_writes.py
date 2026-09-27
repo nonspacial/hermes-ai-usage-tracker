@@ -95,22 +95,69 @@ def add_summary(summary, row):
         summary['compared_requests'] += 1
 
 
+# Read only numeric counters/routing identity needed by the calculation. This
+# uses the original stored read count, including legacy normalized readings.
+# The displayed measure is explicitly calculated, not raw usage.
+_SEQUENCE_FIELDS = ('response_model', 'api_mode', 'account_id', 'subagent_id', 'source')
+_SEQUENCE_SQL = ("SELECT id,session_id,started,provider,model,task,status," +
+                 ','.join("json_extract(data,'$."+k+"') AS "+k for k in _SEQUENCE_FIELDS) +
+                 ",json_extract(data,'$.usage.cache_read_tokens') AS reads,"
+                 "json_extract(data,'$.usage.cache_write_tokens') AS writes,"
+                 "json_extract(data,'$.usage.request_count') AS request_count "
+                 "FROM main.requests WHERE session_id=? AND ")
+
+
+def _sequence_row(r):
+    d = dict(r)
+    d['usage'] = dict(cache_read_tokens=d.pop('reads'), cache_write_tokens=d.pop('writes'),
+                      request_count=d.pop('request_count') or 1)
+    return d
+
+
 def _sequence_rows(c, sid, end):
-    # Read only numeric counters/routing identity needed by the calculation.
-    # This uses the original stored read count, including legacy normalized
-    # readings. The displayed measure is explicitly calculated, not raw usage.
-    fields = ('response_model', 'api_mode', 'account_id', 'subagent_id', 'source')
-    extra = ','.join("json_extract(data,'$."+k+"') AS "+k for k in fields)
-    sql = ("SELECT id,session_id,started,provider,model,task,status,"+extra+
-           ",json_extract(data,'$.usage.cache_read_tokens') AS reads,"
-           "json_extract(data,'$.usage.cache_write_tokens') AS writes,"
-           "json_extract(data,'$.usage.request_count') AS request_count "
-           "FROM main.requests WHERE session_id=? AND started<? ORDER BY started,id")
-    for r in c.execute(sql, (sid, end)):
-        d = dict(r)
-        d['usage'] = dict(cache_read_tokens=d.pop('reads'), cache_write_tokens=d.pop('writes'),
-                          request_count=d.pop('request_count') or 1)
-        yield d
+    """Complete session replay from ledger start (reference; not the read path)."""
+    for r in c.execute(_SEQUENCE_SQL + 'started<? ORDER BY started,id', (sid, end)):
+        yield _sequence_row(r)
+
+
+def session_observations(c, sid, ids, lo, end):
+    """Observations for ``ids`` equal to a full replay of ``sid`` before ``end``.
+
+    ``lo`` is the earliest selected start in this session. Every session row in
+    [lo,end) is replayed (filters never hide an adjacent observation). Earlier
+    history matters only as each selected stream's last completed (non-pending)
+    row, so it is walked newest-first over the (session_id,started) index and
+    stops once every selected stream has one. A stream with no earlier
+    completed row walks back to its session's first row; cost is bounded by
+    that session, never by the rest of the ledger. Ordering is the exact reverse
+    of the replay's (started,id), so ties resolve identically.
+    """
+    window = [_sequence_row(r) for r in
+              c.execute(_SEQUENCE_SQL + 'started>=? AND started<? ORDER BY started,id', (sid, lo, end))]
+    needed = {stream_key(r) for r in window if r['id'] in ids}
+    previous = {}
+    if needed:
+        cursor = c.execute(_SEQUENCE_SQL + 'started<? ORDER BY started DESC,id DESC', (sid, lo))
+        try:
+            for r in cursor:
+                d = _sequence_row(r)
+                key = stream_key(d)
+                # Pending status never depends on the predecessor.
+                if key in needed and key not in previous and observation(d)['status'] != 'pending':
+                    previous[key] = d
+                    if len(previous) == len(needed):
+                        break
+        finally:
+            cursor.close()
+    changes = {}
+    for r in window:
+        key = stream_key(r)
+        result = observation(r, previous.get(key))
+        if r['id'] in ids:
+            changes[r['id']] = result
+        if result['status'] != 'pending':
+            previous[key] = r
+    return changes
 
 
 def materialise_summary(c, sql):
@@ -161,31 +208,32 @@ def project(c, where, params, end):
     Calculations see predecessor reads before the selected date range and all
     adjacent session observations irrespective of project/agent/page filters.
     SQL summary/grouping functions then consume the same projected values.
+    Predecessor history is bounded per selected stream (session_observations).
+
+    Returns {id: projected cost value} for every selected row, i.e. exactly
+    what json.loads(requests.data).get('cost') yields afterwards, so callers
+    can inspect projected costs without decoding each payload again.
     """
-    selected = c.execute('SELECT id,session_id FROM requests WHERE '+where, params).fetchall()
+    selected = c.execute('SELECT id,session_id,started FROM requests WHERE '+where, params).fetchall()
     if not selected:
-        return
+        return {}
     selected_by_session = defaultdict(set)
+    earliest = {}
     for r in selected:
         selected_by_session[r['session_id']].add(r['id'])
+        if r['session_id'] not in earliest or r['started'] < earliest[r['session_id']]:
+            earliest[r['session_id']] = r['started']
     changes = {}
     for sid, ids in selected_by_session.items():
         if sid:
-            # The iterator streams history. Only the selected detail is retained.
-            previous = {}
-            for r in _sequence_rows(c, sid, end):
-                key = stream_key(r)
-                result = observation(r, previous.get(key))
-                if r['id'] in ids:
-                    changes[r['id']] = result
-                if result['status'] != 'pending':
-                    previous[key] = r
+            changes.update(session_observations(c, sid, ids, earliest[sid], end))
     # The selected set is already bounded by the query, not the page. One
     # provider catalog per read snapshot serves all its eligible rows; no
     # network and no per-request catalog query or durable ledger mutation.
     from .pricing import PROVIDERS, select_rate
     from .accounting import costs
     catalogs = {}
+    projected_costs = {}
     c.execute('CREATE TEMP TABLE session_write_projection(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
     for r in c.execute('SELECT id,data FROM requests WHERE '+where, params):
         data = json.loads(r['data'])
@@ -218,6 +266,8 @@ def project(c, where, params, end):
                     'source_url': rate['source_url'], 'content_sha256': rate['content_sha256']}
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',
                   (r['id'], json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))
+        # JSON round-trips str/int/float/bool/None/list/dict exactly.
+        projected_costs[r['id']] = data.get('cost')
     # Selected rows already include any legacy usage projection. Unselected rows
     # use main.requests exactly; future Store.read connections rebuild the view.
     c.execute('DROP VIEW IF EXISTS temp.requests')
@@ -225,3 +275,4 @@ def project(c, where, params, end):
         SELECT r.id,r.started,r.ended,r.provider,r.model,r.session_id,r.task,r.compression_id,r.status,
                COALESCE(p.data,r.data) AS data
         FROM main.requests r LEFT JOIN session_write_projection p ON p.id=r.id''')
+    return projected_costs
