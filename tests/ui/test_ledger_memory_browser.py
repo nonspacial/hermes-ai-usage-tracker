@@ -9,6 +9,12 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def custom_bounds(page):
+    """The Custom start/end inputs live in the closed Custom range disclosure."""
+    page.evaluate("document.querySelectorAll('.au-custom-range').forEach(d=>{d.open=true})")
+    return page
+
+
 def freshness(page):
     page.get_by_test_id('connection-status').hover()
     return page.get_by_test_id('ledger-freshness')
@@ -39,8 +45,8 @@ def completed_selection_regressions(browser):
     page.get_by_role('tab', name='All providers', exact=True).click()
     expect(freshness(page)).to_be_visible()
     period.get_by_role('button', name='Custom', exact=True).click()
-    page.get_by_label('Window start').fill('2026-09-24T00:00')
-    page.get_by_label('Window end').fill('2026-09-25T00:00')
+    custom_bounds(page).get_by_label('Window start').fill('2026-09-24T00:00')
+    custom_bounds(page).get_by_label('Window end').fill('2026-09-25T00:00')
     expect(freshness(page)).to_be_visible()
     # Mutate the opaque hint while the first Custom GET is held, before the
     # post-read check. The completed response still belongs to these dates.
@@ -81,7 +87,7 @@ def completed_selection_regressions(browser):
     assert page.evaluate('([key,prior])=>ledgerMemory.get(key).received>=prior',
                          [custom_key, prior_received])
     # Another fixed Custom date is a cold selection, not the old date's body.
-    page.get_by_label('Window end').fill('2026-09-26T00:00')
+    custom_bounds(page).get_by_label('Window end').fill('2026-09-26T00:00')
     page.wait_for_function('''()=>held.some(r=>new URLSearchParams(r.path.split('?')[1]).get('end')
       ===String(new Date('2026-09-26T00:00').getTime()/1000))''')
     expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Requests')
@@ -326,13 +332,24 @@ def run():
         page.wait_for_function('held.length===1')
         page.evaluate('held.shift().deliver()')
         expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
+        # An out-of-band reload during a live view: background notify reads
+        # reuse the verified revision, so the displayed body stays (Updating)
+        # until the response itself reports the new revision. One cheap
+        # analytics-info check confirms it; no second full read is issued and
+        # the response is admitted under the confirmed revision.
         page.evaluate('''()=>{window.demoAnalyticsRevision='newer-generation';window.demoChange++;
+          window.infoBefore=demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length;
           for(const fn of demoSubscribers)fn({type:'changed',mode:'native-events'})}''')
         page.wait_for_function('held.length===1')
-        expect(page.get_by_test_id('ledger-view-pending')).to_contain_text('Overview')
-        expect(page.locator('.au-breakdown tbody tr')).to_have_count(0)
+        expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
+        expect(freshness(page)).to_contain_text('Updating')
+        assert page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length-infoBefore") == 0
         page.evaluate('held.shift().deliver()')
         expect(page.locator('.au-breakdown tbody tr').first).to_be_visible()
+        page.wait_for_function("()=>[...ledgerMemory.values()].some(e=>e.revision==='newer-generation')")
+        assert page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger/analytics?')).length-infoBefore") == 1
+        page.wait_for_timeout(700)
+        assert page.evaluate('held.length') == 0
         # Pane unmount keeps module RAM; full plugin disposal revokes it and
         # outstanding reads cannot repopulate the discarded generation.
         page.evaluate("ReactDOM.unmountComponentAtNode(document.getElementById('root'))")

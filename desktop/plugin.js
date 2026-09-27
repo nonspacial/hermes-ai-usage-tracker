@@ -80,10 +80,10 @@ const provenance = row => row?.profile ? ' · '+row.profile : ''
 const readable = (row,key) => String(originalId(row,key) ?? '—')+provenance(row)
 const AGGREGATE_QUERY_OPTIONS = {retry:false,refetchInterval:60000,refetchIntervalInBackground:false,refetchOnWindowFocus:false,refetchOnReconnect:false}
 function readOptions(scope){return isAllProfiles(scope)?AGGREGATE_QUERY_OPTIONS:CONNECTION_QUERY_OPTIONS}
-function rollingPath(path,seconds){
+function rollingPath(path,seconds,at=Date.now()/1000){
  if(!seconds)return path;
  const [route,search]=path.split('?'),p=new URLSearchParams(search);
- p.set('start',String(Math.max(0,Date.now()/1000-seconds)));return route+'?'+p;
+ p.set('start',String(Math.max(0,at-seconds)));return route+'?'+p;
 }
 function Coverage({data}){
  const c=data?.coverage;if(data?.profile_scope!=='all'||!c)return null;
@@ -2011,7 +2011,54 @@ const LEDGER_CACHE_LIMIT=8*1024*1024, LEDGER_ENTRY_LIMIT=2*1024*1024;
 const LEDGER_CACHE_TTL=5*60*1000, LEDGER_CACHE_COUNT=12;
 const ledgerMemory=new Map();
 let ledgerMemoryBytes=0, ledgerMemoryGeneration=0, ledgerMemoryConnection=null, pluginRegistered=false;
-function clearLedgerMemory(){ledgerMemory.clear();ledgerMemoryBytes=0;ledgerMemoryGeneration++}
+// Backend analytics revision per connection/scope. Reused by background reads
+// until a response reports a different revision; a renderer-cache replay
+// always re-verifies it first. Cleared with the renderer cache.
+const analyticsInfoMemory=new Map();
+// Upper bound between full reads of a live view, rolling or fixed, when
+// neither the change hint nor the rolling edge requires one sooner.
+const LEDGER_RECONCILE_MS=300000;
+function clearLedgerMemory(){ledgerMemory.clear();ledgerMemoryBytes=0;ledgerMemoryGeneration++;analyticsInfoMemory.clear()}
+// Notify hint debounce (also the trailing read after a hinted flight), the
+// reuse window for a coordinator-observed pre-read change token, and the age
+// below which a full read's own rolling start already satisfies an expiry.
+const LEDGER_HINT_DEBOUNCE_MS=150, LEDGER_CHECK_REUSE_MS=2000, ROLLING_RECENT_MS=30000;
+// True when re-reading a rolling window whose start/end have advanced to
+// `wallMs`, with an unchanged certified change hint, cannot change any
+// displayed number: neither edge crosses a trend-bucket boundary (same bucket
+// layout and resolution); the leading bucket, which holds everything the
+// moving start drops, has zero attempts and no observed subagent lifetime;
+// and no request is owner-live (liveness can end without a ledger write).
+// Unknown shapes are never stable. The Compressions view always reads; a
+// compression count change with no request in that leading bucket is the
+// one effect not visible here, bounded by LEDGER_RECONCILE_MS.
+function rollingEdgeStable(data,windowSeconds,wallMs){
+ const window=data?.window,trend=data?.trend,step=trend?.seconds,buckets=trend?.buckets;
+ if(!windowSeconds||!isObject(window)||!Number.isFinite(window.start)||!Number.isFinite(window.end)||
+    !Number.isFinite(step)||step<=0||!Array.isArray(buckets)||!buckets.length||
+    !isObject(data.summary)||data.summary.pending!==0)return false;
+ const start=Math.max(0,wallMs/1000-windowSeconds),end=window.end+start-window.start,first=buckets[0];
+ const peak=first?.peak_observed;
+ return start>=window.start&&
+  Math.floor(start/step)===Math.floor(window.start/step)&&
+  Math.ceil(end/step)===Math.ceil(window.end/step)&&
+  isObject(first)&&first.start===window.start&&first.attempts===0&&
+  isObject(peak)&&(peak.value===null||peak.value===0);
+}
+// Advance only the factual edges of a stable rolling response: the window
+// and the trend/time-row edges equal to it. Totals, rows, generation, seq and
+// received age are untouched; no accounting is derived client-side.
+function shiftRollingWindow(data,windowSeconds,wallMs){
+ if(!rollingEdgeStable(data,windowSeconds,wallMs))return null;
+ const from=data.window,start=Math.max(0,wallMs/1000-windowSeconds),end=from.end+start-from.start;
+ const edge=row=>{
+  if(!isObject(row)||row.start!==from.start&&row.end!==from.end)return row;
+  return {...row,...row.start===from.start?{start}:{},...row.end===from.end?{end}:{}};
+ };
+ const shifted={...data,window:{...from,start,end},trend:{...data.trend,buckets:data.trend.buckets.map(edge)}};
+ if(Array.isArray(data.list_rows))shifted.list_rows=data.list_rows.map(edge);
+ return shifted;
+}
 function ledgerMemoryKey(connection,profile,path,windowSeconds){
  const [route,query]=path.split('?'),p=new URLSearchParams(query);
  // Rolling starts are sampled for every read. Revisit only the same *period*
@@ -2258,8 +2305,16 @@ let liveLedgerOwnerId=0;
 // The token is a filesystem hint, not a database revision. Only a full REST
 // response publishes accounting; a hint never modifies totals or event rows.
 function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis,connection=null}){
-  let alive=true,active=false,dirty=false,manual=false,manualForNext=false,token=null,checking=false;
+  let alive=true,active=false,dirty=false,manual=false,manualForNext=false,token=null;
   let unsupported=false,failures=0,checkFailures=0,followup=null,retry=null;
+  // checkFlight: the single in-flight change-token probe. lastCheck: its last
+  // result, reusable only as a pre-read check with no external hint since.
+  let checkFlight=null,lastCheck=null,hintSerial=0;
+  // Last published response (full read or locally shifted rolling edges) and
+  // the coordinator-clock start of the last full read.
+  // shownToken: change hint certified (identical before and after) by the
+  // read that produced lastShown, else null.
+  let lastShown=null,lastReadStarted=null,shownToken=null;
   const now=()=>clock.now?.()??Date.now();
   let lastFallback=now();
   // A disposed coordinator never donates its unresolved response to a new
@@ -2283,9 +2338,26 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
  const current=()=>alive&&memoryGeneration===ledgerMemoryGeneration&&
   (connection===null||ledgerMemoryConnection===connection);
  const clear=()=>{clock.clearTimeout(followup);clock.clearTimeout(retry);followup=retry=null};
- const check=async()=>{
-  if(!current()||unsupported||checking)return null;
-  checking=true;
+ const check=async(fresh=false)=>{
+  // Concurrent callers share one in-flight probe. A `fresh` caller (the
+  // post-read check) must observe the hint after its read, so it never joins
+  // a probe that began while that read was still running.
+  while(checkFlight){
+   const pending=checkFlight;
+   if(!fresh)return pending;
+   await pending;
+  }
+  if(!current()||unsupported)return null;
+  const flight=probe();checkFlight=flight;
+  try{return await flight}finally{if(checkFlight===flight)checkFlight=null}
+ };
+ // A just-observed hint (poll, expiry or previous post-read check) was seen
+ // before the next read starts, so it can stand in for that read's pre-read
+ // check. An older one is refetched.
+ const recentCheck=()=>lastCheck&&lastCheck.serial===hintSerial&&
+  now()-lastCheck.at<=LEDGER_CHECK_REUSE_MS?lastCheck.result:null;
+ const probe=async()=>{
+  const serial=hintSerial;
   try{
    const result=await rest(tokenPath,{timeoutMs:8000});
    if(!current())return null;
@@ -2293,6 +2365,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
       result?.token_kind!=='opaque-filesystem-hint'||typeof result?.change_token!=='string'||
       result?.capabilities?.change_check!==true)throw new Error('Unsupported change-check response');
    if(checkFailures){checkFailures=0;publish({checkLimited:false})}
+   lastCheck={result,at:now(),serial};
    return result;
   }catch(error){
    if(current()){
@@ -2301,7 +2374,20 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
     if(unsupported||checkFailures>=3)publish({checkLimited:true});
    }
    return null;
-  }finally{checking=false}
+  }
+ };
+ // Revision per connection/scope; see analyticsInfoMemory.
+ const infoKey=JSON.stringify([connection,host.state.profile?.get?.()||'',scope,isAllProfiles(profile)?'':profile||'']);
+ const fetchRevision=async()=>{
+  try{
+   const info=await rest('/ledger/analytics?'+new URLSearchParams(isAllProfiles(profile)?
+    {profile_scope:'all'}:{profile_scope:'selected',profile:profile||''}),{timeoutMs:8000});
+   if(typeof info?.revision==='string'&&info.revision){
+    if(current())analyticsInfoMemory.set(infoKey,info.revision);
+    return info.revision;
+   }
+  }catch(_){/* no cache without a verified revision; full read still works */}
+  return null;
  };
  const schedule=(delay)=>{
   if(!alive||active||followup)return;
@@ -2315,18 +2401,19 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   let before=null,after=null,failed=false,revision=null;
   try{
    // A hint is a cheap inventory/change check, never a revision or proof that
-   // an aged result is current. Fail closed for cache eligibility.
-   before=await check();
+   // an aged result is current. Fail closed for cache eligibility. Any token
+   // observed before this read starts can certify it against the post-read
+   // token; a stale one only costs a follow-up, so reuse only a fresh one.
+   before=recentCheck()||await check();
    if(!current())return;
    const beforeInventory=ledgerInventoryKey(before,profile);
    // Validate the backend generation before showing any prior response. The
    // filesystem hint does not authenticate this cache or its accounting.
+   // First (possibly cached) paint always refetches it; later background
+   // reads reuse the connection's verified revision until a response, failure,
+   // manual Refresh or analytics reload disagrees.
    if(memoryKey&&memoryGeneration===ledgerMemoryGeneration){
-    try{
-     const info=await rest('/ledger/analytics?'+new URLSearchParams(isAllProfiles(profile)?
-      {profile_scope:'all'}:{profile_scope:'selected',profile:profile||''}),{timeoutMs:8000});
-     if(typeof info?.revision==='string'&&info.revision)revision=info.revision;
-    }catch(_){/* no cache without a verified revision; full read still works */}
+    revision=(loaded&&analyticsInfoMemory.get(infoKey))||await fetchRevision();
     if(!current())return;
     const identityValid=!!(revision&&beforeInventory);
     publish({identityValid});
@@ -2351,6 +2438,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    }
    loaded=true;
    const readPath=rollingPath(path,windowSeconds);
+   lastReadStarted=now();
    const entry=memoryKey&&ledgerMemory.get(memoryKey);
    if(!entry||entry.received!==baseline?.received||now()-entry.received>LEDGER_CACHE_TTL||
       entry.revision!==revision||entry.inventory!==beforeInventory||
@@ -2383,13 +2471,21 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
        !validRecordPage(response,new URLSearchParams(readPath.split('?')[1])))
      throw new Error('Backend record paging unavailable or incomplete; update analytics code before using this view.');
    }
-   after=await check();
+   after=await check(true);
    if(!current())return;
    if(before!==null&&after!==null&&before.change_token!==after.change_token)dirty=true;
    // A token observed only after the read cannot certify this response.
    if(before!==null&&after?.change_token===before.change_token)token=after.change_token;
    const received=now();
-   if(revision&&response?.analytics_revision&&response.analytics_revision!==revision)dirty=true;
+   if(revision&&response?.analytics_revision&&response.analytics_revision!==revision){
+    // The cached revision may be stale (reload elsewhere). Re-verify once
+    // cheaply; only a still-disagreeing backend needs another full read.
+    analyticsInfoMemory.delete(infoKey);
+    const verified=await fetchRevision();
+    if(!current())return;
+    if(verified&&verified===response.analytics_revision)revision=verified;
+    else dirty=true;
+   }
    lastRevision=response?.analytics_revision||null;
    lastInventory=beforeInventory;
    // The post-read hint may differ: that schedules a follow-up, not a veto
@@ -2398,11 +2494,14 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
       beforeInventory===ledgerInventoryKey(after,profile)&&
       rememberLedger(memoryKey,response,revision,beforeInventory,received,memoryGeneration));
    baseline=canResume&&admitted?resumeBaseline(response,received):null;
+   lastShown=response;
+   shownToken=before!==null&&after?.change_token===before.change_token?after.change_token:null;
    publish({data:response,error:null,received,cached:false,invalidated:false,fetching:false,manual});
    failures=0;
   }catch(error){
    if(!current())return;
    failed=true;failures++;
+   analyticsInfoMemory.delete(infoKey);
    publish({error,fetching:false,manual:manualForNext});
   }finally{
    active=false;
@@ -2415,13 +2514,37 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    if(dirty){
     // Release the shared flight before starting a fresh read. Bursts collapse
     // into one follow-up, including a hint delivered during the post-read check.
-    schedule(manual?0:failed?Math.min(30000,5000*failures):400);
+    schedule(manual?0:failed?Math.min(30000,5000*failures):LEDGER_HINT_DEBOUNCE_MS);
    }else if(failed){
     retry=clock.setTimeout(()=>{retry=null;start()},Math.min(30000,5000*failures));
    }
    }
   }
-  function hint(){if(!alive)return;if(active){dirty=true;return}schedule(150)}
+  // Recorder notify, marker and reconnect hints: the real-time path. A hint
+  // during a flight marks one trailing read; a hint while one is queued joins
+  // it. Neither waits longer than the short debounce.
+  function hint(){if(!alive)return;hintSerial++;queue()}
+  // A change the coordinator observed itself: that probe may still serve as
+  // the next read's pre-read check.
+  function queue(){if(!alive)return;if(active){dirty=true;return}schedule(LEDGER_HINT_DEBOUNCE_MS)}
+  // Rolling-window expiry. Its read is skipped only when the change hint
+  // still equals the one certified by the displayed response and moving the
+  // window's edges cannot alter that response (rollingEdgeStable); then only
+  // the window edges advance locally. A read in flight, queued or awaiting
+  // retry, or one started within ROLLING_RECENT_MS, already covers expiry.
+  async function expire(){
+   if(!current()||!windowSeconds||active||followup||retry)return;
+   if(lastReadStarted!==null&&now()-lastReadStarted<ROLLING_RECENT_MS)return;
+   if(!lastShown||lastReadStarted===null||now()-lastReadStarted>=LEDGER_RECONCILE_MS||
+      unsupported||checkFailures>=3){schedule(0);return}
+   const next=await check();
+   if(!current()||active||followup||retry)return;
+   const shifted=next!==null&&shownToken!==null&&next.change_token===shownToken&&
+    query.get('view')!=='compressions'&&shiftRollingWindow(lastShown,windowSeconds,Date.now());
+   if(!shifted){schedule(0);return}
+   lastShown=shifted;
+   publish({data:shifted});
+  }
   async function checkForChanges(){
    if(!alive)return;
    if(unsupported){
@@ -2433,24 +2556,24 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
    lastFallback=now();
    const recovered=await check();
    if(!alive)return;
-   if(recovered!==null){if(token!==recovered.change_token)hint();return}
+   if(recovered!==null){if(token!==recovered.change_token)queue();return}
    if(!windowSeconds&&document.visibilityState!=='hidden')hint();
    return;
   }
   const next=await check();
   if(!alive||next===null)return;
-  if(token===null){token=next.change_token;hint();return}
-  if(next.change_token!==token)hint();
+  if(token===null){token=next.change_token;queue();return}
+  if(next.change_token!==token)queue();
  }
  function refresh(){
   if(!current()||manual)return;
-  manual=true;
+  manual=true;hintSerial++;analyticsInfoMemory.delete(infoKey);
   if(active){manualForNext=true;dirty=true}
   else{clear();schedule(0)}
   publish({manual:true});
  }
  function dispose(){alive=false;clear()}
- return {start,hint,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
+ return {start,hint,expire,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
 }
 const $missingConnection=atom(null);
 function useLiveLedger({profile,path,view,enabled,windowSeconds}){
@@ -2473,9 +2596,10 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds}){
    coordinator.start();
    const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
    // A filesystem hint can miss mutations; force bounded reconciliation even
-   // with unchanged metadata. Rolling bounds also expire every minute.
-   const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')coordinator.hint()},windowSeconds?60000:300000);
-   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();coordinator.hint()}};
+   // with unchanged metadata. Rolling bounds are re-evaluated every visible
+   // minute and read only when the edge or hint requires it (expire()).
+   const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')windowSeconds?coordinator.expire():coordinator.hint()},windowSeconds?60000:LEDGER_RECONCILE_MS);
+   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();windowSeconds?coordinator.expire():coordinator.hint()}};
    document.addEventListener('visibilitychange',visible);
    return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
   },[key,enabled]);
@@ -2772,7 +2896,7 @@ function UsagePageScope({selected}){
   const message=text=>{if(reloadControl.alive&&reloadControl.scope===selected)setReloadNotice({scope:selected,text})};
   try{
    const result=await rest('/ledger/analytics/reload?profile='+encodeURIComponent(selected),{method:'POST',timeoutMs:30000});
-   switched=true;
+   switched=true;analyticsInfoMemory.clear();
    const active=await rest('/ledger/analytics?profile='+encodeURIComponent(selected),{timeoutMs:8000});
    if(!result.revision||result.revision!==active.revision)throw new Error('Active revision changed before verification.');
    message('Analytics '+active.revision.slice(0,12)+' loaded. Refreshing data…');
