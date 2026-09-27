@@ -2,7 +2,7 @@
 from __future__ import annotations
 import atexit, contextvars, functools, logging, os, threading, time, uuid
 from datetime import datetime
-from .storage import Store,home
+from .storage import Store,home,hook_scope
 from .ownership import identity, reconcile
 from .accounting import mapping,normalize,num,safe_usage,usage_priority
 
@@ -15,6 +15,14 @@ _STORES={};_LOOKUP={};_TURN_ROOTS={};_LOCK=threading.RLock()
 ADAPTERS={};FAILURES=0;LAST_FAILURE_AT=0
 _HEARTBEATS={}
 _REGISTERED_ROOTS=set()
+_HEALTH={}
+
+def _reset_lock_after_fork():
+    # A heartbeat/hook thread of the parent may hold _LOCK at fork time; it
+    # would never be released in the (single-threaded) child.
+    global _LOCK
+    _LOCK=threading.RLock()
+if hasattr(os,'register_at_fork'):os.register_at_fork(after_in_child=_reset_lock_after_fork)
 
 def text(v,limit=240):return str(v or '')[:limit]
 def timestamp(v):
@@ -26,13 +34,21 @@ def timestamp(v):
 def store(root=None):
     p=str(root or home())
     with _LOCK:
-        if p not in _STORES:_STORES[p]=Store(p)
+        if p not in _STORES:
+            s=Store(p)
+            # Producer stores reuse one write connection (see storage.Store.db).
+            s.persistent=True
+            _STORES[p]=s
         return _STORES[p]
 def safe(fn):
     @functools.wraps(fn)
     def wrapper(*a,**kw):
         global FAILURES,LAST_FAILURE_AT
-        try:return fn(*a,**kw)
+        # One hook = one projects.db read per profile and one unit of work per
+        # written Store, settled when the last concurrent unit ends
+        # (storage.hook_scope). copy_context() inside a hook shares its scope.
+        try:
+            with hook_scope():return fn(*a,**kw)
         except Exception as exc:
             FAILURES+=1;LAST_FAILURE_AT=time.time()
             # Exception messages/tracebacks can include sensitive objects. Class only.
@@ -41,18 +57,35 @@ def safe(fn):
     return wrapper
 
 @safe
-def health(root=None):
+def health(root=None,*,force=False):
+    """Write this process's lease row (content unchanged from every-hook writes).
+
+    Hooks skip the write while everything except ``heartbeat_at`` is unchanged
+    and the last write for this profile is younger than HEARTBEAT_SECONDS; the
+    heartbeat thread always writes (force). The lease stays well inside
+    LEASE_SECONDS, and state changes (registration, pid, adapters, failures)
+    are still written at the first hook that observes them.
+    """
     from pathlib import Path
+    from .connection import HEARTBEAT_SECONDS
     target=str(Path(root or home()).expanduser().resolve())
     live=target in _REGISTERED_ROOTS
-    store(target).health(PROCESS,{'version':'2.0.0-test.14','pid':os.getpid(),'request_hooks_registered':live,
-      'heartbeat_at':time.time() if live else None,'last_failure_at':LAST_FAILURE_AT,'adapters':dict(ADAPTERS),'recorder_failures':FAILURES,
+    now=time.time()
+    data={'version':'2.0.0-test.14','pid':os.getpid(),'request_hooks_registered':live,
+      'heartbeat_at':now if live else None,'last_failure_at':LAST_FAILURE_AT,'adapters':dict(ADAPTERS),'recorder_failures':FAILURES,
       'coverage':'main hooks + guarded auxiliary/compression adapters; not a transport proxy',
       'limits':['SDK-internal retries and calls bypassing Hermes are not individually visible.',
                 'No authoritative usage supplied => unknown, never synthesized.',
                 'Provider adapters may omit raw cache categories.',
                 'Each producer/profile must load this plugin. Remote hosts are not centrally merged.',
-                'Codex app-server runtime is not covered by this direct-provider build.']})
+                'Codex app-server runtime is not covered by this direct-provider build.']}
+    import json
+    state=json.dumps({**data,'heartbeat_at':None},sort_keys=True,default=str)
+    s=store(target)
+    with _LOCK:last=_HEALTH.get(target)
+    if not force and last and last[0]==state and last[2] is s and 0<=now-last[1]<HEARTBEAT_SECONDS:return
+    s.health(PROCESS,data)
+    with _LOCK:_HEALTH[target]=(state,now,s)
 
 
 def start_heartbeat(root=None):
@@ -74,11 +107,11 @@ def start_heartbeat(root=None):
             while not stop.wait(HEARTBEAT_SECONDS):
                 if os.getpid()!=key[0]:break
                 safe(reconcile)(store(target))
-                health(target)
+                health(target,force=True)
         thread=threading.Thread(target=run,name='usage-recorder-heartbeat',daemon=True)
         _HEARTBEATS[key]=(stop,thread)
         safe(reconcile)(store(target))
-        health(target)
+        health(target,force=True)
         thread.start()
         return thread
 

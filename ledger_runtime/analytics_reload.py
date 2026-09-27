@@ -29,8 +29,10 @@ from .read_snapshot import selected_snapshot_root, signature
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'observed_peak', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
+DIGEST_SETTLE = 2.0  # seconds; see AnalyticsRuntime._digest
 READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
-                    'sql_summary', 'sql_trend', 'attribution_groups',
+                    'sql_summary', 'sql_trend', 'attribution_groups', 'project_options',
+                    'cost_admission',
                     'sql_applied_rate_groups', 'legacy_read_view', 'request_predicate'}
 
 
@@ -47,16 +49,46 @@ class AnalyticsRuntime:
         self.baseline = self._protected()
         self.current = self._build()
 
+    def _digest(self, path):
+        """SHA-256 of ``path``, reused while its stat identity is unchanged.
+
+        Key includes ctime_ns, which a content edit cannot preserve (unlike
+        mtime) except within one kernel timestamp tick. So a digest is cached
+        only when stat is stable across the read *and* ctime was already
+        DIGEST_SETTLE seconds old: a same-size in-place rewrite then lands on a
+        later tick and changes the key. Otherwise the file is hashed afresh on
+        the next call. (Installs replace files by rename, a new inode, anyway.)
+        """
+        def identity():
+            stat = path.stat()
+            return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino, stat.st_dev)
+        key = identity()
+        cache = self.__dict__.setdefault('_digests', {})
+        hit = cache.get(path)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if identity() == key and time.time() - key[1] / 1e9 >= DIGEST_SETTLE:
+            cache[path] = (key, digest)
+        return digest
+
     def _protected(self):
         # Changes outside the read-side boundary cannot be silently half-loaded.
+        # Digests are cached per stat identity: info() is polled.
         paths = list(self.folder.glob('*.py')) + list(self.folder.glob('*.json'))
         paths += [self.folder.parent / name for name in ('bootstrap.py', '__init__.py', 'plugin.yaml')]
         paths += list((self.folder.parent / 'dashboard').glob('*'))
-        protected = {str(p.relative_to(self.folder.parent)): hashlib.sha256(p.read_bytes()).hexdigest()
+        protected = {str(p.relative_to(self.folder.parent)): self._digest(p)
                      for p in paths if p.is_file() and not (p.parent == self.folder and p.stem in RELOADABLE)}
+        cached = self.__dict__.get('_writer_contract')
+        if cached is not None and cached[0] == self._digest(self.folder / 'storage.py'):
+            protected['storage_writer_contract'] = cached[1]
+            return protected
+        storage_source = (self.folder / 'storage.py').read_bytes()
+        storage_digest = hashlib.sha256(storage_source).hexdigest()
         # storage.py contains both readers and recorder writers. Only its known
         # read definitions may change without restarting the producer code.
-        tree = ast.parse((self.folder / 'storage.py').read_bytes())
+        tree = ast.parse(storage_source)
         nodes = []
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in READ_DEFINITIONS:
@@ -67,6 +99,7 @@ class AnalyticsRuntime:
                 node.body = [item for item in node.body if not (isinstance(item, ast.FunctionDef) and item.name == 'read')]
             nodes.append(node)
         protected['storage_writer_contract'] = hashlib.sha256(ast.dump(ast.Module(body=nodes, type_ignores=[]), include_attributes=False).encode()).hexdigest()
+        self._writer_contract = (storage_digest, protected['storage_writer_contract'])
         return protected
 
     @staticmethod
