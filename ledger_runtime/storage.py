@@ -28,10 +28,15 @@ CREATE TABLE IF NOT EXISTS health(process TEXT PRIMARY KEY, updated REAL, data T
 CREATE TABLE IF NOT EXISTS quota(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, data TEXT NOT NULL);
 '''
 # Pure read-cost indexes: no data semantics, so reads are identical with or
-# without them. Store() adds each one to new and existing ledgers on open (in
-# its own savepoint, so a legacy row an expression cannot index skips that
-# index instead of failing the open). Schema inventories treat each as
-# optional-but-exact: absent is admissible, any other definition is not.
+# without them (every read has an unindexed plan). Store() creates them only
+# for a *fresh* ledger, while its tables are empty: building one on an existing
+# ledger is a full scan under the writer lock, which would stall cross-process
+# recorders past their 2 s busy timeout. Existing ledgers gain them only from
+# the operator-gated, writer-excluded incremental_migration.migrate_offline().
+# Schema inventories treat each as optional-but-exact: absent is admissible,
+# any other definition is not. Once present, every INSERT/UPDATE on requests
+# evaluates json_valid plus json_extract for request_project_options, so any
+# other SQLite client writing requests needs the JSON1 functions.
 READ_INDEX_SQL={
     'event_kind':'CREATE INDEX IF NOT EXISTS event_kind ON events(kind)',
     # json_valid guards keep writes from ever failing on this index.
@@ -338,16 +343,11 @@ class Store:
                             statement=''
                     if statement.strip():
                         raise ValueError('Incomplete ledger schema statement.')
-                    for sql in READ_INDEX_SQL.values():
-                        c.execute('SAVEPOINT read_index')
-                        try:
-                            c.execute(sql)
-                        except sqlite3.OperationalError as exc:
-                            if 'locked' in str(exc).lower() or 'busy' in str(exc).lower():
-                                raise
-                            c.execute('ROLLBACK TO read_index')
-                        c.execute('RELEASE read_index')
                     if fresh:
+                        # Empty tables: no scan. Never built here for an
+                        # existing ledger (see READ_INDEX_SQL).
+                        for sql in READ_INDEX_SQL.values():
+                            c.execute(sql)
                         from .incremental import install
                         install(c)
                 break

@@ -173,9 +173,10 @@ def _triggers(legacy=False):
 TRIGGERS = _triggers()
 LEGACY_TRIGGERS = _triggers(legacy=True)
 
-# Pure read-cost indexes (storage.READ_INDEX_SQL). Store creates them on open,
-# including for existing ledgers; one may be absent (not yet reopened, or a
-# legacy row it cannot index), but a present one must match exactly.
+# Pure read-cost indexes (storage.READ_INDEX_SQL). Store creates them only for a
+# fresh ledger; existing ledgers gain them only from migrate_offline. One may be
+# absent (older ledger, or a legacy row it cannot index), but a present one must
+# match exactly.
 @lru_cache(maxsize=1)
 def read_index_schema():
     from .storage import SCHEMA, READ_INDEX_SQL

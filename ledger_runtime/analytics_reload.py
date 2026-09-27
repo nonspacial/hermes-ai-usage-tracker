@@ -29,6 +29,7 @@ from .read_snapshot import selected_snapshot_root, signature
 
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'observed_peak', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
+DIGEST_SETTLE = 2.0  # seconds; see AnalyticsRuntime._digest
 READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
                     'sql_summary', 'sql_trend', 'attribution_groups', 'project_options',
                     'cost_admission',
@@ -52,8 +53,11 @@ class AnalyticsRuntime:
         """SHA-256 of ``path``, reused while its stat identity is unchanged.
 
         Key includes ctime_ns, which a content edit cannot preserve (unlike
-        mtime). Only digests are kept, and only when stat is stable across the
-        read; otherwise the file is hashed afresh on the next call.
+        mtime) except within one kernel timestamp tick. So a digest is cached
+        only when stat is stable across the read *and* ctime was already
+        DIGEST_SETTLE seconds old: a same-size in-place rewrite then lands on a
+        later tick and changes the key. Otherwise the file is hashed afresh on
+        the next call. (Installs replace files by rename, a new inode, anyway.)
         """
         def identity():
             stat = path.stat()
@@ -64,7 +68,7 @@ class AnalyticsRuntime:
         if hit is not None and hit[0] == key:
             return hit[1]
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if identity() == key:
+        if identity() == key and time.time() - key[1] / 1e9 >= DIGEST_SETTLE:
             cache[path] = (key, digest)
         return digest
 
