@@ -5,10 +5,12 @@ account, network or live home. The fake token resolver reads the selected
 profile's *bound* secret scope, so a request carrying a token proves the
 plugin used the per-profile scope that ``_run_in_home`` binds.
 """
+import contextvars
 import importlib.util
 import json
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -42,11 +44,25 @@ def _payload(limits):
     return body
 
 
+class _Bound:
+    """Home/scope held in ContextVars, as the host holds them (copied contexts carry them)."""
+
+    def __init__(self):
+        object.__setattr__(self, '_vars', {'home': contextvars.ContextVar('home', default=None),
+                                           'scope': contextvars.ContextVar('scope', default=None)})
+
+    def __getattr__(self, name):
+        return self._vars[name].get()
+
+    def __setattr__(self, name, value):
+        self._vars[name].set(value)
+
+
 class Host:
-    """Per-thread home/scope like the host ContextVars; records every GET."""
+    """Per-context home/scope like the host ContextVars; records every GET."""
 
     def __init__(self, tmp_path, monkeypatch):
-        self.local = threading.local()
+        self.local = _Bound()
         self.requests = []
         self.response = lambda request: httpx.Response(200, json=_payload(LIMITS))
         self.token_kind = 'oauth'
@@ -192,15 +208,104 @@ def test_other_scoped_models_follow_the_same_label_rule(host):
         ['Current session', 'Current week', 'Fable week', 'Opus week']
 
 
-@pytest.mark.parametrize('limits', [None, [], [{'kind': 'session', 'percent': None}], 'bad'])
-def test_absent_or_empty_limits_keep_host_windows(host, limits):
-    host.response = lambda request: httpx.Response(200, json=_payload(limits))
+FABLE = ('Fable week', 15.0, '2030-01-02T17:59:59.892117+00:00')
+SESSION = ('Current session', 12.0, '2030-01-01T00:49:59.891946+00:00')
+WEEK = ('Current week', 16.0, '2030-01-02T17:59:59.891967+00:00')
+
+
+def _raw_response(limits):
+    # Python's JSON encoder writes NaN/Infinity tokens, which response.json() parses back.
+    return httpx.Response(200, content=json.dumps(_payload(limits)).encode(),
+                          headers={'content-type': 'application/json'})
+
+
+def _limit(kind, percent, **extra):
+    base = {'session': LIMITS[0], 'weekly_all': LIMITS[1], 'weekly_scoped': LIMITS[2]}.get(kind, LIMITS[1])
+    return dict(base, kind=kind, percent=percent, **extra)
+
+
+# (limits[] payload, expected windows). Host windows are the baseline and are
+# never dropped; only fully usable entries override (by label) or append.
+MERGE_CASES = {
+    # Reviewer repro: bad session + unknown week kind + valid Fable.
+    'partial_only_fable_usable': (
+        [_limit('session', None), _limit('weekly_all_v2', 30), LIMITS[2]], HOST_WINDOWS + [FABLE]),
+    'nan_session': ([_limit('session', float('nan'))], HOST_WINDOWS),
+    'inf_session_nan_week': ([_limit('session', float('inf')), _limit('weekly_all', float('-inf')), LIMITS[2]],
+                             HOST_WINDOWS + [FABLE]),
+    'string_percent': ([_limit('session', '12'), _limit('weekly_scoped', '15')], HOST_WINDOWS),
+    'bool_percent': ([_limit('session', True)], HOST_WINDOWS),
+    'negative_percent': ([_limit('session', -1), LIMITS[2]], HOST_WINDOWS + [FABLE]),
+    'over_100_percent': ([_limit('weekly_all', 100.5), LIMITS[2]], HOST_WINDOWS + [FABLE]),
+    'bounds_0_and_100': ([_limit('session', 0), _limit('weekly_all', 100)],
+                         [('Current session', 0.0, SESSION[2]), ('Current week', 100.0, WEEK[2])]),
+    'unknown_kind_only': ([_limit('weekly_all_v2', 30), {'kind': None, 'percent': 3}], HOST_WINDOWS),
+    'not_dicts': ([None, 3, 'session', ['x']], HOST_WINDOWS),
+    'duplicate_kinds_first_usable_wins': (
+        [_limit('session', float('nan')), _limit('session', 20), _limit('session', 30),
+         LIMITS[2], dict(LIMITS[2], percent=99)],
+        [('Current session', 20.0, SESSION[2]), HOST_WINDOWS[1], FABLE]),
+    'missing_display_name': (
+        [dict(LIMITS[2], scope=None), dict(LIMITS[2], scope={'model': None}),
+         dict(LIMITS[2], scope={'model': {'display_name': '  '}}), dict(LIMITS[2], scope={'model': {}}),
+         dict(LIMITS[2], scope='Fable')], HOST_WINDOWS),
+    'unparseable_reset_rejected': ([_limit('session', 50, resets_at='soon'), _limit('weekly_all', 50, resets_at=[])],
+                                   HOST_WINDOWS),
+    'epoch_resets_at': ([_limit('session', 40, resets_at=1893458999), _limit('weekly_scoped', 15, resets_at=1893592799.5)],
+                        [('Current session', 40.0, '2030-01-01T00:49:59+00:00'), HOST_WINDOWS[1],
+                         ('Fable week', 15.0, '2030-01-02T13:59:59.500000+00:00')]),
+    'non_finite_epoch_rejected': ([_limit('session', 40, resets_at=float('nan'))], HOST_WINDOWS),
+    'null_reset_keeps_host_reset': ([_limit('session', 40, resets_at=None), _limit('weekly_scoped', 15, resets_at=None)],
+                                    [('Current session', 40.0, HOST_WINDOWS[0][2]), HOST_WINDOWS[1],
+                                     ('Fable week', 15.0, None)]),
+    'z_suffix_reset': ([_limit('weekly_all', 16, resets_at='2030-01-02T17:59:59Z')],
+                       [HOST_WINDOWS[0], ('Current week', 16.0, '2030-01-02T17:59:59+00:00')]),
+    'scoped_weeks_in_payload_order': (
+        [dict(LIMITS[2], percent=40, scope={'model': {'display_name': 'Opus'}}), LIMITS[1], LIMITS[2], LIMITS[0]],
+        [SESSION, WEEK, ('Opus week', 40.0, FABLE[2]), FABLE]),
+}
+
+
+@pytest.mark.parametrize('limits,expected', MERGE_CASES.values(), ids=MERGE_CASES.keys())
+def test_limits_merge_never_drops_host_windows(host, limits, expected):
+    host.response = lambda request: _raw_response(limits)
+    quota = host.quota()
+    _preserved(quota)
+    assert _windows(quota) == expected
+    for window in quota['windows']:
+        assert window['remaining_percent'] == 100.0 - window['used_percent']
+    assert len(host.requests) == 2
+
+
+def test_scoped_week_overrides_host_window_of_the_same_label(host, monkeypatch):
+    # A host legacy ``seven_day_opus`` window is overridden in place, never duplicated.
+    fetch = sys.modules['agent.account_usage'].fetch_account_usage
+    def with_opus(provider):
+        snapshot = fetch(provider)
+        opus = SimpleNamespace(label='Opus week', used_percent=70.0, reset_at=None, detail='host detail')
+        return SimpleNamespace(**{**vars(snapshot), 'windows': snapshot.windows + (opus,)})
+    monkeypatch.setattr(sys.modules['agent.account_usage'], 'fetch_account_usage', with_opus)
+    opus = dict(LIMITS[2], percent=40, scope={'model': {'display_name': 'Opus'}})
+    host.response = lambda request: httpx.Response(200, json=_payload([LIMITS[2], opus]))
+    quota = host.quota()
+    assert _windows(quota) == HOST_WINDOWS + [('Opus week', 40.0, FABLE[2]), FABLE]
+    assert quota['windows'][2]['detail'] == 'host detail'
+
+
+@pytest.mark.parametrize('limits', [None, [], [{'kind': 'session', 'percent': None}], 'bad',
+                                    [_limit('session', float('nan')), _limit('weekly_all_v2', 3)]])
+def test_absent_or_unusable_limits_serve_byte_identical_host_dto(host, limits):
+    host.response = lambda request: _raw_response(limits)
     quota = host.quota()
     _preserved(quota)
     assert _windows(quota) == HOST_WINDOWS
+    assert len(host.requests) == 2  # the limits GET ran, then changed nothing
+    # main's Anthropic probe was ``_probe_standard('anthropic')`` (preserved, unchanged).
+    main = host.module._run_in_home(host.work, lambda: host.module._probe_standard('anthropic'))
+    assert json.dumps(quota, sort_keys=True) == json.dumps(main, sort_keys=True)
 
 
-@pytest.mark.parametrize('failure', ['http500', 'http401', 'transport', 'not_json'])
+@pytest.mark.parametrize('failure', ['http500', 'http401', 'transport', 'not_json', 'read_timeout'])
 def test_limits_get_failure_keeps_host_snapshot(host, failure):
     calls = []
     def respond(request):
@@ -209,6 +314,8 @@ def test_limits_get_failure_keeps_host_snapshot(host, failure):
             return httpx.Response(200, json=_payload(None))
         if failure == 'transport':
             raise httpx.ConnectError('synthetic refusal', request=request)
+        if failure == 'read_timeout':
+            raise httpx.ReadTimeout('synthetic read timeout', request=request)
         if failure == 'not_json':
             return httpx.Response(200, text='<html>')
         return httpx.Response(500 if failure == 'http500' else 401, json={})
@@ -216,6 +323,39 @@ def test_limits_get_failure_keeps_host_snapshot(host, failure):
     quota = host.quota()
     _preserved(quota)
     assert _windows(quota) == HOST_WINDOWS and len(calls) == 2
+
+
+def test_hanging_limits_get_is_bounded_by_the_remaining_probe_budget(host, monkeypatch):
+    # The second GET gets only what is left of _PROBE_TIMEOUT; host windows return on time.
+    monkeypatch.setattr(host.module, '_PROBE_TIMEOUT', 0.6)
+    release = threading.Event()
+    calls = []
+    def respond(request):
+        calls.append(time.monotonic())
+        if len(calls) == 1:
+            time.sleep(0.2)  # host fetch uses part of the budget
+            return httpx.Response(200, json=_payload(LIMITS))
+        release.wait(10)  # stalled limits response (released at teardown)
+        raise httpx.ReadTimeout('synthetic stalled read', request=request)
+    host.response = respond
+    started = time.monotonic()
+    try:
+        quota = host.quota()
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    _preserved(quota)
+    assert _windows(quota) == HOST_WINDOWS and len(calls) == 2
+    assert elapsed < 0.6 + 0.5, elapsed  # within budget plus test overhead, not host + full timeout
+
+
+def test_exhausted_budget_skips_the_limits_get(host, monkeypatch):
+    monkeypatch.setattr(host.module, '_PROBE_TIMEOUT', 0.2)
+    def respond(request):
+        time.sleep(0.3)
+        return httpx.Response(200, json=_payload(LIMITS))
+    host.response = respond
+    assert _windows(host.quota()) == HOST_WINDOWS and len(host.requests) == 1
 
 
 def test_non_oauth_token_makes_no_extra_request(host):
@@ -233,10 +373,11 @@ def test_unavailable_host_snapshot_is_not_upgraded(host, monkeypatch):
 
 def test_token_resolution_stays_in_profile_scope(host):
     # Outside a bound scope the resolver refuses; the plugin swallows it and sends nothing.
-    assert host.module._anthropic_limit_windows() is None and host.requests == []
-    # Inside the selected profile's worker binding the same call uses that profile's token.
-    windows = host.module._run_in_home(host.work, host.module._anthropic_limit_windows)
-    assert [w['label'] for w in windows] == ['Current session', 'Current week', 'Fable week']
-    assert [r['token'] for r in host.requests] == [WORK_TOKEN]
-    assert WORK_TOKEN not in json.dumps(windows)
+    assert host.module._anthropic_limits(5.0) == [] and host.requests == []
+    # Inside the selected profile's worker binding the same call uses that profile's token,
+    # including on the budget-bounded helper thread (context copied, home recorded).
+    limits = host.module._run_in_home(host.work, lambda: host.module._anthropic_limits(5.0))
+    assert [limit.label for limit in limits] == ['Current session', 'Current week', 'Fable week']
+    assert [(r['token'], r['home']) for r in host.requests] == [(WORK_TOKEN, host.work)]
+    assert WORK_TOKEN not in json.dumps(limits)
     assert getattr(host.local, 'scope', None) is None and getattr(host.local, 'home', None) is None

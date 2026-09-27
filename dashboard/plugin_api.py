@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import logging
+import math
 import os
 import sqlite3
 import threading
@@ -574,12 +575,20 @@ def _probe_standard(provider: str) -> dict[str, Any]:
 
 
 def _probe_anthropic() -> dict[str, Any]:
-    """Host snapshot (``_probe_standard``, preserved), windows replaced from ``limits[]`` when readable."""
+    """Host snapshot (``_probe_standard``, preserved) with ``limits[]`` merged into its windows.
+
+    The host windows are the baseline and are never dropped: usable
+    ``limits[]`` entries only override a host window of the same label or
+    append a model-scoped week (``_merge_limit_windows``). With no usable
+    entry the host DTO is returned untouched. The extra GET gets only what is
+    left of ``_PROBE_TIMEOUT`` after the host fetch, enforced by wall clock.
+    """
+    started = time.monotonic()
     serialized = _probe_standard("anthropic")
     if serialized.get("available"):
-        windows = _anthropic_limit_windows()
-        if windows:
-            serialized["windows"] = windows
+        limits = _anthropic_limits(_PROBE_TIMEOUT - (time.monotonic() - started))
+        if limits:
+            serialized["windows"] = _merge_limit_windows(serialized.get("windows") or [], limits)
     return serialized
 
 
@@ -587,73 +596,140 @@ _ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _ANTHROPIC_LIMIT_LABELS = {"session": "Current session", "weekly_all": "Current week"}
 
 
-def _anthropic_limit_windows() -> Optional[list[dict[str, Any]]]:
-    """Windows from the OAuth usage ``limits[]`` array; ``None`` keeps the host's windows.
+class _Limit(NamedTuple):
+    label: str
+    used: float
+    reset_at: Optional[str]
+    scoped: bool
+
+
+def _anthropic_limits(budget: float) -> list[_Limit]:
+    """Usable OAuth usage ``limits[]`` entries; ``[]`` keeps the host's windows.
 
     The host maps only the legacy ``five_hour``/``seven_day``/``seven_day_*``
     keys, so model-scoped weekly limits (e.g. Fable) are absent from its
-    snapshot. Runs in the same probe worker, under the profile home and secret
-    scope already bound by ``_run_in_home``, and resolves the token with the
-    host resolver the host fetcher itself uses; the token is used only for the
-    request header and never returned, stored or logged. Any failure (no
-    resolver, non-OAuth token, HTTP/parse error, no usable limits) returns
-    ``None`` so the host snapshot is served unchanged.
+    snapshot. Resolves the token in the calling probe worker, under the profile
+    home and secret scope already bound by ``_run_in_home``, with the host
+    resolver the host fetcher itself uses; the token is used only for the
+    request header and never returned, stored or logged. The GET runs in a
+    context-copied helper thread bounded by ``budget`` seconds of wall clock
+    (the probe returns without waiting for a late response). Any failure (no
+    budget, no resolver, non-OAuth token, timeout, HTTP/parse error) returns
+    ``[]`` so the host snapshot is served unchanged.
     """
+    if not budget > 0:
+        return []
     try:
         from agent.anthropic_adapter import _is_oauth_token, resolve_anthropic_token
 
         token = str(resolve_anthropic_token() or "").strip()
         if not token or not _is_oauth_token(token):
-            return None
-        payload = _get_json(_ANTHROPIC_USAGE_URL, {
+            return []
+        headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
             "anthropic-beta": "oauth-2025-04-20",
             "User-Agent": "claude-code/2.1.0",
-        })
-        return _windows_from_limits(payload.get("limits") if isinstance(payload, dict) else None)
+        }
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(contextvars.copy_context().run, _get_limits_json, headers, budget)
+            payload = future.result(timeout=budget)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        return _usable_limits(payload.get("limits") if isinstance(payload, dict) else None)
     except Exception as exc:  # noqa: BLE001 - never worse than the host snapshot
         log.debug("Anthropic limits[] unavailable (%s); using host windows", type(exc).__name__)
-        return None
+        return []
 
 
-def _windows_from_limits(limits: Any) -> Optional[list[dict[str, Any]]]:
-    """Session, then all-model week, then model-scoped weeks in payload order."""
+def _get_limits_json(headers: dict[str, str], timeout: float) -> Any:
+    """The limits GET with a per-phase ``timeout`` (``_get_json`` is preserved upstream and fixed at 12 s)."""
+    with httpx.Client(timeout=timeout) as client:
+        response = client.get(_ANTHROPIC_USAGE_URL, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+
+def _usable_limits(limits: Any) -> list[_Limit]:
+    """Fully usable entries only, first per label, in payload order; everything else is ignored.
+
+    Usable: known ``kind`` (``session``, ``weekly_all``, or ``weekly_scoped``
+    with a non-empty ``scope.model.display_name``), a finite numeric
+    ``percent`` within 0..100 (never clamped), and ``resets_at`` absent/null or
+    parseable (ISO string or epoch seconds).
+    """
     if not isinstance(limits, list):
-        return None
-    session: list[dict[str, Any]] = []
-    weekly: list[dict[str, Any]] = []
-    scoped: list[dict[str, Any]] = []
+        return []
+    usable: list[_Limit] = []
+    seen: set[str] = set()
     for item in limits:
         if not isinstance(item, dict):
             continue
         percent = item.get("percent")
         if isinstance(percent, bool) or not isinstance(percent, (int, float)):
             continue
+        percent = float(percent)
+        if not math.isfinite(percent) or not 0.0 <= percent <= 100.0:
+            continue
         kind = item.get("kind")
-        if kind in _ANTHROPIC_LIMIT_LABELS:
-            label = _ANTHROPIC_LIMIT_LABELS[kind]
+        if isinstance(kind, str) and kind in _ANTHROPIC_LIMIT_LABELS:
+            label, scoped = _ANTHROPIC_LIMIT_LABELS[kind], False
         elif kind == "weekly_scoped":
-            model = ((item.get("scope") or {}).get("model") or {}) if isinstance(item.get("scope"), dict) else {}
+            scope = item.get("scope")
+            model = scope.get("model") if isinstance(scope, dict) else None
             name = model.get("display_name") if isinstance(model, dict) else None
             if not isinstance(name, str) or not name.strip():
                 continue
-            label = f"{name.strip()} week"
+            label, scoped = f"{name.strip()} week", True
         else:
             continue
-        window = _window(label, float(percent), _parse_reset(item.get("resets_at")))
-        (session if kind == "session" else weekly if kind == "weekly_all" else scoped).append(window)
-    windows = session + weekly + scoped
-    return windows or None
+        reset = item.get("resets_at")
+        reset_at = None if reset is None else _parse_reset(reset)
+        if reset is not None and reset_at is None:
+            continue
+        if label in seen:
+            continue
+        seen.add(label)
+        usable.append(_Limit(label, percent, reset_at, scoped))
+    return usable
+
+
+def _merge_limit_windows(host_windows: list[dict[str, Any]], limits: list[_Limit]) -> list[dict[str, Any]]:
+    """Host windows in host order, each overridden by a same-label limit; unmatched scoped weeks appended.
+
+    A ``session``/``weekly_all`` limit without a host window of its label is
+    ignored. A null ``resets_at`` keeps the host window's reset; ``detail``
+    stays the host's.
+    """
+    by_label = {limit.label: limit for limit in limits}
+    merged: list[dict[str, Any]] = []
+    for window in host_windows:
+        limit = by_label.pop(window.get("label"), None)
+        if limit is None:
+            merged.append(window)
+        else:
+            merged.append(_window(limit.label, limit.used, limit.reset_at or window.get("reset_at"),
+                                  window.get("detail")))
+    merged.extend(_window(limit.label, limit.used, limit.reset_at)
+                  for limit in limits if limit.scoped and limit.label in by_label)
+    return merged
 
 
 def _parse_reset(value: Any) -> Optional[str]:
-    if not isinstance(value, str) or not value:
-        return None
+    """ISO string (``Z`` allowed; naive is UTC) or finite epoch seconds, as core ``_parse_dt``; else ``None``."""
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not math.isfinite(value):
+                return None
+            parsed = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        elif isinstance(value, str) and value.strip():
+            text = value.strip()
+            parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+        else:
+            return None
+    except (ValueError, OverflowError, OSError):
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
