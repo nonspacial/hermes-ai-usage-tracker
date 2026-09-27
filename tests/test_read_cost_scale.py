@@ -288,7 +288,9 @@ def test_read_indexes_fresh_only_and_offline_for_existing(tmp_path):
         assert incremental.supported(c)
         c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
     options = _offline_options(store.path, tmp_path)
-    migrate_offline(store.path, **options)
+    assert migrate_offline(store.path, **options) == tuple(storage.READ_INDEX_SQL)
+    again = tmp_path / 'again'; again.mkdir()                 # fresh verified backup
+    assert migrate_offline(store.path, **_offline_options(store.path, again)) == ()  # none left to add
     with store.db() as c:
         names = _index_names(c)
         assert set(storage.READ_INDEX_SQL) <= names
@@ -335,10 +337,32 @@ def test_legacy_offline_migration_adds_read_indexes(tmp_path):
     with contextlib.closing(sqlite3.connect(path)) as c:
         assert not incremental.supported(c)
         assert not set(storage.READ_INDEX_SQL) & _index_names(c)
-    migrate_offline(path, **_offline_options(path, tmp_path))
+    assert migrate_offline(path, **_offline_options(path, tmp_path)) == tuple(storage.READ_INDEX_SQL)
     with contextlib.closing(sqlite3.connect(path)) as c:
         assert incremental.supported(c)
         assert set(storage.READ_INDEX_SQL) <= _index_names(c)
+
+
+def test_offline_read_index_skip_is_reported_not_silent(tmp_path, monkeypatch, caplog):
+    # A non-lock OperationalError skips only that index; the call reports the
+    # names it did create and logs the skipped name (never ledger content).
+    from _hermes_ai_usage_ledger_v2.incremental_migration import migrate_offline
+    root = tmp_path / 'skip'
+    store = build(root, 20)
+    _drop_read_indexes(store)
+    with store.db() as c:
+        c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    incremental.read_index_schema()                               # pin the real definitions
+    broken = dict(storage.READ_INDEX_SQL, event_kind='CREATE INDEX event_kind ON events(no_such_column)')
+    monkeypatch.setattr(storage, 'READ_INDEX_SQL', broken)
+    with caplog.at_level('WARNING'):
+        created = migrate_offline(store.path, **_offline_options(store.path, tmp_path))
+    assert created == ('request_project_options',)
+    assert any('event_kind' in r.getMessage() and 'skipped' in r.getMessage() for r in caplog.records)
+    with store.db() as c:
+        names = _index_names(c)
+        assert 'request_project_options' in names and 'event_kind' not in names
+        assert incremental.supported(c)
 
 
 def test_existing_ledger_open_never_blocks_cross_process_writer(tmp_path, monkeypatch):
