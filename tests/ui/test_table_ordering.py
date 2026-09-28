@@ -10,7 +10,7 @@ def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
                                    headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
-        page = browser.new_page(viewport={'width': 1700, 'height': 1100}, locale='en-US', timezone_id='UTC')
+        page = browser.new_page(viewport={'width': 1700, 'height': 1100}, locale='en-US', timezone_id='Europe/Paris')
         errors, network = [], []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.on('request', lambda r: network.append(r.url))
@@ -30,8 +30,8 @@ def run():
             page.wait_for_function("window.orderingData && orderingData.trend.unit === " + repr('hour' if grouping == 'Hour' else 'day'))
             before = page.evaluate('orderingData.trend.buckets.map(b => b.start)')
             expected = page.evaluate('''hour => [...orderingData.trend.buckets].sort((a,b)=>b.start-a.start).map(
-                b => new Date(b.start*1000).toLocaleString(undefined, {
-                    timeZone:'UTC',month:'short',day:'numeric',...(hour?{hour:'numeric'}:{})}))''', grouping == 'Hour')
+                b => { const d=new Date(b.start*1000),offHour=d.getMinutes()!==0,time=hour||offHour||d.getHours()!==0;
+                    return d.toLocaleString(undefined,{month:'short',day:'numeric',...(time?{hour:'numeric',...(offHour?{minute:'2-digit'}:{})}:{})}); })''', grouping == 'Hour')
             expect(page.locator('.au-breakdown tbody tr td:first-child .au-field-value')).to_have_text(expected)
             after = page.evaluate('orderingData.trend.buckets.map(b => b.start)')
             assert after == before == sorted(before)

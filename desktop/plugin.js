@@ -144,18 +144,59 @@ function selectProfile(name) {
 
 // ---------------------------------------------------------------- formatters
 
-function fmtIst(iso) {
+// All displayed times use the computer's own time zone (the runtime default),
+// named explicitly so a reader can tell which zone a stamp is in. The backend
+// still buckets and validates in UTC; only presentation is local.
+function localZoneName(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+      .formatToParts(date).find(part => part.type === 'timeZoneName')?.value || ''
+  } catch {
+    return ''
+  }
+}
+
+// Zone label for a span of bucket starts: one abbreviation when every bucket
+// shares it, otherwise the generic 'local time' (a DST change inside the window).
+function spanZoneName(starts) {
+  const names = new Set((starts.length ? starts : [Date.now() / 1000]).map(t => localZoneName(new Date(t * 1000))))
+  return names.size === 1 ? [...names][0] : 'local time'
+}
+
+function fmtLocal(iso) {
   if (!iso) return null
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
+  const zone = localZoneName(d)
+  return d.toLocaleString(undefined, {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
+    minute: '2-digit'
+  }) + (zone ? ' ' + zone : '')
+}
+
+// Local label for a UTC-aligned bucket start. Minutes appear whenever the
+// local start is not on the hour (half-hour zones), and a day bucket shows its
+// local start time when that is not local midnight, so a UTC day is never
+// passed off as a local calendar day.
+function bucketStamp(seconds, { date = true, time = 'auto' } = {}) {
+  const d = new Date(seconds * 1000)
+  const offHour = d.getMinutes() !== 0
+  const offDay = offHour || d.getHours() !== 0
+  const withTime = time === 'minute' || time === 'hour' || (time === 'auto' && offDay)
+  return d.toLocaleString(undefined, {
+    ...(date ? { month: 'short', day: 'numeric' } : {}),
+    ...(withTime ? { hour: 'numeric', ...(time === 'minute' || offHour ? { minute: '2-digit' } : {}) } : {})
   })
+}
+
+// Host quota detail lines are free text (e.g. core's `Renews: <ISO>`); show
+// any embedded absolute ISO timestamp in the same local zone as every other time.
+function localiseStamps(text) {
+  if (typeof text !== 'string') return text
+  return text.replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?(?:Z|[+-]\d\d:?\d\d)/g,
+    stamp => fmtLocal(stamp) || stamp)
 }
 
 function resetLabel(iso) {
@@ -168,7 +209,7 @@ function resetLabel(iso) {
   const hours = Math.floor((seconds % 86_400) / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   const rel = days ? `in ${days}d ${hours}h` : hours ? `in ${hours}h ${minutes}m` : `in ${minutes}m`
-  return `resets ${rel} · ${fmtIst(iso)} IST`
+  return `resets ${rel} · ${fmtLocal(iso)}`
 }
 
 function pct(value) {
@@ -577,7 +618,7 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
           children: [
             ...windows.map((window, index) => jsx(QuotaBar, { window, providerId:provider.id }, `window-${index}`)),
             ...details.map((detail, index) =>
-              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: detail }, `detail-${index}`)
+              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: localiseStamps(detail) }, `detail-${index}`)
             )
           ]
       }),
@@ -1580,8 +1621,9 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
  const {line,area}=allProviders?{line:'',area:''}:traces(vals);
- const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
- const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
+ const stamp=t=>(data?.trend?.seconds||86400)<86400?bucketStamp(t,{date:false,time:'minute'}):bucketStamp(t),zone=spanZoneName(points.map(p=>p.start)),active=hover==null?null:points[Math.min(hover,points.length-1)];
+ const activeZone=active?localZoneName(new Date(active.start*1000)):'';
+ const pointSummary=active?new Date(active.start*1000).toLocaleString()+(activeZone?' '+activeZone:'')+' · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
  const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
   const row=active.provider_buckets.find(item=>item.provider===s.provider);
   return {provider:s.provider,label:providerLabel(s.provider,seriesIds),
@@ -1601,8 +1643,8 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   if(range&&onSelectRange)onSelectRange(...range);
  };
  return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
- h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},'UTC · by request start')),
- h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' UTC '+unit+' buckets'},
+ h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},(zone?zone+' · ':'')+'by request start')),
+ h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' '+unit+' buckets'+(zone?', times in '+zone:'')},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
  ...(allProviders?series.map(s=>h('path',{key:s.provider,d:traces(s.values).line,className:'au-line au-provider-series','data-provider':s.provider,style:{stroke:providerAccent(s.provider)}})):
   [h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'})]),
@@ -1691,6 +1733,7 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  // Only the time table is reversed; the shared chart keeps chronological buckets.
  // Other groups arrive ordered by their latest call across the full filtered set.
  const rows=!data?.summary?[]:group==='time'?(data.list_rows||[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start)):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
+ const rowsZone=group==='time'?spanZoneName(rows.map(g=>g.start)):'';
  const total=mode==='Cost'?Number(data?.summary?.known_cost_usd||0):data?.summary?.known?.total_tokens||0;
  const grouping={model:'Model',time:timeName,project:'Project',session:'Session',subagent:'Subagents'};
  function name(g,drill=true){
@@ -1698,7 +1741,7 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
   if(group==='model')return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},g.model,
    h('span',{className:'au-muted',style:{display:'block'}},uiNames[g.provider]||g.provider));
   if(group==='time'){
-   const label=new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC',month:'short',day:'numeric',...(minuteBuckets?{hour:'numeric',minute:'2-digit'}:timeName==='Hour'?{hour:'numeric'}:{})});
+   const label=bucketStamp(g.start,{time:minuteBuckets?'minute':timeName==='Hour'?'hour':'auto'});
    return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},label);
   }
   const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
@@ -1707,11 +1750,11 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  }
  const detail=group==='project'||group==='session'||group==='subagent';
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
- rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
+ rows.length?table([group==='time'?timeName+(rowsZone?' ('+rowsZone+')':''):grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
   return [name(g),h('span',{},selectedCost(g),h(UnpricedMark,{summary:g})),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
-  identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC'}):readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
+  identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString():readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
    {label:'Cost · API estimate',value:selectedCost(g)+unpricedSuffix(g),title:unpricedNote(g)},
    {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
   ]
@@ -3170,7 +3213,7 @@ function UsagePageScope({selected}){
   setDrillTrail({context:navigationContext,entries:[...drillHistory,previous].slice(-50)});
   setRequestFilters(next);if(tab!=='Overview')setTab('Requests');
  }
- const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
+ const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtLocal(quota.data.generated_at)} · probed in ${quota.data.probe_seconds}s`:null})
  const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),isQuota?null:h(UnpricedBadge,{data:currentData}),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');

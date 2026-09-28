@@ -15,7 +15,7 @@ def test_chart_tooltip():
             executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
             headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
         try:
-            page = browser.new_page(viewport={'width': 1480, 'height': 900}, locale='en-GB')
+            page = browser.new_page(viewport={'width': 1480, 'height': 900}, locale='en-GB', timezone_id='Europe/Paris')
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.set_content((ROOT / 'preview.html').read_text(), wait_until='domcontentloaded')
@@ -63,11 +63,13 @@ def test_chart_tooltip():
             expect(footer).to_be_visible()
             known_expected = page.evaluate('''index => {
                 const b=window.tooltipData.trend.buckets[index];
-                return new Date(b.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+
-                    ' UTC · '+b.known.total_tokens.toLocaleString(undefined)+
+                return new Date(b.start*1000).toLocaleString()+' '+new Intl.DateTimeFormat(undefined,{timeZoneName:'short'}).formatToParts(new Date(b.start*1000)).find(p=>p.type==='timeZoneName').value+
+                    ' · '+b.known.total_tokens.toLocaleString(undefined)+
                     ' tokens · '+b.attempts.toLocaleString(undefined)+' requests · Peak observed subagents: 2 · partial';
             }''', known)
             expect(footer).to_have_text(known_expected)
+            # Local zone, not UTC: the page runs in Europe/Paris.
+            assert ' UTC' not in known_expected and ('CEST' in known_expected or 'GMT+2' in known_expected), known_expected
             assert 'Click to interact with Left/Right arrow keys' in popup.inner_text()
             assert 'Click and drag at least 15 minutes' in popup.inner_text()
             assert popup.evaluate('e=>e.lastElementChild.dataset.testid') == 'chart-point-summary'
@@ -79,8 +81,8 @@ def test_chart_tooltip():
             page.mouse.move(*point(missing))
             expected = page.evaluate('''() => {
                 const b=window.tooltipData.trend.buckets.at(-1);
-                return new Date(b.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+
-                    ' UTC · — tokens · '+b.attempts.toLocaleString(undefined)+
+                return new Date(b.start*1000).toLocaleString()+' '+new Intl.DateTimeFormat(undefined,{timeZoneName:'short'}).formatToParts(new Date(b.start*1000)).find(p=>p.type==='timeZoneName').value+
+                    ' · — tokens · '+b.attempts.toLocaleString(undefined)+
                     ' requests · includes missing usage · Peak observed subagents: 2 · partial';
             }''')
             expect(footer).to_have_text(expected)
