@@ -13,8 +13,14 @@ type IncrementalReceipt = {
 type OverviewResponse = ExistingOverviewTimeOrModelResponse & {
   incremental?: IncrementalReceipt; // absent on legacy/uninstrumented databases
   analytics_revision: string;       // code generation, not a data revision
+  unpriced_total: {requests: number; tokens: number}; // equals summary.unpriced minus reasons
 };
+// summary, every provider/model group, trend bucket and provider bucket:
+type Unpriced = {requests: number; tokens: number;
+  reasons: Record<'no_catalogue'|'model_missing'|'ambiguous'|'usage_missing'|'endpoint_unpriced', number>};
 ```
+
+**Unpriced signal.** A delta recomputes `unpriced` for affected buckets through the same SQL projection and re-derives `unpriced_total` from the merged summary. A receipt whose sealed body lacks `unpriced_total`, `summary.unpriced`, any bucket/provider-bucket `unpriced`, or whose sealed seed groups lack `unpriced` (sealed before this field) is not merged: the server returns a full snapshot read (`mode: 'snapshot'`). The renderer rejects any Overview DTO or delta whose summary, groups or buckets lack a consistent `unpriced` (reasons summing to `unpriced_requests`) or whose `unpriced_total` disagrees with `summary.unpriced`, and refetches.
 
 For a response with `resume_token`, call `POST /ledger/refresh` with the same profile/scope/filter/page/view/group query values as `GET /ledger`, **explicitly forwarding the response's `window.start` and `window.end` as the bounds**, and JSON `{ "resume_token": "..." }`. A GET with omitted `end` resolves the actual SQL bound once and signs that exact reported end; it does not invent an end or extend the selected interval. Bounds may match exactly, or advance together by the same strictly positive amount up to 3600 seconds when the prior width is 86400–86460 seconds and the new width equals it (to 0.001 second); the small overrun admits a server-resolved implicit end after a client-sampled 24h start. No bound moves backward or widens. To roll, advance **both** reported bounds by the same shift; do not omit `end` on the POST and expect the server to resample it. The response is a **complete replacement** projected DTO, not an arithmetic client patch. Replace the old token with the new token, including on a snapshot fallback. A response without a token, saved marker, all-profile scope, unsupported view/group, backend restart (invalid token), changed profile/filter or explicit 400 must use `GET /ledger`. Do not persist tokens; they encapsulate the signed prior scoped DTO and exact bucket/provider/model contributions. They die with renderer RAM and are not a backend cache. Never mix tokens between profiles or views. The host gateway's existing authentication policy applies to both routes. The repository candidate now calls POST for eligible selected-profile Overview/time and model only; release/installation is separate.
 

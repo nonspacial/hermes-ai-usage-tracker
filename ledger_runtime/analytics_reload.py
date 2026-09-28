@@ -30,7 +30,7 @@ from .read_snapshot import selected_snapshot_root, signature
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'observed_peak', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
 DIGEST_SETTLE = 2.0  # seconds; see AnalyticsRuntime._digest
-READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
+READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql', 'unpriced_total',
                     'sql_summary', 'sql_trend', 'attribution_groups', 'project_options',
                     'cost_admission',
                     'sql_applied_rate_groups', 'legacy_read_view', 'request_predicate'}
@@ -146,14 +146,17 @@ class AnalyticsRuntime:
             raise
 
     @staticmethod
-    def _reader(generation, root):
+    def _reader(generation, root, ledger=None):
         # Bypass Store.__init__: a dashboard read must not create schemas, seed
         # pricing, start workers or change permissions. Main DB is opened read-only;
         # connection-local TEMP projections remain writable as required by reads.
+        # ``ledger`` is the live profile root the copy was taken from: catalogue
+        # misses are reported against its worker key, never the scratch copy.
         reader = object.__new__(generation['store_type'])
         reader.root = Path(root)
         reader.folder = reader.root / 'usage-ledger'
         reader.path = reader.folder / 'events.sqlite3'
+        reader.ledger_key = str((Path(ledger) / 'usage-ledger' / 'events.sqlite3').resolve()) if ledger else None
 
         @contextmanager
         def db():
@@ -227,7 +230,7 @@ class AnalyticsRuntime:
             else:
                 source_generation=signature(source_file)
                 with selected_snapshot_root(root) as copied_root:
-                    reader = self._reader(generation, copied_root)
+                    reader = self._reader(generation, copied_root, root)
                     selected_test = None
                     if test_id:
                         marker_start, marker_end, selected_test = reader.test_window(test_id,include_data=True)
@@ -321,10 +324,12 @@ class AnalyticsRuntime:
             buckets=base.get('trend',{}).get('buckets')
             if (revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None
                     and 'peak_observed' in base.get('subagent_summary',{})
+                    # Receipts sealed before the unpriced signal take a full read.
+                    and isinstance(base.get('unpriced_total'),dict) and 'unpriced' in base.get('summary',{})
                     and isinstance(buckets,list) and all(
-                        isinstance(bucket,dict) and 'peak_observed' in bucket
+                        isinstance(bucket,dict) and 'peak_observed' in bucket and 'unpriced' in bucket
                         and isinstance(bucket.get('provider_buckets'),list)
-                        and all(isinstance(row,dict) and isinstance(row.get('provider'),str)
+                        and all(isinstance(row,dict) and isinstance(row.get('provider'),str) and 'unpriced' in row
                                 for row in bucket['provider_buckets'])
                         for bucket in buckets)):
                 from .incremental_refresh import replace_buckets
@@ -332,7 +337,7 @@ class AnalyticsRuntime:
                     if signature(source_file)!=current_generation:
                         candidate=None
                     else:
-                        reader=self._reader(generation,copied_root)
+                        reader=self._reader(generation,copied_root,root)
                         from .incremental import identity
                         with reader.db() as c:
                             matches=identity(c)==db_identity

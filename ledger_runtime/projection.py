@@ -12,7 +12,7 @@ VIEW_FIELDS = {
     'models': frozenset(('groups',)),
     'skills': frozenset(),  # Skills history has its own route; the ledger supplies the header.
 }
-COMMON = frozenset(('generated_at', 'seq', 'window', 'summary', 'request_count', 'next_offset',
+COMMON = frozenset(('generated_at', 'seq', 'window', 'summary', 'unpriced_total', 'request_count', 'next_offset',
     'provider_groups', 'trend', 'subagent_summary', 'project_options', 'providers',
     'compression_count', 'tests'))
 ALL_FIELDS = COMMON | frozenset(('requests', 'cache_read_progression', 'price_catalogs',

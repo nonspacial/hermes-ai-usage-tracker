@@ -77,7 +77,11 @@ def test_saved_rate_untouched_and_serving_provider_isolation(tmp_path):
     catalog(s,'openai',[pricing.rate('gpt-6-sol','standard',['900','900','900','900'])])
     rows={r['id']:r for r in s.read()['requests']}
     assert rows['priced']['cost']==saved and 'supplemental_valuation' not in rows['priced']
-    assert all(rows[k]['cost']['rate'] is None for k in ('router','unknown','tier'))
+    assert all(rows[k]['cost']['rate'] is None for k in ('router','unknown'))
+    # An unknown tier is fail-open: documented standard rate, flagged.
+    # (saved at completion from the seeded catalogue, not a supplemental value).
+    assert rows['tier']['cost']['rate']['tier_basis']=='unknown_value_as_default'
+    assert 'supplemental_valuation' not in rows['tier']
     catalog(s,'openrouter',[pricing.rate('gpt-6-sol','standard',['3','4','0','0'])])
     routed={r['id']:r for r in s.read()['requests']}['router']
     assert routed['supplemental_valuation']['source_id']=='openrouter'

@@ -202,7 +202,7 @@ def materialise_summary(c, sql):
     return projected_sql
 
 
-def project(c, where, params, end):
+def project(c, where, params, end, store=None):
     """Attach calculated values in a read-connection TEMP view, never on disk.
 
     Calculations see predecessor reads before the selected date range and all
@@ -213,6 +213,9 @@ def project(c, where, params, end):
     Returns {id: projected cost value} for every selected row, i.e. exactly
     what json.loads(requests.data).get('cost') yields afterwards, so callers
     can inspect projected costs without decoding each payload again.
+
+    ``store`` is the live ledger key (pricing._WORKERS key) a catalogue miss
+    is reported against; None reports nothing.
     """
     selected = c.execute('SELECT id,session_id,started FROM requests WHERE '+where, params).fetchall()
     if not selected:
@@ -230,25 +233,31 @@ def project(c, where, params, end):
     # The selected set is already bounded by the query, not the page. One
     # provider catalog per read snapshot serves all its eligible rows; no
     # network and no per-request catalog query or durable ledger mutation.
-    from .pricing import PROVIDERS, select_rate
+    from .pricing import catalogue_revision, gap_reason, select_rate, source_for
     from .accounting import costs
     catalogs = {}
     projected_costs = {}
+    missed = {}
+
+    def catalog(source):
+        if source not in catalogs:
+            row = c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1', (source,)).fetchone()
+            catalogs[source] = (row['id'], json.loads(row['data'])) if row else None
+        return catalogs[source]
     c.execute('CREATE TEMP TABLE session_write_projection(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
     for r in c.execute('SELECT id,data FROM requests WHERE '+where, params):
         data = json.loads(r['data'])
         data['calculated_cache_writes'] = changes.get(r['id']) or observation(data)
         original = data.get('cost') or {}
-        source = PROVIDERS.get(data.get('provider'))
-        if (source and data.get('ended') is not None and data.get('status') not in ('pending','usage_received')
+        # Every provider has a price path: its own catalogue, the labelled
+        # OpenRouter list-price fallback.
+        source, _ = source_for(data)
+        if (data.get('ended') is not None and data.get('status') not in ('pending','usage_received')
                 and not original.get('rate') and not original.get('complete')
                 and Decimal(original.get('known_components_usd') or '0') == 0
                 and data.get('usage') and any(count(data['usage'].get(k)) for k in
                     ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'))):
-            if source not in catalogs:
-                row = c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1', (source,)).fetchone()
-                catalogs[source] = (row['id'], json.loads(row['data'])) if row else None
-            snapshot = catalogs[source]
+            snapshot = catalog(source)
             rate = select_rate(snapshot[1], data, snapshot[0], data['ended'], retrospective=True) if snapshot else None
             if rate:
                 # The displayed cost is a TEMP read projection. Its original
@@ -264,10 +273,29 @@ def project(c, where, params, end):
                     'service_tier': rate['service_tier'], 'context_band': rate.get('context_band'),
                     'inference_geo': rate.get('inference_geo'),
                     'source_url': rate['source_url'], 'content_sha256': rate['content_sha256']}
+        # Read-time reason for every selected request without a complete
+        # cost; summaries count it. Never written to main.requests.
+        cost = data.get('cost') or {}
+        if not cost.get('complete'):
+            snapshot = catalog(source) if not cost.get('rate') else None
+            data['unpriced_reason'] = gap_reason(data, snapshot[1] if snapshot else None)
+            if data['unpriced_reason'] in ('model_missing', 'no_catalogue'):
+                missed.setdefault((source, data.get('response_model') or data.get('model')), None)
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',
                   (r['id'], json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))
         # JSON round-trips str/int/float/bool/None/list/dict exactly.
         projected_costs[r['id']] = data.get('cost')
+    # A miss marks the source stale for this ledger's background refresher
+    # (in-memory, never a network call here and a no-op when OFFLINE). Each
+    # (source, model) pair marks only until a catalogue fetched after its
+    # first miss still lacks it (pricing.note_miss).
+    if missed and store:
+        from .pricing import note_miss
+        revisions = {}
+        for source, model in missed:
+            if source not in revisions:
+                revisions[source] = catalogue_revision(c, source)
+            note_miss(source, model, revisions[source], store)
     # Selected rows already include any legacy usage projection. Unselected rows
     # use main.requests exactly; future Store.read connections rebuild the view.
     c.execute('DROP VIEW IF EXISTS temp.requests')

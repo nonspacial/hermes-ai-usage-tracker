@@ -688,7 +688,9 @@ class Store:
             revision = watermark(c) if view is not None else None
             legacy_read_view(c,where,params)
             from .session_cache_writes import project as project_session_writes
-            projected_costs=project_session_writes(c,where,params,end)
+            # Copied-snapshot readers carry the live ledger's key (ledger_key,
+            # None: report no catalogue misses); a Store reads its own ledger.
+            projected_costs=project_session_writes(c,where,params,end,self.ledger_key if hasattr(self,'ledger_key') else str(self.path.resolve()))
             from .session_cache_writes import materialise_summary
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)
@@ -874,7 +876,7 @@ class Store:
             crossing_end=c.execute('SELECT COUNT(*) FROM requests WHERE '+where+' AND (ended IS NULL OR ended>=?)',params+[end]).fetchone()[0] if include('crossing_end') else None
             crossing=c.execute('SELECT COUNT(*) FROM requests WHERE started<? AND (ended IS NULL OR ended>=?)'+where[len('started>=? AND started<?'):],[start,start]+params[2:]).fetchone()[0] if include('crossing_start') else None
         result={'generated_at':time.time(),'seq':seq,'window':{'start':start,'end':end,'basis':'request/compaction start time; crossing requests are not split'},
-          **attribution,'summary':total,'requests':rows,'request_count':total['attempts'],'next_offset':offset+limit if offset+limit<total['attempts'] else None,
+          **attribution,'summary':total,'unpriced_total':unpriced_total(total),'requests':rows,'request_count':total['attempts'],'next_offset':offset+limit if offset+limit<total['attempts'] else None,
           'compressions':comps,'compression_count':compression_count,'compression_truncated':compression_count>1000,
           'groups':groups,'provider_groups':provider_groups,'model_groups':model_groups,'trend':trend,'price_catalogs':catalogs,
           'applied_rate_groups':applied_rates,'cache_read_progression':read_progression,
@@ -938,6 +940,8 @@ def summary(rows):
          'cost_components':{k:Decimal(0) for k in BUCKETS},'cost_missing_fields':{k:0 for k in BUCKETS},'unpriced_requests':0,'priced_requests':0,'supplemental_requests':0,'known_cost_usd':Decimal(0)}
     savings_keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:Decimal(0) for k in savings_keys};out['savings_missing']={k:0 for k in savings_keys}
+    from .pricing import UNPRICED_REASONS, gap_reason
+    out['unpriced']={'requests':0,'tokens':0,'reasons':{k:0 for k in UNPRICED_REASONS}}
     from .session_cache_writes import blank_summary, add_summary
     out['session_cache_writes']=blank_summary()
     from .ownership import execution_state
@@ -966,7 +970,14 @@ def summary(rows):
         cost=r.get('cost') or {}
         if r.get('supplemental_valuation'):out['supplemental_requests']+=1
         if cost.get('complete'):out['priced_requests']+=1
-        else:out['unpriced_requests']+=1
+        else:
+            out['unpriced_requests']+=1
+            out['unpriced']['requests']+=1
+            # total_tokens, else the disjoint buckets it would sum (SQL agrees).
+            out['unpriced']['tokens']+=(u['total_tokens'] if u.get('total_tokens') is not None
+                                        else sum(u.get(k) or 0 for k in BUCKETS))
+            reason=r.get('unpriced_reason') or gap_reason(r)
+            out['unpriced']['reasons'][reason if reason in out['unpriced']['reasons'] else 'no_catalogue']+=1
         for k in BUCKETS:
             value=cost.get('components',{}).get(k)
             if value is None:out['cost_missing_fields'][k]+=1
@@ -1016,6 +1027,14 @@ def _exprs():
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost.components."+k+"')),'0') AS c_"+k,"COALESCE(SUM(json_extract(data,'$.cost.components."+k+"') IS NULL),0) AS cm_"+k]
     for k in ('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd'):
         cols += ["COALESCE(decimal_sum(json_extract(data,'$.cost."+k+"')),'0') AS s_"+k,"COALESCE(SUM(json_extract(data,'$.cost."+k+"') IS NULL),0) AS sm_"+k]
+    # Unpriced signal: known tokens and read-time reason of every request
+    # without a complete cost (no CASE: materialise_summary rewrites CASE).
+    from .pricing import UNPRICED_REASONS
+    gap="(COALESCE(json_extract(data,'$.cost.complete'),0)!=1)"
+    known="COALESCE(json_extract(data,'$.usage.total_tokens'),"+'+'.join("COALESCE(json_extract(data,'$.usage."+k+"'),0)" for k in BUCKETS)+")"
+    cols.append("COALESCE(SUM("+known+"*"+gap+"),0) AS up_tokens")
+    for name in UNPRICED_REASONS:
+        cols.append("COALESCE(SUM("+gap+" AND COALESCE(json_extract(data,'$.unpriced_reason'),'no_catalogue')='"+name+"'),0) AS ur_"+name)
     # Avoid Python/JSON calls for terminal history; inspect only open owners.
     from .session_cache_writes import READ_STATE_SQL
     state=READ_STATE_SQL
@@ -1027,6 +1046,9 @@ def summary_from_sql(row):
     from .session_cache_writes import blank_summary
     out['session_cache_writes']=dict(blank_summary(),tokens=row['cw_tokens'],compared_requests=row['cw_compared'],baseline_requests=row['cw_baselines'],missing_requests=row['cw_missing'])
     out['unpriced_requests']=out['attempts']-out['priced_requests']
+    from .pricing import UNPRICED_REASONS
+    out['unpriced']={'requests':out['unpriced_requests'],'tokens':row['up_tokens'],
+                     'reasons':{name:row['ur_'+name] for name in UNPRICED_REASONS}}
     keys=('cache_read_savings_usd','cache_write_premium_usd','cache_savings_usd')
     out['savings']={k:row['s_'+k] for k in keys};out['savings_missing']={k:row['sm_'+k] for k in keys}
     out['missing_reasons']={k:{name:row['mr_'+k+'_'+name] for name in ('awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field')} for k in METRICS}
@@ -1034,6 +1056,10 @@ def summary_from_sql(row):
         out[group]={k:row[prefix+k] for k in fields}
     out['cache_hit_rate']=out['known']['cache_read_tokens']/out['known']['prompt_tokens'] if out['known']['prompt_tokens'] and not out['missing_fields']['cache_read_tokens'] and not out['missing_fields']['prompt_tokens'] else None
     return out
+def unpriced_total(total):
+    """Header-level window signal derived from the window summary."""
+    gap=(total or {}).get('unpriced') or {}
+    return {'requests':gap.get('requests',0),'tokens':gap.get('tokens',0)}
 def sql_summary(c,where,params,summary_sql=SUMMARY_SQL):
     return summary_from_sql(c.execute('SELECT '+summary_sql+' FROM requests WHERE '+where,params).fetchone())
 

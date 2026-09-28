@@ -164,11 +164,16 @@ def test_ollama_cache_write_unpublished_not_zero():
     rows=p.parse_ollama('<table><tr><th>Model</th><th>Input</th><th>Cached input</th><th>Output</th></tr><tr><td>gpt-oss:120b</td><td>$0.15</td><td>$0.014</td><td>$0.60</td></tr></table>')
     assert Decimal(rows[0]['cache_read_tokens'])==Decimal('.014') and rows[0]['cache_write_tokens'] is None
 
-def test_unknown_models_and_tiers_remain_unpriced(tmp_path):
+def test_unknown_models_unpriced_and_unknown_tiers_default_labelled(tmp_path):
     s=Store(tmp_path)
     for i,kwargs in enumerate([{'model':'gpt-6-astra-900k'},{'model':'gpt-6-astra','service_tier':'super-fast-unpublished'}]):
         s.request(req(str(i),**kwargs),'request_completed')
-    assert all(not r['cost']['complete'] and r['cost']['rate'] is None for r in s.read()['requests'])
+    rows={r['id']:r for r in s.read()['requests']}
+    assert not rows['0']['cost']['complete'] and rows['0']['cost']['rate'] is None
+    assert rows['0']['unpriced_reason']=='model_missing'
+    # Fail-open: an unknown tier takes the documented standard table, flagged.
+    rate=rows['1']['cost']['rate']
+    assert rate['service_tier']=='standard' and rate['tier_assumption'] is True and rate['tier_basis']=='unknown_value_as_default'
 
 def test_returned_model_and_priority_fast_exact_match(tmp_path):
     s=Store(tmp_path);s.request(req(model='gpt-6-astra-900k',response_model='gpt-6-astra',service_tier='priority'),'request_completed')

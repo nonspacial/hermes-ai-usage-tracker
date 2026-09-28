@@ -193,7 +193,7 @@ Click the badge to check recorder status and reconnect the analytics subscriptio
 
 ### A cost or quota is missing
 
-Check whether the provider reports that value. Token recording, subscription quota and pricing have separate coverage. Refresh prices for an unpriced model, but do not expect an unsupported model or provider to gain a price. Missing values are intentionally left unknown.
+Check whether the provider reports that value. Token recording, subscription quota and pricing have separate coverage. A provider without its own catalogue is estimated from the OpenRouter list price for the same model id and labelled **List price** (hover for the matched id and basis). Anything still unpriced shows a ⚠ count marker whose tooltip gives the reason (no catalogue yet, model not listed, ambiguous id, usage missing, or a tier/endpoint without a published rate), and the header shows how many tokens are unpriced. A read that finds an unlisted model prompts a background price refresh within about an hour; **Refresh provider prices** does it at once. Missing values are never guessed.
 
 ### A large report is slow
 

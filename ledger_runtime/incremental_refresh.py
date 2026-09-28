@@ -15,7 +15,7 @@ import time
 from .aggregate import merge_summaries
 from .incremental import changes, watermark
 from .session_cache_writes import stream_key
-from .storage import request_predicate
+from .storage import request_predicate, unpriced_total
 
 MAX_BUCKETS = 4
 MAX_BUCKET_ROWS = 2048
@@ -131,6 +131,11 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
                                   [max(start,b),min(end,b+step)]).fetchone()[0] > MAX_BUCKET_ROWS
                for b in affected):
             return None
+    # A seed sealed before the unpriced signal cannot rebuild its groups.
+    parts=[row for bucket in seed.get('subagent',{}).values() for row in (bucket,)]
+    parts+=[row for kind in ('provider','model') for bucket in seed.get(kind,{}).values() for row in bucket.values()]
+    if any(not isinstance(row,dict) or 'unpriced' not in row for row in parts):
+        return None
     new = deepcopy(response)
     # JSON object keys in the sealed client token are strings, while freshly
     # calculated SQLite bucket numbers are integers. Normalize before replace.
@@ -171,6 +176,7 @@ def replace_buckets(reader, args, response, seed, since, *, group='time', maximu
                                            args[8],args[9],args[10],args[11])
         new['summary']=merge_summaries([{k:v for k,v in r.items() if k not in ('start','end','peak_observed','provider_buckets')}
                                         for r in new['trend']['buckets']])
+        new['unpriced_total']=unpriced_total(new['summary'])
         new['summary']['sessions']=connection.execute('SELECT COUNT(DISTINCT NULLIF(session_id,\'\')) '
                                                       'FROM requests WHERE '+where,params).fetchone()[0]
         providers = []
