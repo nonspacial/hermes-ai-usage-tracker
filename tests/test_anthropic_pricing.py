@@ -825,7 +825,7 @@ def run_aux(env, base_url, provider='anthropic', asynchronous=False):
     ('https://api.anthropic.com./', 'first_party', True),
     ('https://proxy.example/anthropic', 'custom', False),     # custom gateway: never first-party valuation
     ('https://api.anthropic.com.evil.example', 'custom', False),
-    (None, 'unverified', False),                               # provenance unavailable: unpriced
+    (None, 'unverified', False),                               # provenance unavailable: no first-party rate (fixture has no router snapshot, so unpriced)
 ])
 def test_auxiliary_capture_preserves_endpoint_identity(aux_env, base_url, endpoint, priced, asynchronous):
     record_ = run_aux(aux_env, base_url, asynchronous=asynchronous)

@@ -81,7 +81,8 @@ _AUX_FALLBACK=re.compile(r'(?:fallback_chain\[\d+\]|fallback_providers\[\d+\]|ma
 _AUX_HOSTS={'chatgpt.com':'openai-codex','api.openai.com':'openai','openrouter.ai':'openrouter'}
 _AUX_HOST_SUFFIXES=(('githubcopilot.com','copilot'),('x.ai','xai'))
 # Core's native-Anthropic wrappers. Only a secondary signal when the endpoint is
-# unreadable; its endpoint class is then 'unverified' (unpriced). The Codex
+# unreadable; its endpoint class is then 'unverified' (never first-party
+# rates; labelled OpenRouter list-price fallback or unpriced). The Codex
 # wrapper is deliberately absent: core also uses it for xAI, Copilot, Bedrock
 # and custom Responses endpoints, so its class names no provider.
 _AUX_ANTHROPIC_CLASSES=frozenset({'AnthropicAuxiliaryClient','AsyncAnthropicAuxiliaryClient'})
