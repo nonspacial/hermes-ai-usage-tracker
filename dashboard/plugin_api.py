@@ -620,7 +620,7 @@ def _anthropic_limits(budget: float) -> list[_Limit]:
     if not budget > 0:
         return []
     try:
-        from agent.anthropic_adapter import _is_oauth_token, resolve_anthropic_token
+        from agent.anthropic_credentials import _is_oauth_token, resolve_anthropic_token
 
         token = str(resolve_anthropic_token() or "").strip()
         if not token or not _is_oauth_token(token):

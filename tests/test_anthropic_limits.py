@@ -94,7 +94,7 @@ class Host:
         env_loader.hydrate_profile_secret_sources = lambda home: None
         hermes_cli = ModuleType('hermes_cli'); hermes_cli.__path__ = []
 
-        adapter = ModuleType('agent.anthropic_adapter')
+        adapter = ModuleType('agent.anthropic_credentials')
         host = self
         def resolve_anthropic_token():
             # Scoped read: nothing outside a bound profile scope (no env fallback).
@@ -125,7 +125,7 @@ class Host:
                 fetched_at=datetime(2030, 1, 1, tzinfo=timezone.utc))
         account_usage.fetch_account_usage = fetch_account_usage
         for name, module in (('agent', agent), ('agent.secret_scope', scope),
-                             ('agent.anthropic_adapter', adapter), ('agent.account_usage', account_usage),
+                             ('agent.anthropic_credentials', adapter), ('agent.account_usage', account_usage),
                              ('hermes_cli', hermes_cli), ('hermes_cli.env_loader', env_loader)):
             monkeypatch.setitem(sys.modules, name, module)
 
