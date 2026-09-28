@@ -145,22 +145,50 @@ def test_unknown_request_tier_takes_list_default_flagged():
     assert 'tier_basis' not in plain
 
 
-def test_local_endpoint_is_known_zero_and_recorded_as_class_only():
-    assert p.endpoint_host_class('http://127.0.0.1:11434/v1') == 'local'
-    assert p.endpoint_host_class('http://localhost:1234/v1') == 'local'
-    assert p.endpoint_host_class('http://192.168.1.20:8000') == 'local'
-    assert p.endpoint_host_class('http://gpu-box.local:8080') == 'local'
-    for url in ('https://api.groq.com/openai/v1', 'https://8.8.8.8', 'not a url', '', None, 'http://0.0.0.0'):
-        assert p.endpoint_host_class(url) is None, url
-    assert rec.endpoint_class({'provider': 'custom', 'base_url': 'http://127.0.0.1:11434/v1'}) == {'endpoint_host': 'local'}
-    assert rec.endpoint_class({'provider': 'custom', 'base_url': 'https://example.com/v1'}) == {}
-    # Catalogued providers never record the class (they keep their catalogue).
-    assert rec.endpoint_class({'provider': 'ollama', 'base_url': 'http://127.0.0.1:11434'}) == {}
-    rate, reason = p.explain(None, {'provider': 'custom', 'model': 'llama9:70b', 'endpoint_host': 'local',
-                                    'usage': USAGE}, None, 200.0)
-    assert reason is None and rate['pricing_basis'] == 'local_endpoint_zero'
-    cost = a.costs(USAGE, rate)
-    assert cost['complete'] is True and Decimal(cost['total_usd']) == 0
+@pytest.mark.parametrize('endpoint', ['custom', 'unverified'])
+@pytest.mark.parametrize('extra,flags,unknown', [
+    ({'returned_speed': 'turbo'}, {'speed_inferred': True}, {'usage.speed': 'turbo'}),
+    ({'returned_inference_geo': 'eu'}, {'geo_assumption': True, 'geo_basis': p.UNKNOWN_AS_DEFAULT},
+     {'usage.inference_geo': 'eu'}),
+    ({'returned_inference_geo': 'unrecognised'}, {'geo_assumption': True, 'geo_basis': p.UNKNOWN_AS_DEFAULT},
+     {'usage.inference_geo': 'unrecognised'}),
+    ({'returned_usage_service_tier': 'priority_plus'}, {'tier_assumption': True, 'tier_basis': p.UNKNOWN_AS_DEFAULT},
+     {'usage.service_tier': 'priority_plus'}),
+])
+def test_list_price_flags_unknown_returned_enums_like_direct_anthropic(endpoint, extra, flags, unknown):
+    """Unknown returned enums take the list default, always flagged with the value."""
+    rate, reason = select('anthropic', 'claude-opus-9-5', anthropic_endpoint=endpoint, **extra)
+    assert reason is None and rate['pricing_basis'] == 'list_price_fallback'
+    for key, value in flags.items():
+        assert rate[key] == value, (key, rate)
+    assert rate['unknown_values'] == unknown
+    if 'returned_speed' in extra:
+        assert rate['speed_basis'].startswith('unknown usage.speed')
+    # tier_assumption is True whenever tier_basis is set.
+    assert ('tier_basis' not in rate) or rate['tier_assumption'] is True
+    # Priced at the standard list rate (the only row the list carries).
+    assert rate['input_tokens'] == select('anthropic', 'claude-opus-9-5', anthropic_endpoint=endpoint)[0]['input_tokens']
+
+
+def test_list_price_documented_values_carry_no_unknown_flags():
+    for extra in ({'returned_speed': 'standard'}, {'returned_inference_geo': 'global'},
+                  {'returned_inference_geo': 'not_available'}, {'returned_usage_service_tier': 'standard'}, {}):
+        rate, _ = select('anthropic', 'claude-opus-9-5', anthropic_endpoint='custom', **extra)
+        for key in ('tier_basis', 'geo_basis', 'speed_basis', 'unknown_values', 'geo_assumption', 'speed_inferred'):
+            assert key not in rate, (extra, key)
+
+
+def test_private_host_follows_the_normal_path():
+    """No local-endpoint class: base_url is never classified for no-catalogue providers."""
+    for url in ('http://127.0.0.1:11434/v1', 'http://192.168.1.20:8000', 'http://gpu-box.local:8080'):
+        assert rec.endpoint_class({'provider': 'custom', 'base_url': url}) == {}
+    assert not hasattr(p, 'endpoint_host_class') and not hasattr(p, 'local_rate')
+    record = {'provider': 'custom', 'model': 'llama9:70b', 'usage': dict(USAGE)}
+    assert p.source_for(record) == ('openrouter', 'fallback')
+    assert p.explain(None, record, None, 200.0) == (None, 'no_catalogue')
+    assert p.explain(orsnap(), record, 7, 200.0) == (None, 'model_missing')
+    # A matching id takes the labelled list price as usual.
+    assert select('custom', 'grok-9')[0]['pricing_basis'] == 'list_price_fallback'
 
 
 def test_other_providers_selections_are_byte_identical_to_direct_path():
@@ -246,3 +274,57 @@ def test_ledger_saves_labelled_fallback_and_values_history_retrospectively(tmp_p
     assert d['summary'] == summary(d['requests'])
     with s.db() as c:
         assert json.loads(c.execute("SELECT data FROM requests WHERE id='hist'").fetchone()[0]) == stored
+
+
+# --- Catalogue staleness on a read miss ------------------------------------------
+
+def test_note_miss_is_offline_gated_bounded_and_network_free(monkeypatch):
+    monkeypatch.setattr(p, '_STALE', {})
+    monkeypatch.setenv('HERMES_USAGE_PRICING_OFFLINE', '1')
+    assert p.note_miss('openrouter') is False and p._STALE == {}
+    monkeypatch.delenv('HERMES_USAGE_PRICING_OFFLINE')
+    monkeypatch.setattr(p, 'fetch', lambda *_: pytest.fail('note_miss must not fetch'))
+    assert p.note_miss('not-a-source') is False
+    assert p.note_miss('openrouter') is True
+    assert p.note_miss('openrouter') is False          # at most once per hour
+    with p._LOCK:
+        assert p.stale_sources() == {'openrouter'}
+    p._STALE['openrouter'] -= p.MISS_REFRESH_SECONDS   # the hour elapses
+    with p._LOCK:
+        assert p.stale_sources() == frozenset()
+    assert p.note_miss('openrouter') is True
+
+
+def test_stale_source_lifts_daily_skip_at_most_hourly(tmp_path, monkeypatch):
+    s = Store(tmp_path)
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        raise OSError('offline fixture')
+    now = time.time()
+    with s.db() as c:
+        for sid in p.SOURCES:
+            state = {'source_id': sid, 'status': 'ok', 'last_success': now, 'attempted_at': now - 2 * 3600}
+            c.execute('INSERT OR REPLACE INTO pricing_status VALUES(?,?)', (sid, json.dumps(state)))
+    p.refresh(s, fetcher=fetch)
+    assert calls == []                                  # daily success: skipped
+    p.refresh(s, fetcher=fetch, stale=frozenset({'openrouter'}))
+    assert calls == [p.SOURCES['openrouter']['url']]    # miss lifts the skip for that source only
+    p.refresh(s, fetcher=fetch, stale=frozenset({'openrouter'}))
+    assert len(calls) == 1                              # attempted_at bounds it to one per hour
+
+
+def test_read_miss_marks_source_stale_without_network(tmp_path, monkeypatch):
+    marked = []
+    monkeypatch.setattr(p, 'note_miss', marked.append)
+    monkeypatch.setattr(p, 'fetch', lambda *_: pytest.fail('read must not fetch'))
+    s = Store(tmp_path)
+    insert(s, time.time() - 10)
+    now = time.time() - 1
+    s.request(record('hit', 'gemini', 'gemini-9-pro', now), 'request_completed')
+    d = s.read(start=now - 10, end=time.time())
+    assert marked == []
+    s.request(record('miss', 'mistral', 'nothing-9', now), 'request_completed')
+    d = s.read(start=now - 10, end=time.time())
+    assert {r['id']: r.get('unpriced_reason') for r in d['requests']}['miss'] == 'model_missing'
+    assert marked == ['openrouter']

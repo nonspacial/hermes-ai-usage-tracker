@@ -84,6 +84,21 @@ def test_summary_groups_and_header_carry_unpriced(tmp_path):
         assert all('unpriced_reason' not in json.loads(r[0]) for r in c.execute('SELECT data FROM requests'))
 
 
+def test_unpriced_tokens_fall_back_to_buckets_when_total_absent(tmp_path):
+    """SQL and Python summaries agree: total_tokens, else input+output+cache."""
+    store = Store(tmp_path)
+    router(store)
+    partial = {k: v for k, v in USAGE.items() if k != 'total_tokens'} | {'cache_read_tokens': 30, 'cache_write_tokens': 5}
+    put(store, 'no-total', 200, 'xai', 'grok-unknown', usage=partial)
+    put(store, 'with-total', 300, 'xai', 'grok-unknown')
+    d = store.read(*ARGS[:2])
+    rows = {r['id']: r for r in d['requests']}
+    assert rows['no-total']['usage'].get('total_tokens') is None
+    assert d['summary']['unpriced']['tokens'] == (100 + 20 + 30 + 5) + 120
+    assert summary(d['requests'])['unpriced'] == d['summary']['unpriced']
+    assert d['unpriced_total'] == {'requests': 2, 'tokens': 275}
+
+
 def test_no_catalogue_reason_before_router_refresh(tmp_path):
     store = mixed(tmp_path, catalogue=False)
     s = store.read(*ARGS[:2])['summary']

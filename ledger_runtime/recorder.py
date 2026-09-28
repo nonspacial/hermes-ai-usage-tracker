@@ -152,16 +152,10 @@ def usage_enums(usage):
     return out
 
 def endpoint_class(kw):
-    from .pricing import PROVIDERS, anthropic_endpoint, endpoint_host_class
-    provider=text(kw.get('provider'))
-    if provider=='anthropic':
-        kind=anthropic_endpoint(kw.get('base_url'))
-        return {'anthropic_endpoint':kind} if kind else {}
-    # Providers with no catalogue: record only the content-free host class,
-    # so local inference prices at a known $0 instead of staying unpriced.
-    if provider not in PROVIDERS and endpoint_host_class(kw.get('base_url'))=='local':
-        return {'endpoint_host':'local'}
-    return {}
+    if text(kw.get('provider'))!='anthropic':return {}
+    from .pricing import anthropic_endpoint
+    kind=anthropic_endpoint(kw.get('base_url'))
+    return {'anthropic_endpoint':kind} if kind else {}
 
 def body_settings(kw):
     body=mapping(mapping(kw.get('request')).get('body'))

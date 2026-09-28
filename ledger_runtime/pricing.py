@@ -19,6 +19,7 @@ from .accounting import BUCKETS
 
 VERSION='provider-catalog-v2'
 RETRY_SECONDS=15*60
+MISS_REFRESH_SECONDS=60*60  # at most one miss-driven refresh per source per hour
 MAX_BYTES=16*1024*1024
 SOURCES={
  'openai':{'label':'OpenAI','url':'https://developers.openai.com/api/docs/pricing','format':'openai'},
@@ -68,6 +69,11 @@ FALLBACK_MODEL_VENDORS=(
 )
 UNPRICED_REASONS=('no_catalogue','model_missing','ambiguous','usage_missing','endpoint_unpriced')
 UNKNOWN_AS_DEFAULT='unknown_value_as_default'
+# Keys of a rate's ``unknown_values``: which field reported the value the
+# catalogue did not know. Values are the recorder's bounded enum strings (or
+# the request tier text already shown in the Tier column), never content.
+def _tier_field(rec):
+    return 'response service_tier' if rec.get('returned_service_tier') else 'requested service_tier'
 # OpenAI publishes all tier rows in its pricing.md representation. The pricing
 # page's short/long column tooltips publish the boundary, not the model name.
 OPENAI_TABLE_URL=SOURCES['openai']['url']+'.md'
@@ -482,21 +488,6 @@ def anthropic_endpoint(base_url):
     if host.endswith('.'):host=host[:-1]
     return 'first_party' if host=='api.anthropic.com' else 'custom'
 
-def endpoint_host_class(base_url):
-    """'local' for a loopback/private/link-local/.local host, else None.
-
-    Content-free: only the class is recorded, never the URL or host name.
-    """
-    import ipaddress
-    if not isinstance(base_url,str) or not base_url.strip():return None
-    try:host=(urlsplit(base_url.strip()).hostname or '').lower().rstrip('.')
-    except ValueError:return None
-    if not host:return None
-    if host=='localhost' or host.endswith(('.localhost','.local')) or host=='host.docker.internal':return 'local'
-    try:ip=ipaddress.ip_address(host)
-    except ValueError:return None
-    return 'local' if (ip.is_loopback or ip.is_private or ip.is_link_local) and not ip.is_unspecified else None
-
 # Anthropic's documented usage.speed / usage.inference_geo enumerations.
 # 'not_available' is documented (Usage & Cost API) for models that do not
 # accept the inference_geo parameter; standard (global) pricing applies. It
@@ -544,6 +535,7 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
     returned_tier=rec.get('returned_usage_service_tier')
     if returned_tier in _ANTHROPIC_PREMIUM_TIERS:return None,'endpoint_unpriced'  # Priority/Batch: unpublished here
     tier_basis=UNKNOWN_AS_DEFAULT if returned_tier not in (None,'standard') else None
+    unknown={'usage.service_tier':returned_tier} if tier_basis else {}
     requested=str(rec.get('service_tier') or 'unspecified')
     asked_fast=requested=='fast' or rec.get('requested_speed')=='fast'
     returned=rec.get('returned_speed');speed_basis='usage.speed'
@@ -554,14 +546,17 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
         elif requested in _ANTHROPIC_PREMIUM_TIERS:return None,'endpoint_unpriced'
         else:
             speed,speed_basis='standard','unknown requested tier; documented standard speed assumed'
-            tier_basis=UNKNOWN_AS_DEFAULT
-    elif asked_fast:speed,speed_basis='fast','unknown usage.speed value; requested fast assumed'
-    else:speed,speed_basis='standard','unknown usage.speed value; documented standard speed assumed'
+            tier_basis=UNKNOWN_AS_DEFAULT;unknown.setdefault('requested service_tier',requested)
+    else:
+        unknown['usage.speed']=returned
+        if asked_fast:speed,speed_basis='fast','unknown usage.speed value; requested fast assumed'
+        else:speed,speed_basis='standard','unknown usage.speed value; documented standard speed assumed'
     geo=rec.get('returned_inference_geo')
     geo_basis=None
     if geo is not None and geo not in _ANTHROPIC_GEOS:
         geo_basis=(ANTHROPIC_UNRECOGNISED_GEO_AS_GLOBAL if _unrecognised_geo_as_global(rec,speed,asked_fast,retrospective)
                    else UNKNOWN_AS_DEFAULT)
+        if geo_basis==UNKNOWN_AS_DEFAULT:unknown['usage.inference_geo']=geo
     rate_geo='global' if geo is None or geo_basis else _ANTHROPIC_GEOS[geo]
     known=[r for r in s['rates'] if r['model']==model]
     if not known:return None,'model_missing'
@@ -587,12 +582,14 @@ def _select_anthropic(s,rec,revision,stamp,retrospective):
        'catalog_revision':revision,'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
        'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
        'retrospective':retrospective,'requested_service_tier':requested,
-       'tier_assumption':not reported and not asked_fast,
+       # Any tier_basis is an assumption too (PRICING_SOURCES.md).
+       'tier_assumption':(not reported and not asked_fast) or bool(tier_basis),
        # True whenever the provider did not return a known usage.speed: a
        # requested fast speed is an inference, not a confirmed returned speed.
        'speed_inferred':not reported,
        'speed_basis':speed_basis,'geo_assumption':bool(geo_basis) or (geo is None and geo_possible),
        **({'geo_basis':geo_basis} if geo_basis else {}),**({'tier_basis':tier_basis} if tier_basis else {}),
+       **({'unknown_values':unknown} if unknown else {}),
        'endpoint_assumption':endpoint is None,
        'basis':'API-equivalent estimate at Anthropic public list prices; not a subscription debit or provider-reported charge',
        'pricing_basis':'provider_catalog_estimate',
@@ -636,7 +633,7 @@ def seed(store):
             c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',
                       (s['source_id'],s['observed_at'],json.dumps(s)))
 
-def refresh(store,force=False,fetcher=fetch):
+def refresh(store,force=False,fetcher=fetch,stale=frozenset()):
     """Runs only in a background thread or explicit tests, never in a request callback."""
     import fcntl
     lockfile=store.folder/'pricing-refresh.lock'
@@ -651,8 +648,11 @@ def refresh(store,force=False,fetcher=fetch):
             # Success is scoped to a UTC calendar day, not a rolling timer.
             # A failed attempt cannot suppress a new day's refresh; retries
             # within the day are bounded even if the last good catalog is older.
-            if not force and previous.get('last_success') and utc_day(previous['last_success'])==utc_day(now):continue
-            minimum_interval = 60 if force else RETRY_SECONDS if previous.get('status')!='ok' else 0
+            done=bool(previous.get('last_success')) and utc_day(previous['last_success'])==utc_day(now)
+            # A read miss (note_miss) lifts only the daily skip, at most hourly.
+            missed=done and not force and sid in stale
+            if not force and done and not missed:continue
+            minimum_interval = 60 if force else MISS_REFRESH_SECONDS if missed else RETRY_SECONDS if previous.get('status')!='ok' else 0
             if now-previous.get('attempted_at',0)<minimum_interval:continue
             state={**previous,'source_id':sid,'label':source['label'],'source_url':source['url'],'attempted_at':now}
             try:
@@ -682,18 +682,43 @@ def start_worker(store,force=False):
     with _LOCK:
         entry=_WORKERS.get(key)
         if entry and entry[0].is_alive():
-            if force:entry[1].set()
+            if force:entry[2][0]=True;entry[1].set()
             return
-        wake=threading.Event()
+        wake=threading.Event();manual=[force]
         if force:
             wake.set()
         def loop():
             while True:
-                manual=wake.is_set();wake.clear()
-                try:refresh(store,force=manual)
+                forced,manual[0]=manual[0],False;wake.clear()
+                with _LOCK:stale=stale_sources()
+                try:refresh(store,force=forced,**({'stale':stale} if stale else {}))
                 except Exception:pass # stored refresh status still reports each source failure
                 wake.wait(RETRY_SECONDS)
-        thread=threading.Thread(target=loop,daemon=True,name='usage-provider-prices');_WORKERS[key]=(thread,wake);thread.start()
+        thread=threading.Thread(target=loop,daemon=True,name='usage-provider-prices');_WORKERS[key]=(thread,wake,manual);thread.start()
+
+_STALE={}
+
+def stale_sources():
+    """Sources with a read miss in the last MISS_REFRESH_SECONDS (caller holds _LOCK)."""
+    now=time.monotonic()
+    for sid in [k for k,t in _STALE.items() if now-t>=MISS_REFRESH_SECONDS]:del _STALE[sid]
+    return frozenset(_STALE)
+
+def note_miss(source):
+    """A read found no row (model_missing/no_catalogue) in ``source``.
+
+    In-memory only: no network, no ledger write, nothing when OFFLINE. Wakes
+    this process's refresh workers, which lift the once-per-day skip for the
+    source, bounded to one attempt per MISS_REFRESH_SECONDS (persisted
+    attempted_at, so across processes too). Marks expire after the bound.
+    """
+    if os.environ.get('HERMES_USAGE_PRICING_OFFLINE')=='1' or source not in SOURCES:return False
+    now=time.monotonic()
+    with _LOCK:
+        if now-_STALE.get(source,-MISS_REFRESH_SECONDS)<MISS_REFRESH_SECONDS:return False
+        _STALE[source]=now
+        for entry in _WORKERS.values():entry[1].set()
+    return True
 
 def catalog_status(c,provider=''):
     wanted=source_for({'provider':provider})[0] if provider else None
@@ -720,16 +745,12 @@ def source_for(rec):
     if sid=='anthropic' and rec.get('anthropic_endpoint') not in (None,'first_party'):
         return FALLBACK_SOURCE,'fallback'
     if sid:return sid,'direct'
-    # A no-catalogue provider served from a loopback/private host is local
-    # inference (Ollama, LM Studio, vLLM, llama.cpp): a known $0.
-    if rec.get('endpoint_host')=='local':return None,'local'
     return FALLBACK_SOURCE,'fallback'
 
 def lookup(c,rec):
     sid,mode=source_for(rec);model=rec.get('response_model') or rec.get('model')
     if not model:return None
     stamp=rec.get('ended') or time.time()
-    if mode=='local':return explain(None,rec,None,stamp)[0]
     row=c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? AND observed<=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,stamp)).fetchone()
     if not row:return None
     return select_rate(json.loads(row['data']),rec,row['id'],stamp)
@@ -749,7 +770,7 @@ def unpriced_reason(rec,snapshot,revision=None,stamp=None,*,retrospective=True):
     ledger holds none). Reads classify with the same selection code that
     prices, so the reason cannot disagree with the rate that was not chosen.
     """
-    if snapshot is None and source_for(rec)[1]!='local':return 'no_catalogue'
+    if snapshot is None:return 'no_catalogue'
     return explain(snapshot,rec,revision,stamp if stamp is not None else rec.get('ended') or 0,
                    retrospective=retrospective)[1] or 'endpoint_unpriced'
 
@@ -779,9 +800,6 @@ def explain(s,rec,revision,stamp,*,retrospective=False):
     """(rate, None) or (None, reason). Pure selection against one snapshot."""
     sid,mode=source_for(rec);model=rec.get('response_model') or rec.get('model')
     if not model:return None,'model_missing'
-    if mode=='local':
-        try:return local_rate(rec,stamp,retrospective),None
-        except ValueError:return None,'model_missing'
     if not s or s.get('source_id')!=sid:return None,'no_catalogue'
     if mode=='fallback':return _select_list_price(s,rec,model,revision,stamp,retrospective)
     if sid=='anthropic':return _select_anthropic(s,rec,revision,stamp,retrospective)
@@ -803,7 +821,7 @@ def explain(s,rec,revision,stamp,*,retrospective=False):
        'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
        'retrospective':retrospective,
        'requested_service_tier':t,'tier_assumption':t in ('unspecified','auto','') or bool(tier_basis),
-       **({'tier_basis':tier_basis} if tier_basis else {}),
+       **({'tier_basis':tier_basis,'unknown_values':{_tier_field(rec):t}} if tier_basis else {}),
        'basis':('subscription API-equivalent estimate; not a subscription debit' if rec['provider']=='openai-codex'
                 else 'serving-provider public catalog estimate; not a provider-reported charge'),
        'pricing_basis':('subscription_api_equivalent' if rec['provider']=='openai-codex' else 'provider_catalog_estimate'),
@@ -865,20 +883,6 @@ def fallback_candidates(provider,model):
 
 _LIST_STANDARD={'standard','unspecified','auto','default','','standard_only'}
 
-def local_rate(rec,stamp,retrospective):
-    """$0 rate for a no-catalogue provider served from a local host class."""
-    t=str(rec.get('returned_service_tier') or rec.get('service_tier') or 'unspecified')
-    return {**rate(str(rec.get('response_model') or rec.get('model')),'standard',['0','0','0','0']),
-            'provider':rec['provider'],'source':'Local endpoint','source_url':None,
-            'catalog_revision':None,'observed_at':None,'content_sha256':None,'origin':'local_endpoint',
-            'stale_at_request':False,'retrospective':retrospective,'requested_service_tier':t,
-            'tier_assumption':False,'endpoint_host':rec.get('endpoint_host'),
-            'basis':LOCAL_BASIS,'pricing_basis':'local_endpoint_zero',
-            'scope':'self-hosted inference: no per-token provider charge; hardware and power are not costed'}
-
-LOCAL_BASIS=('Served from a local/private-network endpoint: no per-token provider charge. A local proxy '
-             'that forwards to a paid API would be undercounted')
-
 def _select_list_price(s,rec,model,revision,stamp,retrospective):
     """Labelled OpenRouter list price for a provider with no catalogue here."""
     # Known premiums the list does not carry stay unpriced, never discounted.
@@ -897,11 +901,28 @@ def _select_list_price(s,rec,model,revision,stamp,retrospective):
     candidates,reason=_band([r for r in index[match[1]] if r['service_tier']=='standard'],rec)
     if reason:return None,reason
     r=copy.deepcopy(candidates[0])
+    # Fail-open like _select_anthropic: an unknown returned enum takes the
+    # list default (standard speed, global geo, standard tier), always
+    # flagged and with the reported value kept; known premiums returned above.
+    unknown,flags={},{}
+    if t not in _LIST_STANDARD:unknown[_tier_field(rec)]=t
+    usage_tier=rec.get('returned_usage_service_tier')
+    if usage_tier not in (None,'standard'):unknown['usage.service_tier']=usage_tier
+    if unknown:flags['tier_basis']=UNKNOWN_AS_DEFAULT
+    speed=rec.get('returned_speed')
+    if speed not in (None,'standard'):
+        unknown['usage.speed']=speed
+        flags.update(speed_inferred=True,speed_basis='unknown usage.speed value; documented standard speed assumed')
+    geo=rec.get('returned_inference_geo')
+    if geo not in (None,'global','not_available'):
+        unknown['usage.inference_geo']=geo
+        flags.update(geo_assumption=True,geo_basis=UNKNOWN_AS_DEFAULT)
+    if unknown:flags['unknown_values']=unknown
     return {**r,'provider':rec['provider'],'source':s['source']+' list price (fallback)','source_url':s['source_url'],
        'catalog_revision':revision,'observed_at':s['observed_at'],'content_sha256':s['content_sha256'],
        'origin':s['origin'],'stale_at_request':not retrospective and utc_day(stamp)!=utc_day(s['observed_at']),
        'retrospective':retrospective,'requested_service_tier':t,
-       'tier_assumption':t!='standard',**({'tier_basis':UNKNOWN_AS_DEFAULT} if t not in _LIST_STANDARD else {}),
+       'tier_assumption':t!='standard' or 'tier_basis' in flags,**flags,
        'fallback_model':match[1],'fallback_match':match[0],
        'basis':LIST_PRICE_BASIS,'pricing_basis':'list_price_fallback',
        'scope':'text tokens at the router list price; excludes serving-provider discounts, uplifts, tools, media and tax'},None

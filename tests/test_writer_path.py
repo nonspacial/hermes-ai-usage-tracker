@@ -205,6 +205,20 @@ def test_usage_enum_metadata_differs_only_where_reference_sentinelled(reference)
     assert changed > 0
 
 
+def test_endpoint_class_is_identical_to_reference(reference):
+    """No writer difference outside usage-enum values: the endpoint class the
+    recorder stores is byte-identical to 93f5475 for every provider and host,
+    including loopback/private hosts (no endpoint host class is recorded)."""
+    old = importlib.import_module(reference + '.recorder')
+    urls = [None, '', 'http://127.0.0.1:11434/v1', 'http://localhost:1234/v1', 'http://192.168.1.20:8000',
+            'http://gpu-box.local:8080', 'http://host.docker.internal:11434', 'https://api.anthropic.com',
+            'https://api.anthropic.com.', 'https://gateway.example/anthropic', 'https://api.groq.com/openai/v1']
+    for provider in ('anthropic', 'custom', 'ollama', 'openrouter', 'copilot', 'xai', 'openai-codex', ''):
+        for url in urls:
+            kw = {'provider': provider, 'base_url': url}
+            assert r.endpoint_class(kw) == old.endpoint_class(kw), kw
+
+
 def test_health_cadence_keeps_lease_and_writes_state_changes(tmp_path, monkeypatch):
     from _hermes_ai_usage_ledger_v2 import adapters, connection
     clock = Clock()

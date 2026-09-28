@@ -234,10 +234,9 @@ def project(c, where, params, end):
     from .accounting import costs
     catalogs = {}
     projected_costs = {}
+    missed = set()
 
     def catalog(source):
-        if source is None:
-            return None
         if source not in catalogs:
             row = c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1', (source,)).fetchone()
             catalogs[source] = (row['id'], json.loads(row['data'])) if row else None
@@ -248,16 +247,15 @@ def project(c, where, params, end):
         data['calculated_cache_writes'] = changes.get(r['id']) or observation(data)
         original = data.get('cost') or {}
         # Every provider has a price path: its own catalogue, the labelled
-        # OpenRouter list-price fallback, or a local endpoint's known $0.
-        source, mode = source_for(data)
+        # OpenRouter list-price fallback.
+        source, _ = source_for(data)
         if (data.get('ended') is not None and data.get('status') not in ('pending','usage_received')
                 and not original.get('rate') and not original.get('complete')
                 and Decimal(original.get('known_components_usd') or '0') == 0
                 and data.get('usage') and any(count(data['usage'].get(k)) for k in
                     ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'))):
             snapshot = catalog(source)
-            rate = (select_rate(snapshot[1] if snapshot else None, data, snapshot[0] if snapshot else None,
-                                data['ended'], retrospective=True) if snapshot or mode == 'local' else None)
+            rate = select_rate(snapshot[1], data, snapshot[0], data['ended'], retrospective=True) if snapshot else None
             if rate:
                 # The displayed cost is a TEMP read projection. Its original
                 # (possibly legacy-adjusted) cost and usage remain inspectable;
@@ -266,8 +264,8 @@ def project(c, where, params, end):
                 data['cost'] = costs(data['usage'], rate)
                 data['supplemental_valuation'] = {
                     'basis': 'current_published_rate_for_past_usage',
-                    'not_historical_charge': True, 'source_id': source or rate['origin'],
-                    'catalog_revision': rate['catalog_revision'], 'observed_at': rate['observed_at'],
+                    'not_historical_charge': True, 'source_id': source,
+                    'catalog_revision': snapshot[0], 'observed_at': rate['observed_at'],
                     'request_ended_at': data['ended'], 'model': rate['model'],
                     'service_tier': rate['service_tier'], 'context_band': rate.get('context_band'),
                     'inference_geo': rate.get('inference_geo'),
@@ -278,10 +276,17 @@ def project(c, where, params, end):
         if not cost.get('complete'):
             snapshot = catalog(source) if not cost.get('rate') else None
             data['unpriced_reason'] = gap_reason(data, snapshot[1] if snapshot else None)
+            if data['unpriced_reason'] in ('model_missing', 'no_catalogue'):
+                missed.add(source)
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',
                   (r['id'], json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))
         # JSON round-trips str/int/float/bool/None/list/dict exactly.
         projected_costs[r['id']] = data.get('cost')
+    # A miss marks the source stale for the background refresher (in-memory,
+    # bounded hourly, never a network call here and a no-op when OFFLINE).
+    from .pricing import note_miss
+    for source in missed:
+        note_miss(source)
     # Selected rows already include any legacy usage projection. Unselected rows
     # use main.requests exactly; future Store.read connections rebuild the view.
     c.execute('DROP VIEW IF EXISTS temp.requests')

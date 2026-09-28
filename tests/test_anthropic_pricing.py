@@ -316,8 +316,15 @@ def test_standard_fast_geo_and_tier_boundaries():
         assert got['geo_basis'] == p.UNKNOWN_AS_DEFAULT == 'unknown_value_as_default', geo
     turbo = select({**base, 'service_tier': 'turbo'}, s)
     assert turbo['service_tier'] == 'standard' and turbo['tier_basis'] == p.UNKNOWN_AS_DEFAULT
+    assert turbo['unknown_values'] == {'requested service_tier': 'turbo'}
     flex = select({**base, 'returned_usage_service_tier': 'flex'}, s)
     assert flex['service_tier'] == 'standard' and flex['tier_basis'] == p.UNKNOWN_AS_DEFAULT
+    assert flex['unknown_values'] == {'usage.service_tier': 'flex'}
+    # tier_assumption is True whenever tier_basis is set, even with a reported speed.
+    reported = select({**base, 'returned_usage_service_tier': 'flex', 'returned_speed': 'standard'}, s)
+    assert reported['tier_basis'] == p.UNKNOWN_AS_DEFAULT and reported['tier_assumption'] is True
+    assert speed['unknown_values'] == {'usage.speed': 'warp'}
+    assert select({**base, 'returned_inference_geo': 'eu'}, s)['unknown_values'] == {'usage.inference_geo': 'eu'}
     # Unknown speed on a fast request keeps the fast premium (never discounted).
     assert select({**base, 'service_tier': 'fast', 'returned_speed': 'warp'}, s)['service_tier'] == 'fast'
     # Documented values carry no tier_basis.

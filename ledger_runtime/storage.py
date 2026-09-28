@@ -971,7 +971,9 @@ def summary(rows):
         else:
             out['unpriced_requests']+=1
             out['unpriced']['requests']+=1
-            out['unpriced']['tokens']+=u.get('total_tokens') or 0
+            # total_tokens, else the disjoint buckets it would sum (SQL agrees).
+            out['unpriced']['tokens']+=(u['total_tokens'] if u.get('total_tokens') is not None
+                                        else sum(u.get(k) or 0 for k in BUCKETS))
             reason=r.get('unpriced_reason') or gap_reason(r)
             out['unpriced']['reasons'][reason if reason in out['unpriced']['reasons'] else 'no_catalogue']+=1
         for k in BUCKETS:
@@ -1027,7 +1029,8 @@ def _exprs():
     # without a complete cost (no CASE: materialise_summary rewrites CASE).
     from .pricing import UNPRICED_REASONS
     gap="(COALESCE(json_extract(data,'$.cost.complete'),0)!=1)"
-    cols.append("COALESCE(SUM(json_extract(data,'$.usage.total_tokens')*"+gap+"),0) AS up_tokens")
+    known="COALESCE(json_extract(data,'$.usage.total_tokens'),"+'+'.join("COALESCE(json_extract(data,'$.usage."+k+"'),0)" for k in BUCKETS)+")"
+    cols.append("COALESCE(SUM("+known+"*"+gap+"),0) AS up_tokens")
     for name in UNPRICED_REASONS:
         cols.append("COALESCE(SUM("+gap+" AND COALESCE(json_extract(data,'$.unpriced_reason'),'no_catalogue')='"+name+"'),0) AS ur_"+name)
     # Avoid Python/JSON calls for terminal history; inspect only open owners.

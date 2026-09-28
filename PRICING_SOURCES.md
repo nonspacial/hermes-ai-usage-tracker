@@ -56,7 +56,8 @@ Rules:
 - **Fail-open on unknown enum values.** A `usage.speed`, `usage.inference_geo` or `usage.service_tier` value the catalogue does not know selects the documented default — standard speed, global geo, standard tier — and is always flagged:
   - speed: `speed_inferred: true`, `speed_basis: 'unknown usage.speed value; documented standard speed assumed'` (a fast request keeps the fast rate: `requested fast assumed`);
   - geo: `geo_assumption: true`, `geo_basis: unknown_value_as_default` (`pricing.UNKNOWN_AS_DEFAULT`);
-  - tier (returned usage tier or unknown requested tier): `tier_assumption: true`, `tier_basis: unknown_value_as_default`.
+  - tier (returned usage tier or unknown requested tier): `tier_assumption: true`, `tier_basis: unknown_value_as_default`. `tier_assumption` is true whenever `tier_basis` is set, on every path (direct, routed and list-price).
+  Every such rate also carries `unknown_values` (`{'usage.speed'|'usage.inference_geo'|'usage.service_tier'|'requested service_tier'|'response service_tier': value}`) so the display can quote the reported value.
   Values with a known premium keep exact handling: `us` 1.1×, `fast`, Priority/Batch (unpriced).
 - **Data residency.**
   - `usage.inference_geo: us` uses the published 1.1× rate. This applies only to 4.6+ models, which accept `inference_geo`.
@@ -86,7 +87,13 @@ Rules:
   - Auxiliary calls (titling, compression, …) are classified from the client object Hermes passes to its relay funnel, with the same helper. When that client exposes no readable `base_url` the call is recorded `unverified` and takes the labelled list-price fallback, including retrospectively; an auxiliary Anthropic client may point at a configured gateway, so it is never assumed first-party.
 - **Model names.** Hermes wire names are normalised only as Hermes does for direct Anthropic: strip an `anthropic/` prefix and change `.` to `-`. The result must then exactly match a documented ID or alias. Bedrock/Vertex IDs, `-latest` and undocumented snapshots stay unpriced.
 - **Recorder metadata.** `usage.speed`, `usage.inference_geo` and `usage.service_tier` are kept **verbatim** when they are bounded, content-free enum strings (1–64 chars of `A-Za-z0-9_-`); documented or not. Non-string, empty, oversized or otherwise shaped values become the `unrecognised` sentinel. Also kept are a requested `speed` of `fast`/`standard` and a `first_party`/`custom`/`unverified` endpoint class. No URL or other raw field is stored.
-- **Display.** Cache & costs keeps its existing Context column. For direct Anthropic rates it shows `Global` or `US-only 1.1×`, `fast inferred` when the speed was not returned, and `assumed geo/endpoint/standard speed` for recorded assumptions. Its shared tooltip gives the full basis. A rate with `geo_basis` (`not_available_as_global` or `unrecognised_as_global`) renders as `Global · assumed geo` (plus any other assumptions); a retrospective one also carries the request-cost `†`. The desktop tooltip does not yet distinguish these from an unreported geo — it reads "Global routing assumed: no usage.inference_geo was reported.", which is inaccurate for them — a known UI gap outside this pricing change. Other providers keep their previous labels.
+- **Display.** Cache & costs keeps its existing Context column; labels and tooltip sentences are derived from each rate's `*_basis` / `pricing_basis` fields (`desktop/plugin.js` `rateContext`/`rateContextNote`), never guessed. For direct Anthropic rates it shows `Global` or `US-only 1.1×`, `fast inferred` when the speed was not returned, and `assumed geo/endpoint/standard speed/tier` for recorded assumptions (e.g. `Global · assumed tier`, `Global · assumed geo`). A list-price row shows `List price` (plus any `assumed …`); other catalogues show `Standard` (plus `assumed tier` for `tier_basis`). Tooltip sentences, one per basis:
+  - `unknown_value_as_default` → `Standard tier assumed: usage.service_tier reported "<value>", not in the catalogue.` (likewise `Standard speed assumed: usage.speed reported "<value>" …` and `Global routing assumed: usage.inference_geo reported "<value>" …`). The value comes from the rate's `unknown_values` map (field → the recorder's bounded content-free enum string, or the request tier already shown in the Tier column).
+  - `not_available_as_global` → `Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.`
+  - `unrecognised_as_global` → `Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.`
+  - `list_price_fallback` → the rate's `basis` text plus `Matched OpenRouter id <id> (exact|vendor-prefixed).`
+  - `Global routing assumed: no usage.inference_geo was reported.` / `… no usage.speed reported.` appear only when the value was truly absent.
+  A retrospective rate also carries the request-cost `†`. Rates saved before `unknown_values` existed fall back to a sentence without the quoted value.
 - **Fail-closed refresh.** A refresh fails closed and keeps the last good catalogue if any of the following changes:
   - the currency statement, table columns or separators
   - the cache multipliers, fast/geo/long-context wording or model-page ID table
@@ -142,13 +149,13 @@ More than one candidate in the first tier that matches gives no price, reason `a
 | `step-` | `stepfun` |
 | `hermes-` | `nousresearch` |
 
-**Premiums:** a request or response naming priority/fast/flex/batch/scale, a returned `fast` speed, `us` geo, or Priority/Batch usage tier is unpriced (`endpoint_unpriced`): the list carries standard prices only. An unknown tier takes the list default, flagged `tier_basis: unknown_value_as_default`.
+**Premiums:** a request or response naming priority/fast/flex/batch/scale, a returned `fast` speed, `us` geo, or Priority/Batch usage tier is unpriced (`endpoint_unpriced`): the list carries standard prices only. Unknown values are fail-open exactly as on the direct Anthropic path: an unknown request/usage tier sets `tier_basis: unknown_value_as_default` + `tier_assumption: true`; an unknown `usage.speed` sets `speed_inferred: true` + `speed_basis: 'unknown usage.speed value; documented standard speed assumed'`; an unknown `usage.inference_geo` (including `unrecognised`) sets `geo_assumption: true` + `geo_basis: unknown_value_as_default`. `global`/`not_available` geo and `standard` speed/tier carry no flag.
 
 **Flags on the selected rate:** `pricing_basis: 'list_price_fallback'`, `basis: 'OpenRouter list price for this model id; serving provider has no catalogue here, actual charge may differ'`, `source: 'OpenRouter list price (fallback)'`, `source_url` = the OpenRouter models API, `fallback_model` (matched id), `fallback_match` (`exact`|`vendor_prefixed`).
 
 **Zero prices.** A catalogue row with $0 input and $0 output (local Ollama, `:free` tiers) is a known price: its unlisted cache prices are also $0, so cost is `0`, `complete: true`, no marker. A non-zero model with an unlisted component stays incomplete.
 
-**Local endpoints.** For a provider with no catalogue, the recorder stores only the content-free class `endpoint_host: 'local'` when `base_url` resolves to loopback, private, link-local, `localhost`, `*.local` or `host.docker.internal` (never the URL or host). Such rows price at a known $0 (`pricing_basis: 'local_endpoint_zero'`, `source: 'Local endpoint'`); a local proxy forwarding to a paid API would be undercounted, as the basis states.
+**Private hosts.** No endpoint host class is recorded for providers without a catalogue: a model served from a loopback/private host follows the normal path (labelled list price if its id matches, otherwise unpriced — `no_catalogue` before any OpenRouter snapshot, then `model_missing`). A $0 is only ever a published $0 row.
 
 ## Unpriced reasons
 
@@ -165,6 +172,8 @@ Every request without a complete cost carries exactly one read-time `unpriced_re
 ## Refresh and network boundary
 
 A background worker starts with the Python recorder or ledger API, independently of inference. It fetches the full public provider catalogue once per successful UTC calendar day (not once per request/model). Failed sources retry no more than once per fifteen minutes. A manual **Refresh provider prices** button queues a background refresh even after a successful daily fetch, with a one-minute minimum interval per source. In-process signals coalesce into one worker; a local file lock coordinates refreshes across processes using the same profile. This lock targets the Linux/macOS Hermes setup; Windows deployments require testing. No network fetch occurs in request hooks or ledger reads.
+
+**Refresh on a miss.** When a ledger read classifies a request `model_missing` or `no_catalogue`, it marks that source stale in memory (`pricing.note_miss`; no network, no ledger write, a no-op under `HERMES_USAGE_PRICING_OFFLINE=1`) and wakes the in-process refresh worker. The worker then lifts the once-per-day skip for that source only, bounded to one miss-driven attempt per source per hour (`MISS_REFRESH_SECONDS`, checked against the persisted `attempted_at`, so other processes on the profile are bounded too). A new model therefore gains a list price within about an hour of first being seen, not at the next UTC day.
 
 The fetcher uses HTTPS, rejects cross-host redirects, accepts at most 16 MiB, and does not forward OAuth credentials, cookies, prompts, usage, profile IDs or request headers to pricing sources. Environment HTTP proxies are disabled for these public fetches. No extra model inference occurs. The existing quota integration's own authenticated probes remain unchanged.
 
