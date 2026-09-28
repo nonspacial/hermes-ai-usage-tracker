@@ -180,6 +180,31 @@ def test_recorded_content_matches_reference_recorder(tmp_path, monkeypatch, refe
     assert 0 < new_health_writes < old_health_writes
 
 
+def test_usage_enum_metadata_differs_only_where_reference_sentinelled(reference):
+    """The only permitted writer difference from 93f5475: usage-enum values the
+    reference collapsed to 'unrecognised' are now kept verbatim when they are
+    bounded content-free enum strings (fail-open pricing needs the value).
+    Every documented value, and every non-string/oversized/odd value, is
+    byte-identical."""
+    old = importlib.import_module(reference + '.recorder')
+    values = ['fast', 'standard', 'global', 'us', 'not_available', 'priority', 'batch', 'eu', 'turbo',
+              'NOT_AVAILABLE', 'not-available', 'x' * 64, 'x' * 65, '', ' us', 'a/b', 'é', 7, True, None, {'k': 1}]
+    changed = 0
+    for key in ('speed', 'inference_geo', 'service_tier'):
+        for value in values:
+            usage = {'input_tokens': 1, key: value}
+            before = old.response_metadata({'model': 'm', 'id': 'i', 'usage': usage})
+            after = r.response_metadata({'model': 'm', 'id': 'i', 'usage': usage})
+            if before == after:
+                continue
+            field = {'speed': 'returned_speed', 'inference_geo': 'returned_inference_geo',
+                     'service_tier': 'returned_usage_service_tier'}[key]
+            assert before.pop(field) == 'unrecognised' and after.pop(field) == value, (key, value)
+            assert before == after
+            changed += 1
+    assert changed > 0
+
+
 def test_health_cadence_keeps_lease_and_writes_state_changes(tmp_path, monkeypatch):
     from _hermes_ai_usage_ledger_v2 import adapters, connection
     clock = Clock()

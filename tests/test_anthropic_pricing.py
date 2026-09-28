@@ -301,11 +301,27 @@ def test_standard_fast_geo_and_tier_boundaries():
     assert select({'model': 'claude-sonnet-9', 'returned_speed': 'fast'}, s) is None
     us = select({**base, 'returned_inference_geo': 'us', 'returned_speed': 'fast'}, s)
     assert us['inference_geo'] == 'us' and Decimal(us['input_tokens']) == Decimal('8.8') and us['geo_assumption'] is False
-    for unknown in ({'returned_speed': 'unrecognised'}, {'returned_inference_geo': 'eu'},
-                    {'returned_inference_geo': 'unrecognised'}, {'returned_usage_service_tier': 'priority'},
-                    {'returned_usage_service_tier': 'batch'}, {'service_tier': 'turbo'},
-                    {'anthropic_endpoint': 'custom'}):
+    # Known premiums (Priority/Batch) stay unpriced; a custom endpoint never
+    # borrows the direct catalogue (it takes the OpenRouter list fallback).
+    for unknown in ({'returned_usage_service_tier': 'priority'}, {'returned_usage_service_tier': 'batch'},
+                    {'service_tier': 'priority'}, {'anthropic_endpoint': 'custom'}):
         assert select({**base, **unknown}, s) is None, unknown
+    # Fail-open: an unknown enum value selects the documented default and is flagged.
+    speed = select({**base, 'returned_speed': 'warp'}, s)
+    assert speed['service_tier'] == 'standard' and speed['speed_inferred'] is True
+    assert speed['speed_basis'].startswith('unknown usage.speed') and speed['tier_assumption'] is True
+    for geo in ('eu', 'unrecognised'):
+        got = select({**base, 'returned_inference_geo': geo}, s)
+        assert got['inference_geo'] == 'global' and got['geo_assumption'] is True
+        assert got['geo_basis'] == p.UNKNOWN_AS_DEFAULT == 'unknown_value_as_default', geo
+    turbo = select({**base, 'service_tier': 'turbo'}, s)
+    assert turbo['service_tier'] == 'standard' and turbo['tier_basis'] == p.UNKNOWN_AS_DEFAULT
+    flex = select({**base, 'returned_usage_service_tier': 'flex'}, s)
+    assert flex['service_tier'] == 'standard' and flex['tier_basis'] == p.UNKNOWN_AS_DEFAULT
+    # Unknown speed on a fast request keeps the fast premium (never discounted).
+    assert select({**base, 'service_tier': 'fast', 'returned_speed': 'warp'}, s)['service_tier'] == 'fast'
+    # Documented values carry no tier_basis.
+    assert 'tier_basis' not in std and 'tier_basis' not in fast
     assert select({'model': 'claude-haiku-4-5', 'returned_inference_geo': 'us'}, s) is None
     assert select({'model': 'claude-haiku-4-5'}, s)['geo_assumption'] is False
     assert select({**base, 'anthropic_endpoint': 'first_party'}, s)['endpoint_assumption'] is False
@@ -342,11 +358,13 @@ def test_not_available_geo_standard_rate_values():
     assert (na['service_tier'], na['inference_geo']) == ('standard', 'global')
     assert na['geo_assumption'] is True and na['geo_basis'] == 'not_available_as_global'
     assert [Decimal(na[k]) for k in ('input_tokens', 'output_tokens', 'cache_read_tokens')] == [4, 20, Decimal('0.2')]
-    # The sentinel for undocumented geo values is never priced, nor is a
-    # near-miss spelling of the documented value.
+    # Undocumented geo values (and the sentinel at save time) are priced at
+    # the documented global default and flagged; never at the US premium.
     for geo in ('unrecognised', 'eu', 'Not_Available', 'not-available', ''):
-        assert select({'model': 'claude-opus-9-5', 'returned_inference_geo': geo,
-                       'returned_usage_service_tier': 'standard'}) is None, geo
+        got = select({'model': 'claude-opus-9-5', 'returned_inference_geo': geo,
+                      'returned_usage_service_tier': 'standard'})
+        assert got['inference_geo'] == 'global' and got['geo_basis'] == 'unknown_value_as_default', geo
+        assert [Decimal(got[k]) for k in ('input_tokens', 'output_tokens')] == [4, 20]
 
 
 def retro(record, snapshot=None):
@@ -379,25 +397,29 @@ def test_unrecognised_geo_retrospectively_prices_as_global_with_flag(model, extr
 def test_unrecognised_geo_rule_is_bounded():
     s = snap()
     base = {'model': 'claude-opus-9-5', **SENTINEL}
-    assert retro(base, s) is not None
-    # Never a saved completion-time rate: the sentinel is unpriced at save.
-    assert select(base, s) is None
-    # (b) fast returned, or fast requested with no returned speed: unpriced.
-    assert retro({**base, 'returned_speed': 'fast'}, s) is None
-    assert retro({**base, 'requested_speed': 'fast'}, s) is None
-    assert retro({**base, 'service_tier': 'fast'}, s) is None
-    assert retro({**base, 'returned_speed': 'unrecognised'}, s) is None
-    # (c) Safe tier set is exactly {'standard'}: priority/batch/absent/sentinel stay unpriced.
-    for tier in ('priority', 'batch', 'unrecognised', None):
-        row = {**base, 'returned_usage_service_tier': tier}
-        if tier is None:
-            row.pop('returned_usage_service_tier')
-        assert retro(row, s) is None, tier
-    # Any recorded requested geo disqualifies (the recorder keeps none today).
-    assert retro({**base, 'requested_inference_geo': 'us'}, s) is None
-    # Only the literal sentinel; other undocumented spellings stay unpriced.
+    assert retro(base, s)['geo_basis'] == 'unrecognised_as_global'
+    generic = lambda r: r is not None and r['inference_geo'] == 'global' and r['geo_basis'] == 'unknown_value_as_default'
+    # At save time the sentinel takes the generic labelled default, never the
+    # retrospective rule's own basis.
+    assert generic(select(base, s))
+    # (b) fast returned or requested: outside the retro rule, priced at the
+    # fast global rate by the generic fail-open default, flagged.
+    for extra in ({'returned_speed': 'fast'}, {'requested_speed': 'fast'}, {'service_tier': 'fast'}):
+        got = retro({**base, **extra}, s)
+        assert generic(got) and got['service_tier'] == 'fast', extra
+    assert generic(retro({**base, 'returned_speed': 'unrecognised'}, s))
+    # (c) Priority/Batch stay unpriced; absent/unknown tiers take the default.
+    for tier in ('priority', 'batch'):
+        assert retro({**base, 'returned_usage_service_tier': tier}, s) is None, tier
+    unknown_tier = retro({**base, 'returned_usage_service_tier': 'unrecognised'}, s)
+    assert generic(unknown_tier) and unknown_tier['tier_basis'] == 'unknown_value_as_default'
+    row = dict(base); row.pop('returned_usage_service_tier')
+    assert generic(retro(row, s))
+    # Any recorded requested geo leaves the retro rule (generic default).
+    assert generic(retro({**base, 'requested_inference_geo': 'us'}, s))
+    # Only the literal sentinel takes the retro basis; other spellings are generic.
     for geo in ('eu', 'Unrecognised', 'unrecognised ', ''):
-        assert retro({**base, 'returned_inference_geo': geo}, s) is None, geo
+        assert generic(retro({**base, 'returned_inference_geo': geo}, s)), geo
     # Custom or unverified endpoints still never borrow first-party rates.
     for endpoint in ('custom', 'unverified'):
         assert retro({**base, 'anthropic_endpoint': endpoint}, s) is None
@@ -504,20 +526,23 @@ def test_zero_writes_price_completely_without_split():
 
 # --- Recorder metadata -----------------------------------------------------------
 
-def test_recorder_keeps_only_documented_usage_enums():
+def test_recorder_keeps_bounded_usage_enums_verbatim():
     meta = rec.response_metadata({'model': 'claude-opus-9-5', 'id': 'msg_1', 'content': 'secret text',
                                   'usage': {'input_tokens': 1, 'speed': 'fast', 'inference_geo': 'us',
                                             'service_tier': 'standard', 'server_tool_use': {'x': 1}}})
     assert meta == {'response_model': 'claude-opus-9-5', 'provider_response_id': 'msg_1', 'returned_speed': 'fast',
                     'returned_inference_geo': 'us', 'returned_usage_service_tier': 'standard'}
+    # Non-string, oversized, empty or non-enum-shaped values: fixed sentinel.
     odd = rec.usage_enums({'speed': 'warp' * 100, 'inference_geo': {'nested': 1}, 'service_tier': 7})
     assert odd == {'returned_speed': 'unrecognised', 'returned_inference_geo': 'unrecognised',
                    'returned_usage_service_tier': 'unrecognised'}
-    # 'not_available' is documented and kept verbatim (not rewritten to global).
-    for geo in ('global', 'us', 'not_available'):
-        assert rec.usage_enums({'inference_geo': geo}) == {'returned_inference_geo': geo}
-    for geo in ('eu', 'NOT_AVAILABLE', 'not-available', 'unavailable', '', 'unrecognised '):
+    for geo in ('', 'unrecognised ', 'eu west', 'a/b', 'x' * 65, 'é', True):
         assert rec.usage_enums({'inference_geo': geo}) == {'returned_inference_geo': 'unrecognised'}, geo
+    # Every bounded content-free enum string is kept verbatim (documented or not).
+    for geo in ('global', 'us', 'not_available', 'eu', 'NOT_AVAILABLE', 'not-available', 'unavailable', 'x' * 64):
+        assert rec.usage_enums({'inference_geo': geo}) == {'returned_inference_geo': geo}
+    assert rec.usage_enums({'speed': 'turbo', 'service_tier': 'flex'}) == {
+        'returned_speed': 'turbo', 'returned_usage_service_tier': 'flex'}
     live_shape = rec.response_metadata({'model': 'claude-opus-9-5', 'id': 'msg_2',
                                         'usage': {'input_tokens': 3, 'output_tokens': 1, 'service_tier': 'standard',
                                                   'inference_geo': 'not_available'}})
@@ -673,15 +698,14 @@ def test_not_available_geo_ledger_saved_and_retrospective_and_sentinel_estimated
     assert rows['na']['cost']['rate']['geo_basis'] == 'not_available_as_global'
     assert rows['na']['cost']['rate']['geo_assumption'] is True and rows['global']['cost']['rate']['geo_assumption'] is False
     assert Decimal(rows['na']['cost']['total_usd']) == Decimal('0.039')
-    # A sentinel recorded with a catalogue present is saved unpriced at
-    # completion; the read-time estimate below never becomes a saved rate.
+    # A sentinel recorded with a catalogue present is now saved at the global
+    # default with the generic label; the retro basis is never saved.
     with s.db() as c:
         data = {k: json.loads(v) for k, v in c.execute('SELECT id,data FROM requests')}
     assert data['na']['returned_inference_geo'] == 'not_available'
-    assert data['sentinel']['cost']['rate'] is None and data['sentinel']['returned_inference_geo'] == 'unrecognised'
-    # That is the live-ledger shape (catalogue present, saved unpriced): the
-    # read projection values it retrospectively at the global rate, flagged.
-    assert rows['sentinel']['cost']['rate']['geo_basis'] == 'unrecognised_as_global'
+    assert data['sentinel']['returned_inference_geo'] == 'unrecognised'
+    assert data['sentinel']['cost']['rate']['geo_basis'] == 'unknown_value_as_default'
+    assert rows['sentinel']['cost']['rate']['geo_basis'] == 'unknown_value_as_default'
     assert rows['sentinel']['cost']['components'] == rows['na']['cost']['components']
     # Historical rows recorded without a catalogue (pre-0d5ade4 shape): both
     # gain the labelled read-side estimate at the global rate; the sentinel is
@@ -714,10 +738,17 @@ def test_not_available_geo_ledger_saved_and_retrospective_and_sentinel_estimated
     assert sent['cost']['components'] == rows['na']['cost']['components']
     assert sent['cost']['total_usd'] == rows['na']['cost']['total_usd']
     assert sent['stored_accounting']['cost']['rate'] is None
-    for key in ('sentinel-fast', 'sentinel-priority', 'sentinel-router'):
+    # Fast is outside the retro rule: fail-open generic default, flagged.
+    fast = rows['sentinel-fast']['cost']['rate']
+    assert fast['service_tier'] == 'fast' and fast['geo_basis'] == 'unknown_value_as_default'
+    for key in ('sentinel-priority', 'sentinel-router'):
         assert 'supplemental_valuation' not in rows[key] and rows[key]['cost']['rate'] is None, key
+    assert rows['sentinel-priority']['unpriced_reason'] == 'endpoint_unpriced'
+    assert rows['sentinel-router']['unpriced_reason'] == 'no_catalogue'
     assert d['summary'] == summary(d['requests'])
-    assert d['summary']['supplemental_requests'] == 2
+    assert d['summary']['supplemental_requests'] == 3
+    assert d['summary']['unpriced']['reasons'] == {'no_catalogue': 1, 'model_missing': 0, 'ambiguous': 0,
+                                                   'usage_missing': 0, 'endpoint_unpriced': 1}
     with t.db() as c:
         assert [tuple(r) for r in c.execute('SELECT id,data FROM requests ORDER BY id')] == before
         assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0] == events
