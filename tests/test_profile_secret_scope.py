@@ -39,10 +39,19 @@ requests = []
 lock = threading.Lock()
 def handler(request):
     assert (request.method, str(request.url)) == ('GET', 'https://api.anthropic.com/api/oauth/usage'), request.url
+    assert request.headers['anthropic-beta'] == 'oauth-2025-04-20', request.headers
     with lock:
         requests.append(request.headers['authorization'].removeprefix('Bearer '))
+    # Real-shaped synthetic payload: legacy keys plus the limits[] array the
+    # plugin re-reads (with the same scoped token) for model-scoped weeks.
     return httpx.Response(200, json={'five_hour': {'utilization': 12.0, 'resets_at': None},
-                                     'seven_day': {'utilization': 34.0, 'resets_at': None}})
+                                     'seven_day': {'utilization': 34.0, 'resets_at': None},
+                                     'seven_day_opus': None, 'seven_day_sonnet': None,
+                                     'limits': [
+        {'kind': 'session', 'group': 'session', 'percent': 12, 'resets_at': '2030-01-01T00:49:59.891946+00:00', 'scope': None},
+        {'kind': 'weekly_all', 'group': 'weekly', 'percent': 34, 'resets_at': '2030-01-02T17:59:59.891967+00:00', 'scope': None},
+        {'kind': 'weekly_scoped', 'group': 'weekly', 'percent': 15, 'resets_at': '2030-01-02T17:59:59.892117+00:00',
+         'scope': {'model': {'id': None, 'display_name': 'Fable'}, 'surface': None}}]})
 _init = httpx.Client.__init__
 def mocked_init(self, *a, **k):
     k['transport'] = httpx.MockTransport(handler)
@@ -114,12 +123,14 @@ for name in ('infra', 'work'):
     for q in results[name]:
         assert q['available'] is True, (name, q)
         assert [(w['label'], w['used_percent']) for w in q['windows']] == \
-            [('Current session', 12.0), ('Current week', 34.0)], q
+            [('Current session', 12.0), ('Current week', 34.0), ('Fable week', 15.0)], q
+        assert not any(t in json.dumps(q) for t in expected.values()), q
 for q in results['empty']:
     # No token in this profile's own files: the launch env token must not bleed in.
     assert q['available'] is False and q['source'] == 'usage_api', q
 assert sorted(set(requests)) == sorted(expected.values()), sorted(set(requests))
-assert requests.count(expected['infra']) == 8 and requests.count(expected['work']) == 8
+# Host GET + the plugin's limits[] GET per build, each with that profile's own token.
+assert requests.count(expected['infra']) == 16 and requests.count(expected['work']) == 16
 # Each build binds discovery + probe workers, but hydrates the foreign home once.
 assert fetches == [str(work)] * 8, fetches
 fetches.clear()

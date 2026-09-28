@@ -46,6 +46,25 @@ def chart_values(page,mode):
     }''')
 
 
+LEDGER_READS='scopeCalls.filter(x=>new URL(x.path,"https://offline.test").pathname==="/ledger").length'
+
+
+def track_reads(page):
+    # Count settled transport calls so the test can wait for the coordinator's
+    # follow-up read rather than race it (no sleeps).
+    page.evaluate('''() => {window.auInflight=0;const original=rest;rest=async (...args)=>{
+        window.auInflight++;try{return await original(...args)}finally{window.auInflight--}}}''')
+
+
+def settle(page,reads):
+    # A mounted pane makes its first /ledger read, then one follow-up read
+    # ~150ms later. Its new rolling start resets the chart's selected point
+    # (UsageChart effect on window bounds), so inspect only once both reads
+    # have settled and been painted.
+    page.wait_for_function(f'{LEDGER_READS}>={reads}&&window.auInflight===0')
+    page.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+
+
 def test_overlay():
     with sync_playwright() as pw:
         browser=pw.chromium.launch(executable_path=CHROME,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -53,13 +72,19 @@ def test_overlay():
             page=browser.new_page(viewport={'width':1480,'height':900})
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
             page.set_content(fixture(),wait_until='domcontentloaded')
+            track_reads(page)
             nav=page.get_by_role('navigation',name='Providers',exact=True)
             nav.get_by_role('tab',name='All providers').click()
             panel=page.get_by_test_id('provider-page')
             expect(panel.locator('.au-chart .au-provider-series')).to_have_count(2)
+            settle(page,2)
             for mode in ['Tokens','Cost']:
                 if mode=='Cost':
                     page.get_by_role('button',name='Cost',exact=True).first.click()
+                    settle(page,page.evaluate(LEDGER_READS))
+                # Park the pointer off the pane so no hover owner competes
+                # with the focused chart for the shared tooltip.
+                page.mouse.move(0,0)
                 chart=chart_values(page,mode)
                 assert chart['areas']==0 and len(chart['series'])==2,chart
                 assert not any(re.search(r'[?&]provider=[^&]+',path) for path in chart['calls']),chart['calls']
@@ -74,16 +99,24 @@ def test_overlay():
                 assert by_id['alpha'][0][1]>by_id['beta'][0][1] # beta larger first bucket
                 assert by_id['alpha'][1][1]<by_id['beta'][1][1] # alpha larger second bucket
                 assert all(chart['top']<=y<=chart['bottom'] for values in by_id.values() for _,y in values)
+                reads=page.evaluate(LEDGER_READS)
                 chart_el=page.get_by_test_id('usage-chart');chart_el.focus();chart_el.press('ArrowRight')
-                page.wait_for_function('document.querySelector(".au-chart")?.getAttribute("data-au-chart-summary")')
-                expect(page.get_by_test_id('chart-point-summary')).to_be_visible()
+                expect(chart_el).to_have_attribute('data-au-chart-providers',re.compile(r'"provider":"alpha"'))
+                # The focused chart owns the one shared tooltip; bind to it by id.
                 tooltip=page.locator('#'+str(chart_el.get_attribute('aria-describedby')))
+                expect(page.locator('.au-tooltip:visible')).to_have_count(1)
+                expect(tooltip).to_be_visible()
+                expect(tooltip.get_by_test_id('chart-point-summary')).to_be_visible()
                 expect(tooltip.locator('.au-tooltip-provider')).to_have_count(2)
                 expect(tooltip.locator('.au-tooltip-provider-dot')).to_have_count(2)
-                assert tooltip.locator('.au-tooltip-provider-dot').evaluate_all('''dots=>dots.every((dot,index)=>
-                  getComputedStyle(dot).backgroundColor===getComputedStyle(
-                    document.querySelectorAll('.au-provider-series')[index]).stroke)''')
-                assert tooltip.locator('.au-tooltip-provider').first.evaluate('e=>getComputedStyle(e).color')==page.locator('.au-tooltip:visible').last.evaluate('e=>getComputedStyle(e).color')
+                dots=tooltip.locator('.au-tooltip-provider-dot').evaluate_all('''dots=>dots.map((dot,index)=>
+                  [getComputedStyle(dot).backgroundColor,getComputedStyle(
+                    document.querySelectorAll('.au-provider-series')[index]).stroke])''')
+                assert len(dots)==2 and all(dot==stroke for dot,stroke in dots),dots
+                colours=tooltip.evaluate('e=>[getComputedStyle(e.querySelector(".au-tooltip-provider")).color,getComputedStyle(e).color]')
+                assert colours[0]==colours[1],colours
+                # No read landed mid-inspection (which would reset the point).
+                assert page.evaluate(LEDGER_READS)==reads
                 page.screenshot(path=str(SCRATCH/f'provider-overlay-{mode.lower()}-synthetic.png'))
             unknown=page.evaluate('''() => {
               const path=scopeCalls.filter(x=>new URL(x.path,'https://offline.test').pathname==='/ledger').at(-1).path;

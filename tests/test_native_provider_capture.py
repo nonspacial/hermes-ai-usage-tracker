@@ -503,6 +503,80 @@ def test_claude_actual_auxiliary_relay_prices_by_client_endpoint(priced, monkeyp
     assert 'sk-ant-FAKE' not in json.dumps(record) and 'bedrock-runtime' not in json.dumps(record)
 
 
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('resolved,base_url,provider,endpoint', [
+    ('auto', 'https://api.anthropic.com', 'anthropic', 'first_party'),
+    ('auto', 'https://gw.example/anthropic', 'auto', None),          # unresolvable: label kept, unpriced
+    ('fallback_chain[0](anthropic)', 'https://gw.example/anthropic', 'anthropic', 'custom'),
+])
+def test_auto_routed_auxiliary_resolves_real_provider(priced, monkeypatch, resolved, base_url, provider, endpoint, asynchronous):
+    """Core's auto-chain labelling (``_effective_provider_for_client`` ->
+    ``request_provider`` -> ``_set_relay_auxiliary_route``) through the real relay
+    funnel and Anthropic client classes; the row names the concrete provider."""
+    import contextvars, re
+    wire = ModuleType('agent.auxiliary_wire')
+    wire.prepare_chat_messages = lambda client, kwargs: kwargs
+    monkeypatch.setitem(__import__('sys').modules, 'agent', ModuleType('agent'))
+    monkeypatch.setitem(__import__('sys').modules, 'agent.auxiliary_wire', wire)
+    module = ModuleType('agent.auxiliary_client')
+    vars(module).update(Any=Any, Callable=__import__('typing').Callable, _relay_auxiliary_metadata=lambda **kw: None,
+                        _run_protected_sync_provider_call=lambda callback, kwargs: callback(kwargs),
+                        _AnthropicCompletionsAdapter=lambda *a, **kw: None, re=re, Optional=__import__('typing').Optional,
+                        _RELAY_AUX_CALL_CONTEXT=contextvars.ContextVar('auxiliary_relay_call', default=None))
+    definitions('agent/auxiliary_client.py', [*AUX_CLIENT, '_set_relay_auxiliary_route', '_effective_provider_for_client',
+                                              '_fallback_provider_from_label'], vars(module))
+    ad.install_aux(module)
+    usage = dict(PRICED_START['message']['usage'], output_tokens=500, speed='standard', service_tier='standard')
+    create_message = ad.anthropic_wrapper(lambda client, api_kwargs, **kw: {'id': 'msg-aux', 'model': 'claude-opus-9-5',
+                                                                               'usage': usage, 'content': 'PRIVATE'})
+    adapted = NS(model='claude-opus-9-5', usage=NS(prompt_tokens=1000, completion_tokens=500))
+    def callback(request):
+        create_message(None, {'model': request['model']})
+        return adapted
+    async def async_callback(request):
+        return callback(request)
+    client = module.AnthropicAuxiliaryClient(object(), 'claude-opus-9-5', 'sk-ant-FAKE', base_url)
+    if asynchronous:
+        client = module.AsyncAnthropicAuxiliaryClient(client)
+    # Core: request_provider = effective_provider or resolved_provider (no _hermes_aux_effective_provider here).
+    request_provider = module._effective_provider_for_client(client, resolved)
+    assert request_provider == resolved
+    module._RELAY_AUX_CALL_CONTEXT.set({'task': 'title_generation', 'request_id': 'aux-x', 'attempt_count': 0})
+    module._set_relay_auxiliary_route(request_provider, 'claude-opus-9-5', 'anthropic_messages')
+    kwargs = {'model': 'claude-opus-9-5', 'messages': ['PRIVATE']}
+    if asynchronous:
+        import asyncio
+        result = asyncio.run(module._relay_async_completion(client, kwargs, provider=request_provider,
+                             api_mode='anthropic_messages', create=async_callback))
+    else:
+        result = module._relay_sync_completion(client, kwargs, provider=request_provider,
+                                               api_mode='anthropic_messages', create=callback)
+    assert result is adapted
+    with r.store(str(priced)).db() as c:
+        [record] = [json.loads(row[0]) for row in c.execute('SELECT data FROM requests')]
+    assert record['source'] == 'auxiliary_adapter' and record['task'] == 'title_generation'
+    assert record['provider'] == provider
+    if provider == resolved:
+        assert 'requested_provider' not in record and 'anthropic_endpoint' not in record
+        assert record['cost']['total_usd'] is None
+    else:
+        assert record['requested_provider'] == resolved
+        assert module._fallback_provider_from_label(resolved) in (provider, resolved)  # same unwrap as core
+        assert_priced(record, endpoint, '0.039', 'standard')
+    dumped = json.dumps(record)
+    assert 'sk-ant-FAKE' not in dumped and 'gw.example' not in dumped and 'api.anthropic.com' not in dumped
+
+
+def test_fallback_label_pattern_matches_core():
+    import re
+    ns = definitions('agent/auxiliary_client.py', ['_fallback_provider_from_label'], dict(re=re))
+    for label in ('fallback_chain[0](anthropic)', 'fallback_providers[12]( openrouter )', 'main-agent(openai-codex)',
+                  'fallback_chain[x](anthropic)', 'fallback_chain[0](anthropic)x', 'auto', ''):
+        match = ad._AUX_FALLBACK.match(label)
+        core = ns['_fallback_provider_from_label'](label)
+        assert (match.group(1).strip() if match else label.strip()) == core
+
+
 def relay_namespace(value):
     return NS(**{k: relay_namespace(v) for k, v in value.items()}) if isinstance(value, dict) else value
 

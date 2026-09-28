@@ -160,8 +160,8 @@ def test_all_profile_groups_select_newest_keys_before_hydration(tmp_path, monkey
     runtime=AnalyticsRuntime()
     original=runtime._reader
     hydrated=[]
-    def tracked(generation, root):
-        reader=original(generation,root)
+    def tracked(generation, root, ledger=None):
+        reader=original(generation,root,ledger)
         read=reader.read
         def observed(*args,**kwargs):
             result=read(*args,**kwargs)
@@ -249,8 +249,8 @@ def test_equivalent_rate_serialisations_have_one_bounded_group(tmp_path, monkeyp
     runtime=AnalyticsRuntime()
     original=runtime._reader
     hydrated=[]
-    def tracked(generation, root):
-        reader=original(generation,root)
+    def tracked(generation, root, ledger=None):
+        reader=original(generation,root,ledger)
         read=reader.read
         def observed(*args,**kwargs):
             result=read(*args,**kwargs)
@@ -284,8 +284,8 @@ def test_selected_page_sql_fetches_bounded_rows(tmp_path, monkeypatch, view, gro
     original = runtime._reader
     statements = []
 
-    def traced(generation, root):
-        reader = original(generation, root)
+    def traced(generation, root, ledger=None):
+        reader = original(generation, root, ledger)
         db = reader.db
 
         @contextmanager

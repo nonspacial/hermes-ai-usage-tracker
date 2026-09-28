@@ -17,7 +17,7 @@ import sqlite3
 import time
 from typing import Any
 
-from .storage import summary
+from .storage import summary, unpriced_total
 from .read_snapshot import snapshot_root, SnapshotBusy, SnapshotUnsupported
 
 
@@ -281,7 +281,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                     status['status'] = 'missing'
                     continue
                 copied_root = snapshots.enter_context(snapshot_root(profile['path']))
-                reader = runtime._reader(generation, copied_root)
+                reader = runtime._reader(generation, copied_root, profile['path'])
                 with reader.db() as c:
                     first = c.execute('SELECT MIN(started) FROM requests WHERE started>=? AND started<?', (start, end)).fetchone()[0]
                 if first is not None and start == 0 and filters.get('bucket_start') is None:
@@ -366,6 +366,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
            'coverage': coverage(inventory, statuses), 'quota': quota_unavailable(), 'quota_observations': [],
            'summary': merge_summaries([r['summary'] for r in data]) if data else None,
            'seq': None, 'profile_sequences': {p['profile_id']: r['seq'] for p, r in reports}}
+    out['unpriced_total'] = unpriced_total(out['summary']) if data else None
     for field in ('request_count', 'compression_count', 'crossing_start', 'crossing_end'):
         if include(field):out[field] = sum(r[field] for r in data) if data else None
     out['next_offset'] = offset + limit if out['request_count'] is not None and offset + limit < out['request_count'] else None

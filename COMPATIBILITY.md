@@ -26,11 +26,17 @@ counts, Gemini thinking and authoritative totals without Hermes core imports.
 Cost and quota coverage are separate from recording. Automatic price catalogues
 currently cover OpenAI, OpenRouter, Nous, Ollama and the direct Anthropic API.
 Anthropic rates are not used for routers, Bedrock/Vertex or custom base URLs.
-Other providers, including Gemini, may record tokens while remaining unpriced.
-Anthropic capture additionally keeps only the documented `usage.speed`,
-`usage.inference_geo` and `usage.service_tier` enums (undocumented values become
-`unrecognised`), a requested `fast`/`standard` speed, and a
-`first_party`/`custom` endpoint class; no base URL or other raw field is stored.
+Providers without a catalogue of their own (including Gemini) are estimated from
+OpenRouter list prices when the model id is listed, always labelled
+`list_price_fallback`; otherwise they record tokens and show as unpriced with a
+reason. Anthropic capture additionally keeps `usage.speed`, `usage.inference_geo`
+and `usage.service_tier` verbatim when they are bounded content-free enum strings
+(≤64 chars `A-Za-z0-9_-`; anything else becomes `unrecognised`), a requested
+`fast`/`standard` speed, and a `first_party`/`custom`/`unverified` endpoint class
+(`unverified` when an auxiliary client's endpoint is unreadable; `custom` and
+`unverified` never take first-party rates, only the labelled list-price fallback);
+no base URL or other raw field is stored. Unknown enum values price at the
+documented default and are flagged as assumptions.
 Missing
 prices are not zero costs. Subscription cards use only provider-reported quota
 windows. Nous supplies a subscription gauge when monthly allowance/remaining

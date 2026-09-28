@@ -88,7 +88,10 @@ def run():
   page.set_viewport_size({'width':1700,'height':1100})
   page.evaluate("events=events.filter(r=>r.id==='pending');window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})")
   for key in expected:
-   expect(page.get_by_test_id('cost-card-'+key).get_by_test_id('component-amount')).to_have_text('—' if key=='cache_write_tokens' else '— *')
+   # One pending request: unpriced is a warning-token count (⚠︎N), never a bare '*'.
+   expect(page.get_by_test_id('cost-card-'+key).get_by_test_id('component-amount')).to_have_text('—' if key=='cache_write_tokens' else '— \u26a0\ufe0e1')
+   if key!='cache_write_tokens':
+    expect(page.get_by_test_id('cost-card-'+key).get_by_test_id('unpriced-marker')).to_have_count(1)
    expect(page.get_by_test_id('cost-card-'+key).locator('[data-field="tokens"]')).to_have_text('—')
   expect(write_card).to_contain_text('Awaiting read comparison')
   page.evaluate("events=[];window.demoChange++;for(const callback of window.demoSubscribers)callback({type:'changed',mode:'native-events'})")

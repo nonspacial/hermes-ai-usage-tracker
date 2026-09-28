@@ -1,6 +1,6 @@
 """Native request observers. No prompt, output text, credentials or headers saved."""
 from __future__ import annotations
-import atexit, contextvars, functools, logging, os, threading, time, uuid
+import atexit, contextvars, functools, logging, os, re, threading, time, uuid
 from datetime import datetime
 from .storage import Store,home,hook_scope
 from .ownership import identity, reconcile
@@ -132,19 +132,23 @@ def response_metadata(response):
     out.update(usage_enums(obj.get('usage')))
     return out
 
-# Anthropic reports these billing-relevant usage enums. Only documented values
-# are copied; anything else becomes a fixed sentinel so pricing fails closed.
-USAGE_ENUMS={'speed':('returned_speed',{'fast','standard'}),
-             'inference_geo':('returned_inference_geo',{'global','us'}),
-             'service_tier':('returned_usage_service_tier',{'standard','priority','batch'})}
+# Anthropic reports these billing-relevant usage enums. Every bounded,
+# content-free enum-shaped string is copied verbatim ('not_available', or a
+# value Anthropic adds later), so pricing can select the documented default
+# and label it instead of losing the value. Only non-string, empty,
+# oversized or non-enum-shaped values become the fixed sentinel.
+USAGE_ENUMS={'speed':'returned_speed','inference_geo':'returned_inference_geo',
+             'service_tier':'returned_usage_service_tier'}
+USAGE_ENUM_SENTINEL='unrecognised'
+_USAGE_ENUM_SHAPE=re.compile(r'[A-Za-z0-9_-]{1,64}')
 
 def usage_enums(usage):
     u=mapping(usage)
     out={}
-    for field,(target,allowed) in USAGE_ENUMS.items():
+    for field,target in USAGE_ENUMS.items():
         value=u.get(field)
         if value is None:continue
-        out[target]=value if isinstance(value,str) and value in allowed else 'unrecognised'
+        out[target]=value if isinstance(value,str) and _USAGE_ENUM_SHAPE.fullmatch(value) else USAGE_ENUM_SENTINEL
     return out
 
 def endpoint_class(kw):
