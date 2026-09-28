@@ -1864,9 +1864,10 @@ function assumedLabels(rate){
 }
 function rateContext(rate){
  if(!rate)return '—';
- if(rate.context_band&&rate.threshold_tokens!=null)return (rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens);
- if(rate.min_prompt_tokens)return '≥'+count(rate.min_prompt_tokens);
  const assumed=assumedLabels(rate),suffix=assumed.length?'assumed '+assumed.join('/'):null;
+ // A banded rate keeps its band text; recorded assumptions still follow it.
+ if(rate.context_band&&rate.threshold_tokens!=null)return [(rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens),suffix].filter(Boolean).join(' · ');
+ if(rate.min_prompt_tokens)return ['≥'+count(rate.min_prompt_tokens),suffix].filter(Boolean).join(' · ');
  if(rate.pricing_basis==='list_price_fallback')return ['List price',suffix].filter(Boolean).join(' · ');
  if(!anthropicRate(rate))return ['Standard',suffix].filter(Boolean).join(' · ');
  return [rate.inference_geo==='us'?'US-only 1.1×':'Global',

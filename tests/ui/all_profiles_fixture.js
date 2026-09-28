@@ -228,6 +228,18 @@ window.demoPricingBasisRows=function(){
   ['basis-routed-tier',{input_tokens:'1',output_tokens:'2',service_tier:'standard',source:'SYNTHETIC routed',pricing_basis:'provider_catalog_estimate',
    tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'requested service_tier':'turbo'}},
    'Standard · assumed tier',['Standard tier assumed: the request asked for service_tier "turbo", not in the catalogue.']],
+  // Banded / minimum-prompt rates keep their band text and still show the assumption.
+  ['basis-band-tier',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'short',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   '≤272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+  ['basis-long-tier',{input_tokens:'5',output_tokens:'22.5',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'long',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   '>272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+  ['basis-list-min-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-min-speed',min_prompt_tokens:200000,speed_inferred:true,
+   speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   '≥200,000 · assumed speed',['Matched OpenRouter id basis-list-min-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-band-plain',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'short',threshold_tokens:128000,tier_assumption:false},'≤128,000',[]],
  ];
  const expected={};
  rows.forEach(([model,rate,text,phrases],i)=>{

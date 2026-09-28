@@ -278,21 +278,164 @@ def test_ledger_saves_labelled_fallback_and_values_history_retrospectively(tmp_p
 
 # --- Catalogue staleness on a read miss ------------------------------------------
 
-def test_note_miss_is_offline_gated_bounded_and_network_free(monkeypatch):
+KEY_A, KEY_B = '/profiles/a/usage-ledger/events.sqlite3', '/profiles/b/usage-ledger/events.sqlite3'
+
+
+@pytest.fixture
+def misses(monkeypatch):
     monkeypatch.setattr(p, '_STALE', {})
+    monkeypatch.setattr(p, '_MISSES', type(p._MISSES)())
+    monkeypatch.setattr(p, '_WORKERS', {})
+    monkeypatch.delenv('HERMES_USAGE_PRICING_OFFLINE', raising=False)
+    monkeypatch.setattr(p, 'build_opener', lambda *_: pytest.fail('note_miss must not open a connection'))
+
+
+def hour_elapses(key=KEY_A, source='openrouter'):
+    p._STALE[(key, source)] -= p.MISS_REFRESH_SECONDS
+
+
+def test_note_miss_is_offline_gated_bounded_and_network_free(misses, monkeypatch):
     monkeypatch.setenv('HERMES_USAGE_PRICING_OFFLINE', '1')
-    assert p.note_miss('openrouter') is False and p._STALE == {}
+    assert p.note_miss('openrouter', 'm', (1, 10.0), KEY_A) is False and p._STALE == {}
     monkeypatch.delenv('HERMES_USAGE_PRICING_OFFLINE')
-    monkeypatch.setattr(p, 'fetch', lambda *_: pytest.fail('note_miss must not fetch'))
-    assert p.note_miss('not-a-source') is False
-    assert p.note_miss('openrouter') is True
-    assert p.note_miss('openrouter') is False          # at most once per hour
+    assert p.note_miss('not-a-source', 'm', (1, 10.0), KEY_A) is False
+    assert p.note_miss('openrouter', 'm', (1, 10.0), None) is False       # no store key: nothing
+    assert p.note_miss('openrouter', 'm', (1, 10.0), KEY_A) is True
+    assert p.note_miss('openrouter', 'n', (1, 10.0), KEY_A) is False      # at most once per hour
     with p._LOCK:
-        assert p.stale_sources() == {'openrouter'}
-    p._STALE['openrouter'] -= p.MISS_REFRESH_SECONDS   # the hour elapses
+        assert p.stale_sources(KEY_A) == {'openrouter'}
+    hour_elapses()
     with p._LOCK:
-        assert p.stale_sources() == frozenset()
-    assert p.note_miss('openrouter') is True
+        assert p.stale_sources(KEY_A) == frozenset()
+    # Same revision (no successful fetch since the first miss): may mark again.
+    assert p.note_miss('openrouter', 'm', (1, 10.0), KEY_A) is True
+
+
+def test_note_miss_is_scoped_to_the_store(misses):
+    woken = {}
+    for key in (KEY_A, KEY_B):
+        event = type('E', (), {'set': lambda self, k=key: woken.__setitem__(k, True)})()
+        p._WORKERS[key] = (None, event, [False])
+    assert p.note_miss('openrouter', 'm', (1, 10.0), KEY_A) is True
+    assert woken == {KEY_A: True}                                        # B's worker not woken
+    with p._LOCK:
+        assert p.stale_sources(KEY_B) == frozenset()                      # B keeps its daily skip
+        assert p.stale_sources(KEY_A) == {'openrouter'}
+    assert p.note_miss('openrouter', 'm', (1, 10.0), KEY_B) is True        # B's own miss marks B
+
+
+def test_model_still_missing_after_a_post_miss_fetch_never_re_marks(misses):
+    assert p.note_miss('openrouter', 'local-7b', (1, 10.0), KEY_A) is True
+    hour_elapses()
+    # A catalogue fetched after the first miss (deduplicated: same row id,
+    # later last_success) still lacks it: no re-mark, now or later.
+    assert p.note_miss('openrouter', 'local-7b', (1, 20.0), KEY_A) is False
+    assert p.note_miss('openrouter', 'local-7b', (1, 20.0), KEY_A) is False
+    # A new revision (changed body) that still lacks it: still no re-mark ...
+    assert p.note_miss('openrouter', 'local-7b', (2, 30.0), KEY_A) is False
+    with p._LOCK:
+        assert p.stale_sources(KEY_A) == frozenset()
+    # ... unless a NEW model id misses.
+    assert p.note_miss('openrouter', 'brand-new-9', (2, 30.0), KEY_A) is True
+    assert p.note_miss('openrouter', 'local-7b', (2, 30.0), KEY_A) is False
+
+
+def test_miss_memo_is_bounded(misses, monkeypatch):
+    monkeypatch.setattr(p, 'MISS_MEMO_LIMIT', 3)
+    for i in range(10):
+        p.note_miss('openrouter', 'm%d' % i, (1, 10.0), KEY_A)
+    assert list(p._MISSES) == [(KEY_A, 'openrouter', 'm%d' % i) for i in (7, 8, 9)]
+
+
+def router_body(rows):
+    return json.dumps({'data': [{'id': model, 'pricing': {'prompt': prompt, 'completion': completion}}
+                                for model, prompt, completion in rows]})
+
+
+def refresh_openrouter(store, body, monkeypatch):
+    """One miss-driven OpenRouter refresh, the hourly bound already elapsed."""
+    with store.db() as c:
+        row = c.execute("SELECT data FROM pricing_status WHERE source_id='openrouter'").fetchone()
+        state = json.loads(row[0])
+        state['attempted_at'] -= p.MISS_REFRESH_SECONDS
+        c.execute("INSERT OR REPLACE INTO pricing_status VALUES('openrouter',?)", (json.dumps(state),))
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        return body
+    assert p.refresh(store, fetcher=fetch, stale=frozenset({'openrouter'}))
+    assert calls == [p.SOURCES['openrouter']['url']]
+    with store.db() as c:
+        rows = c.execute("SELECT id,data FROM provider_catalog WHERE source_id='openrouter' ORDER BY id").fetchall()
+        status = json.loads(c.execute("SELECT data FROM pricing_status WHERE source_id='openrouter'").fetchone()[0])
+    return [(r[0], json.loads(r[1])) for r in rows], status
+
+
+def settled(store):
+    now = time.time()
+    with store.db() as c:
+        c.execute("DELETE FROM provider_catalog WHERE source_id='openrouter'")
+        for sid in p.SOURCES:
+            state = {'source_id': sid, 'status': 'ok', 'last_success': now, 'attempted_at': now}
+            c.execute('INSERT OR REPLACE INTO pricing_status VALUES(?,?)', (sid, json.dumps(state)))
+
+
+def test_identical_refreshes_keep_one_snapshot_and_update_status(tmp_path, monkeypatch):
+    s = Store(tmp_path)
+    settled(s)
+    body = router_body([('x-ai/grok-9', '0.000003', '0.000015')])
+    first, status1 = refresh_openrouter(s, body, monkeypatch)
+    assert len(first) == 1 and status1['status'] == 'ok'
+    assert status1['verified_sha256'] == first[0][1]['content_sha256']
+    second, status2 = refresh_openrouter(s, body, monkeypatch)
+    assert second == first                                   # no duplicate row
+    assert status2['attempted_at'] >= status1['attempted_at']
+    assert status2['last_success'] > first[0][1]['observed_at']       # the fetch is recorded
+    assert status2['verified_sha256'] == first[0][1]['content_sha256']
+    with s.db() as c:
+        catalogue = {r['source_id']: r for r in p.catalog_status(c)}['openrouter']
+    assert catalogue['snapshot_sha256'] == first[0][1]['content_sha256'] and catalogue['stale'] is False
+    # A changed body does insert.
+    third, status3 = refresh_openrouter(s, router_body([('x-ai/grok-9', '0.000004', '0.000015')]), monkeypatch)
+    assert len(third) == 2 and third[:1] == first
+    assert third[1][1]['content_sha256'] != first[0][1]['content_sha256']
+    assert status3['verified_sha256'] == third[1][1]['content_sha256']
+
+
+def test_scheduled_refresh_also_deduplicates(tmp_path):
+    s = Store(tmp_path)
+    body = router_body([('x-ai/grok-9', '0.000003', '0.000015')])
+    def fetch(url):
+        if url != p.SOURCES['openrouter']['url']:raise OSError('fixture: other sources offline')
+        return body
+    p.refresh(s, fetcher=fetch)
+    with s.db() as c:
+        c.execute("UPDATE pricing_status SET data=json_set(data,'$.last_success',0,'$.attempted_at',0) WHERE source_id='openrouter'")
+    p.refresh(s, fetcher=fetch)                               # next day's scheduled refresh
+    with s.db() as c:
+        live = c.execute("SELECT COUNT(*) FROM provider_catalog WHERE source_id='openrouter' AND data LIKE '%live_public_provider%'").fetchone()[0]
+        status = json.loads(c.execute("SELECT data FROM pricing_status WHERE source_id='openrouter'").fetchone()[0])
+    assert live == 1 and status['status'] == 'ok' and status['last_success'] > 0
+
+
+def test_verified_content_is_not_stale_at_request(tmp_path):
+    s = Store(tmp_path)
+    old = time.time() - 3 * 86400
+    with s.db() as c:
+        c.execute("DELETE FROM provider_catalog WHERE source_id='openrouter'")
+        c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',
+                  ('openrouter', old, json.dumps(orsnap(stamp=old))))
+    now = time.time() - 5
+    s.request(record('before', 'gemini', 'gemini-9-pro', now), 'request_completed')
+    with s.db() as c:
+        c.execute('INSERT OR REPLACE INTO pricing_status VALUES(?,?)', ('openrouter', json.dumps(
+            {'status': 'ok', 'last_success': now - 1, 'verified_sha256': orsnap(stamp=old)['content_sha256']})))
+    s.request(record('after', 'gemini', 'gemini-9-pro', now), 'request_completed')
+    with s.db() as c:
+        rates = {k: json.loads(c.execute('SELECT data FROM requests WHERE id=?', (k,)).fetchone()[0])['cost']['rate']
+                 for k in ('before', 'after')}
+    assert rates['before']['stale_at_request'] is True
+    assert rates['after']['stale_at_request'] is False
 
 
 def test_stale_source_lifts_daily_skip_at_most_hourly(tmp_path, monkeypatch):
@@ -316,8 +459,9 @@ def test_stale_source_lifts_daily_skip_at_most_hourly(tmp_path, monkeypatch):
 
 def test_read_miss_marks_source_stale_without_network(tmp_path, monkeypatch):
     marked = []
-    monkeypatch.setattr(p, 'note_miss', marked.append)
-    monkeypatch.setattr(p, 'fetch', lambda *_: pytest.fail('read must not fetch'))
+    monkeypatch.setattr(p, 'note_miss', lambda *args: marked.append(args))
+    # refresh() binds fetch at definition time; the opener is the real network seam.
+    monkeypatch.setattr(p, 'build_opener', lambda *_: pytest.fail('read must not open a connection'))
     s = Store(tmp_path)
     insert(s, time.time() - 10)
     now = time.time() - 1
@@ -327,4 +471,36 @@ def test_read_miss_marks_source_stale_without_network(tmp_path, monkeypatch):
     s.request(record('miss', 'mistral', 'nothing-9', now), 'request_completed')
     d = s.read(start=now - 10, end=time.time())
     assert {r['id']: r.get('unpriced_reason') for r in d['requests']}['miss'] == 'model_missing'
-    assert marked == ['openrouter']
+    with s.db() as c:
+        revision = p.catalogue_revision(c, 'openrouter')
+    assert marked == [('openrouter', 'nothing-9', revision, str(s.path.resolve()))]
+
+
+def test_repeated_reads_of_a_permanent_miss_refetch_once(tmp_path, misses, monkeypatch):
+    """End to end: a local model id missing from every catalogue refreshes once, not hourly."""
+    s = Store(tmp_path)
+    settled(s)
+    key = str(s.path.resolve())
+    body = router_body([('x-ai/grok-9', '0.000003', '0.000015')])
+    with s.db() as c:
+        c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',
+                  ('openrouter', time.time() - 60, json.dumps(p._snapshot('openrouter', p.parse_catalog(body), time.time() - 60))))
+    now = time.time() - 1
+    s.request(record('local', 'custom', 'qwen-local-7b', now), 'request_completed')
+    fetched = 0
+    for hour in range(3):
+        s.read(start=now - 10, end=time.time())
+        with p._LOCK:
+            stale = p.stale_sources(key)
+        if stale:
+            fetched += 1
+            refresh_openrouter(s, body, monkeypatch)
+        p._STALE.clear()                                    # the hour elapses
+    assert fetched == 1
+    with s.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM provider_catalog WHERE source_id='openrouter'").fetchone()[0] == 1
+    # A different missing model id still triggers a refresh.
+    s.request(record('new', 'custom', 'brand-new-9', now), 'request_completed')
+    s.read(start=now - 10, end=time.time())
+    with p._LOCK:
+        assert p.stale_sources(key) == {'openrouter'}

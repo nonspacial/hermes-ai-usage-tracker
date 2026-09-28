@@ -688,7 +688,9 @@ class Store:
             revision = watermark(c) if view is not None else None
             legacy_read_view(c,where,params)
             from .session_cache_writes import project as project_session_writes
-            projected_costs=project_session_writes(c,where,params,end)
+            # Copied-snapshot readers carry the live ledger's key (ledger_key,
+            # None: report no catalogue misses); a Store reads its own ledger.
+            projected_costs=project_session_writes(c,where,params,end,self.ledger_key if hasattr(self,'ledger_key') else str(self.path.resolve()))
             from .session_cache_writes import materialise_summary
             summary_sql=materialise_summary(c,SUMMARY_SQL)
             total=sql_summary(c,where,params,summary_sql)

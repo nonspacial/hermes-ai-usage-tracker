@@ -7,7 +7,8 @@ keep their size and style.
 
 The Cache & costs Context column and its tooltip read the rate's *_basis /
 pricing_basis: one synthetic row per basis (fixture demoPricingBasisRows)
-must show its exact label and truthful sentence.
+must show its exact label and truthful sentence. Banded (≤/>N) and
+minimum-prompt (≥N) rates keep the band text and append the assumption.
 """
 import os
 import re
@@ -135,12 +136,20 @@ def pricing_basis_context(page, errors):
     page.get_by_role('tab', name='OpenRouter', exact=True).click()
     page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Cache & costs', exact=True).click()
     rates = page.get_by_test_id('published-rates')
+    expect(rates.locator('tbody tr').first).to_be_visible()
+    view_all = page.get_by_role('button', name='View all records', exact=True)
+    if view_all.count():                              # more basis rows than one ten-record page
+        view_all.first.click()
     expect(rates.locator('tbody tr', has_text='basis-tier')).to_have_count(1)
     by_model = {r.locator('td').nth(1).inner_text().strip(): r for r in rates.locator('tbody tr').all()}
     seen = set()
     for model, (text, *phrases) in expected.items():
         context = by_model[model].locator('td').nth(3)
         assert context.inner_text().strip() == text, (model, context.inner_text(), text)
+        if not phrases:                              # plain band: no assumption, no note
+            assert context.locator('span[title]').count() == 0, model
+            seen.add(model)
+            continue
         span = context.locator('span[title]').first
         title = span.get_attribute('title') or span.get_attribute('data-au-tooltip') or ''
         for phrase in phrases:

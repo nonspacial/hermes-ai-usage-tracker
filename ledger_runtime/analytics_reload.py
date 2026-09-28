@@ -146,14 +146,17 @@ class AnalyticsRuntime:
             raise
 
     @staticmethod
-    def _reader(generation, root):
+    def _reader(generation, root, ledger=None):
         # Bypass Store.__init__: a dashboard read must not create schemas, seed
         # pricing, start workers or change permissions. Main DB is opened read-only;
         # connection-local TEMP projections remain writable as required by reads.
+        # ``ledger`` is the live profile root the copy was taken from: catalogue
+        # misses are reported against its worker key, never the scratch copy.
         reader = object.__new__(generation['store_type'])
         reader.root = Path(root)
         reader.folder = reader.root / 'usage-ledger'
         reader.path = reader.folder / 'events.sqlite3'
+        reader.ledger_key = str((Path(ledger) / 'usage-ledger' / 'events.sqlite3').resolve()) if ledger else None
 
         @contextmanager
         def db():
@@ -227,7 +230,7 @@ class AnalyticsRuntime:
             else:
                 source_generation=signature(source_file)
                 with selected_snapshot_root(root) as copied_root:
-                    reader = self._reader(generation, copied_root)
+                    reader = self._reader(generation, copied_root, root)
                     selected_test = None
                     if test_id:
                         marker_start, marker_end, selected_test = reader.test_window(test_id,include_data=True)
@@ -334,7 +337,7 @@ class AnalyticsRuntime:
                     if signature(source_file)!=current_generation:
                         candidate=None
                     else:
-                        reader=self._reader(generation,copied_root)
+                        reader=self._reader(generation,copied_root,root)
                         from .incremental import identity
                         with reader.db() as c:
                             matches=identity(c)==db_identity

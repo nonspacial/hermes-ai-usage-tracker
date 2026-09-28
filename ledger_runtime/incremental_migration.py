@@ -204,6 +204,7 @@ def _reader_preflight(backup: Path, backup_sha256: str) -> None:
                 raise ValueError('Verified backup changed during reader preflight.')
         reader = object.__new__(Store)
         reader.root, reader.folder, reader.path = Path(scratch), folder, path
+        reader.ledger_key = None  # a preflight copy reports no catalogue misses
 
         @contextmanager
         def db():

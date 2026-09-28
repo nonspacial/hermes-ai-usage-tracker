@@ -132,6 +132,26 @@ def test_all_profiles_merge_unpriced(tmp_path):
         runtime._discard(runtime.current)
 
 
+def test_snapshot_reads_report_misses_against_the_live_ledger(tmp_path, monkeypatch):
+    """Copied-snapshot readers mark the live profile's worker key, never the scratch copy."""
+    mixed(tmp_path)
+    mixed(tmp_path / 'profiles' / 'other')
+    marked = []
+    monkeypatch.setattr(p, 'note_miss', lambda *args: marked.append(args))
+    runtime = AnalyticsRuntime()
+    live = str((tmp_path / 'usage-ledger' / 'events.sqlite3').resolve())
+    other = str((tmp_path / 'profiles' / 'other' / 'usage-ledger' / 'events.sqlite3').resolve())
+    try:
+        runtime.read(tmp_path, *ARGS, view='overview', group='model')
+        assert marked and {m[3] for m in marked} == {live}
+        assert any(m[:2] == ('openrouter', 'grok-unknown') for m in marked)
+        marked.clear()
+        all_profiles(runtime, discover(tmp_path), start=ARGS[0], end=ARGS[1], view='overview', group='model')
+        assert {m[3] for m in marked} == {live, other}
+    finally:
+        runtime._discard(runtime.current)
+
+
 def test_paging_parity_of_unpriced_groups(tmp_path):
     store = mixed(tmp_path)
     full = store.read(*ARGS[:2], view='overview', group='model')

@@ -10,6 +10,7 @@ that still has no rate carries one reason from ``UNPRICED_REASONS``.
 """
 from __future__ import annotations
 import copy, hashlib, json, os, re, threading, time
+from collections import OrderedDict
 from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
@@ -666,8 +667,15 @@ def refresh(store,force=False,fetcher=fetch,stale=frozenset()):
                         entries={'catalog':parse_catalog,'ollama':parse_ollama}[source['format']](text)
                 s=_snapshot(sid,entries,time.time())
                 with store.db() as c:
-                    c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',(sid,s['observed_at'],json.dumps(s)))
-                state.update(status='ok',last_success=s['observed_at'],rate_count=len(entries),error=None)
+                    # Same content, origin and parser as the latest snapshot:
+                    # record the fetch in pricing_status only (last_success,
+                    # verified_sha256). A duplicate row would grow the
+                    # append-only table and journal on every refresh.
+                    latest=c.execute('SELECT data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,)).fetchone()
+                    prior=json.loads(latest[0]) if latest else {}
+                    if any(prior.get(k)!=s[k] for k in ('content_sha256','origin','parser_version')):
+                        c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)',(sid,s['observed_at'],json.dumps(s)))
+                state.update(status='ok',last_success=s['observed_at'],verified_sha256=s['content_sha256'],rate_count=len(entries),error=None)
             except Exception as exc:
                 # Fixed error class only: do not export potentially sensitive error URLs.
                 state.update(status='unavailable',error=type(exc).__name__,message='Public pricing refresh failed; last verified catalog retained. No rates guessed.')
@@ -689,36 +697,79 @@ def start_worker(store,force=False):
             wake.set()
         def loop():
             while True:
-                forced,manual[0]=manual[0],False;wake.clear()
-                with _LOCK:stale=stale_sources()
+                with _LOCK:
+                    forced,manual[0]=manual[0],False;wake.clear()
+                    stale=stale_sources(key)
                 try:refresh(store,force=forced,**({'stale':stale} if stale else {}))
                 except Exception:pass # stored refresh status still reports each source failure
                 wake.wait(RETRY_SECONDS)
         thread=threading.Thread(target=loop,daemon=True,name='usage-provider-prices');_WORKERS[key]=(thread,wake,manual);thread.start()
 
+# (store key, source) -> monotonic time of the last miss mark. The store key
+# is the _WORKERS key, str(<profile>/usage-ledger/events.sqlite3 resolved), so
+# a miss read from profile A never lifts profile B's daily skip.
 _STALE={}
+# (store key, source, model) -> catalogue revision current when the pair first
+# missed. LRU-bounded; survives revision changes (see note_miss).
+_MISSES=OrderedDict()
+MISS_MEMO_LIMIT=4096
 
-def stale_sources():
-    """Sources with a read miss in the last MISS_REFRESH_SECONDS (caller holds _LOCK)."""
+def stale_sources(store):
+    """``store``'s sources with a miss mark in the last MISS_REFRESH_SECONDS (caller holds _LOCK)."""
     now=time.monotonic()
-    for sid in [k for k,t in _STALE.items() if now-t>=MISS_REFRESH_SECONDS]:del _STALE[sid]
-    return frozenset(_STALE)
+    for k in [k for k,t in _STALE.items() if now-t>=MISS_REFRESH_SECONDS]:del _STALE[k]
+    return frozenset(sid for key,sid in _STALE if key==store)
 
-def note_miss(source):
-    """A read found no row (model_missing/no_catalogue) in ``source``.
+def catalogue_revision(c,source):
+    """(latest provider_catalog id or None, pricing_status last_success or None).
 
-    In-memory only: no network, no ledger write, nothing when OFFLINE. Wakes
-    this process's refresh workers, which lift the once-per-day skip for the
-    source, bounded to one attempt per MISS_REFRESH_SECONDS (persisted
-    attempted_at, so across processes too). Marks expire after the bound.
+    Changes whenever a refresh fetches the source successfully, including a
+    deduplicated fetch that inserts no snapshot row. Read-only.
     """
-    if os.environ.get('HERMES_USAGE_PRICING_OFFLINE')=='1' or source not in SOURCES:return False
-    now=time.monotonic()
+    row=c.execute('SELECT id FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1',(source,)).fetchone()
+    state=c.execute('SELECT data FROM pricing_status WHERE source_id=?',(source,)).fetchone()
+    try:success=json.loads(state[0]).get('last_success') if state else None
+    except (ValueError,AttributeError):success=None
+    return (row[0] if row else None,success)
+
+def note_miss(source,model=None,revision=None,store=None):
+    """A read of ledger ``store`` found no rate for ``model`` in ``source``.
+
+    In-memory only: no network, no ledger write, nothing when OFFLINE or
+    without a store key. ``revision`` is catalogue_revision() in that read.
+    The (store, source, model) pair is memoised with the revision at which it
+    first missed. While the revision is unchanged (no successful fetch since:
+    refresh pending or failed) the pair may mark again, at most hourly; once
+    the revision differs, a catalogue fetched after the first miss still
+    lacked the model, so the pair never marks again (unpriced-by-design ids:
+    local, Bedrock/Vertex, -latest, retired). Only a model id new to the memo
+    marks after that. A mark wakes only ``store``'s worker, which lifts the
+    once-per-day skip for the source, bounded to one attempt per
+    MISS_REFRESH_SECONDS (persisted attempted_at, across processes too).
+    """
+    if os.environ.get('HERMES_USAGE_PRICING_OFFLINE')=='1' or source not in SOURCES or not store:return False
+    now=time.monotonic();pair=(store,source,model)
     with _LOCK:
-        if now-_STALE.get(source,-MISS_REFRESH_SECONDS)<MISS_REFRESH_SECONDS:return False
-        _STALE[source]=now
-        for entry in _WORKERS.values():entry[1].set()
+        if pair in _MISSES:
+            _MISSES.move_to_end(pair)
+            if _MISSES[pair]!=revision:return False
+        else:
+            _MISSES[pair]=revision
+            while len(_MISSES)>MISS_MEMO_LIMIT:_MISSES.popitem(last=False)
+        if now-_STALE.get((store,source),-MISS_REFRESH_SECONDS)<MISS_REFRESH_SECONDS:return False
+        _STALE[(store,source)]=now
+        entry=_WORKERS.get(store)
+        if entry:entry[1].set()
     return True
+
+def verified_at(snapshot,state):
+    """When ``snapshot``'s content was last fetched: a refresh that found the
+    same content records last_success/verified_sha256 instead of a new row."""
+    observed=snapshot.get('observed_at')
+    if (state and state.get('verified_sha256')==snapshot.get('content_sha256') and
+            isinstance(state.get('last_success'),(int,float)) and observed is not None and state['last_success']>observed):
+        return state['last_success']
+    return observed
 
 def catalog_status(c,provider=''):
     wanted=source_for({'provider':provider})[0] if provider else None
@@ -728,9 +779,10 @@ def catalog_status(c,provider=''):
         row=c.execute('SELECT data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,)).fetchone()
         state=c.execute('SELECT data FROM pricing_status WHERE source_id=?',(sid,)).fetchone()
         s=json.loads(row[0]) if row else {}
-        out.append({**definition,'source_id':sid,**(json.loads(state[0]) if state else {'status':'not_refreshed'}),
+        status=json.loads(state[0]) if state else {'status':'not_refreshed'}
+        out.append({**definition,'source_id':sid,**status,
              'snapshot_at':s.get('observed_at'),'origin':s.get('origin'),'snapshot_sha256':s.get('content_sha256'),
-             'stale':not s or utc_day(s.get('observed_at',0))!=utc_day(time.time()),'rates':s.get('rates',[])})
+             'stale':not s or utc_day(verified_at(s,status) or 0)!=utc_day(time.time()),'rates':s.get('rates',[])})
     return out
 
 def source_for(rec):
@@ -753,7 +805,18 @@ def lookup(c,rec):
     stamp=rec.get('ended') or time.time()
     row=c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? AND observed<=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,stamp)).fetchone()
     if not row:return None
-    return select_rate(json.loads(row['data']),rec,row['id'],stamp)
+    s=json.loads(row['data'])
+    rate=select_rate(s,rec,row['id'],stamp)
+    if rate and rate.get('stale_at_request'):
+        # A deduplicated refresh re-verified this content without a new row.
+        state=c.execute('SELECT data FROM pricing_status WHERE source_id=?',(sid,)).fetchone()
+        try:state=json.loads(state[0]) if state else None
+        except ValueError:state=None
+        latest=c.execute('SELECT id FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1',(sid,)).fetchone()
+        verified=verified_at(s,state) if latest and latest[0]==row['id'] and isinstance(state,dict) else None
+        if verified is not None and verified<=stamp and utc_day(verified)==utc_day(stamp):
+            rate['stale_at_request']=False
+    return rate
 
 def select_rate(s,rec,revision,stamp,*,retrospective=False):
     """Exact serving-provider model/tier/band match against one catalog snapshot.

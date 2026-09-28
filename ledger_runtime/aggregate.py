@@ -281,7 +281,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
                     status['status'] = 'missing'
                     continue
                 copied_root = snapshots.enter_context(snapshot_root(profile['path']))
-                reader = runtime._reader(generation, copied_root)
+                reader = runtime._reader(generation, copied_root, profile['path'])
                 with reader.db() as c:
                     first = c.execute('SELECT MIN(started) FROM requests WHERE started>=? AND started<?', (start, end)).fetchone()[0]
                 if first is not None and start == 0 and filters.get('bucket_start') is None:
