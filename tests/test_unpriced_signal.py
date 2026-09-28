@@ -235,12 +235,18 @@ def reference_store():
 
 def test_priced_rows_and_existing_fields_identical_to_reference(tmp_path, reference_store):
     store = Store(tmp_path)
-    catalogues = {}
+    # Deterministic catalogues for every source: the bundled seed, plus a
+    # synthetic router/Nous table when the seed ships none.
+    from pathlib import Path
+    seed = json.loads((Path(p.__file__).parent / 'provider_rates_seed.json').read_text())['snapshots']
+    catalogues = {s['source_id']: s for s in seed if s.get('rates')}
+    for sid in ('openrouter', 'nous'):
+        catalogues.setdefault(sid, p._snapshot(sid, [p.rate('vendor/fixture-9', 'standard', ['1', '2', '0.1', '0'])],
+                                               50.0, 'fixture_provider_catalog'))
     with store.db() as c:
-        for sid in p.SOURCES:
-            row = c.execute('SELECT data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC LIMIT 1', (sid,)).fetchone()
-            if row:
-                catalogues[sid] = json.loads(row[0])
+        c.execute('DELETE FROM provider_catalog')
+        for sid, snap in catalogues.items():
+            c.execute('INSERT INTO provider_catalog(source_id,observed,data) VALUES(?,?,?)', (sid, 50.0, json.dumps(snap)))
     stamp = 7000
     for i, (provider, sid) in enumerate(sorted(p.PROVIDERS.items())):
         if sid not in catalogues or not catalogues[sid]['rates']:
@@ -256,7 +262,7 @@ def test_priced_rows_and_existing_fields_identical_to_reference(tmp_path, refere
     old = {'full': old_store.read(*ARGS[:2])}
     for group in ('time', 'model'):
         old[group] = old_store.read(*ARGS[:2], view='overview', group=group)
-    priced = [r for r in new['full']['requests'] if r['cost'].get('complete')]
+    priced = [r for r in new['full']['requests'] if (r.get('cost') or {}).get('complete')]
     assert {r['provider'] for r in priced} >= {'openai-codex', 'openrouter', 'nous', 'ollama', 'anthropic'}, \
         sorted({r['provider'] for r in priced})
     for key in new:
