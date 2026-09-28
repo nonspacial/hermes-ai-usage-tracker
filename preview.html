@@ -814,13 +814,15 @@ function useUsage(profile, intervalMs) {
 
 // Quota windows reach the pane by host label only, and labels differ per
 // provider: Anthropic five_hour/seven_day are 'Current session'/'Current week'
-// (plus 'Opus week'/'Sonnet week'); Codex reports 'Session'/'Weekly'; Z.AI and
+// (plus model-scoped weeks such as 'Fable week', 'Opus week'/'Sonnet week' from
+// the OAuth limits[] array); Codex reports 'Session'/'Weekly'; Z.AI and
 // OpenCode 'Session (5h)'/'Rolling (5h)'. Every allowance bar fill uses the
 // provider colour (Codex keeps the host accent); tone badges keep their meaning.
 function compactWindowLabel(label){
  const text=String(label||'').trim();
  if(/^(current\s+)?week(ly)?$/i.test(text))return 'Weekly';
  if(/\b5h\b|five[\s-]?hour|^(current\s+)?session$/i.test(text))return 'Five hour';
+ if(/^fable\s+week$/i.test(text))return 'Fable';
  return text||'Limit';
 }
 // Only reported windows with an actual remaining percentage become bars;
@@ -1305,7 +1307,7 @@ const ledgerCss = `
 .au-header-picker{min-width:0;flex:1 1 auto}
 .au-header-profile{flex:0 1 176px;min-width:70px}
 .au-ledger .au-header-picker>:is(button,select){width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.au-header-main>.au-refresh-split,.au-page-header>.au-connection{flex-shrink:0}
+.au-header-main>.au-refresh-split,.au-page-header>.au-connection,.au-page-header>.au-unpriced-badge{flex-shrink:0}
 .au-header-main>button{white-space:nowrap;flex-shrink:0}
 @container(max-width:1000px){.au-header-chip-label{display:none}.au-header-chip{flex-basis:224px}}
 @container(max-width:650px){
@@ -1318,10 +1320,13 @@ const ledgerCss = `
  .au-header-title{font-size:.6875rem}.au-page-header>.au-connection span:last-child{display:none}
  .au-header-chip,.au-header-profile{min-width:0}
  .au-ledger .au-page-header>.au-connection{padding:7px}
+ .au-ledger .au-page-header>.au-unpriced-badge{max-width:92px;overflow:hidden;text-overflow:ellipsis}
  .au-ledger .au-header-picker>:is(button,select){padding-left:5px;padding-right:5px}
 }
 .au-ledger .au-connection{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;font-size:.6875rem;line-height:1.4;white-space:nowrap;border-radius:999px;background:transparent;flex:none}
 .au-ledger .au-connection-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.au-ledger .au-unpriced-mark{color:var(--ui-text-warning,#d2b776);font-weight:inherit;white-space:nowrap}
+.au-ledger .au-unpriced-badge{display:inline-flex;align-items:center;padding:5px 9px;font-size:.6875rem;line-height:1.4;white-space:nowrap;border:1px solid var(--ui-stroke-warning,#5b5135);border-radius:999px;color:var(--ui-text-warning,#d2b776);flex:none}
 .au-ledger .au-connection[data-state="online"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-stroke-success,#2d514b)}
 .au-ledger .au-connection[data-state="limited"],.au-ledger .au-connection[data-state="unverified"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-stroke-warning,#5b5135)}
 .au-ledger .au-connection[data-state="disconnected"],.au-ledger .au-connection[data-state="not_recording"]{color:var(--ui-text-error,#d58c96);border-color:var(--ui-stroke-error,#613f49)}
@@ -1364,7 +1369,7 @@ const ledgerCss = `
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
 .au-ledger .au-provider-row .au-dot{background:var(--au-provider-accent)}
-.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
+.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota[data-layout="stacked"]{flex-wrap:wrap}.au-ledger .au-row-quota[data-layout="stacked"]>.au-row-quota-window:first-child{flex-basis:100%}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-line{stroke:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-area{fill:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-point{fill:var(--au-provider-accent)}
@@ -2132,12 +2137,12 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
  const {line,area}=allProviders?{line:'',area:''}:traces(vals);
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
- const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
+ const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
  const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
   const row=active.provider_buckets.find(item=>item.provider===s.provider);
   return {provider:s.provider,label:providerLabel(s.provider,seriesIds),
    value:(cost?selectedCost(row):viewTokens(row,'total_tokens',count))+(cost?'':' tokens')+' · '+count(row?.attempts||0)+' requests'+
-    (cost&&row?.unpriced_requests?' · partial price coverage':row?.missing_usage?' · includes missing usage':'')+
+    (cost&&row?.unpriced_requests?' · partial price coverage · '+count(row.unpriced_requests)+' requests unpriced':row?.missing_usage?' · includes missing usage':'')+
     (data?.coverage?.status==='partial'?' · partial profile coverage':'')};
  })):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
@@ -2180,12 +2185,18 @@ function peakValue(value,coverage){return value?.value==null?'—':count(value.v
 function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
 function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
 // Compact per-provider allowance bars under each All-providers summary row:
-// label above bar only, from the already-loaded /usage catalogue.
-function ProviderRowQuota({windows}){
+// label above bar only, from the already-loaded /usage catalogue. Hovering a
+// bar shows its remaining percentage through the shared title tooltip.
+// Anthropic with both a five-hour and a Fable week window stacks them: five
+// hour full width, then Weekly and Fable (and any other week) side by side.
+function ProviderRowQuota({windows,provider}){
  if(!windows.length)return null;
- return h('div',{className:'au-row-quota','data-testid':'provider-row-quota'},...windows.map((w,index)=>{
-  const text=compactWindowLabel(w.label),left=Math.max(0,Math.min(100,w.remaining_percent));
-  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label},
+ const label=w=>compactWindowLabel(w.label);
+ const stacked=provider==='anthropic'&&windows.some(w=>label(w)==='Five hour')&&windows.some(w=>label(w)==='Fable');
+ if(stacked)windows=[...windows.filter(w=>label(w)==='Five hour'),...windows.filter(w=>label(w)!=='Five hour')];
+ return h('div',{className:'au-row-quota','data-testid':'provider-row-quota',...(stacked?{'data-layout':'stacked'}:{})},...windows.map((w,index)=>{
+  const text=label(w),left=Math.max(0,Math.min(100,w.remaining_percent));
+  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label,title:pct(left)+' left'},
    h('span',{className:'au-row-quota-label'},text),
    h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining','aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
     h('div',{className:'au-row-quota-fill',style:{width:Math.max(1,left)+'%'}})));
@@ -2203,9 +2214,9 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row','data-provider':g.provider,style:{'--au-provider-accent':providerAccent(g.provider)}},
    h('span',{title:providerLabel(g.provider,providerIds)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
-   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
+   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),h(UnpricedMark,{summary:g})),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
-   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider))})));
+   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider)),provider:g.provider})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
  metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
@@ -2254,10 +2265,10 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
  rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
-  return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
+  return [name(g),h('span',{},selectedCost(g),h(UnpricedMark,{summary:g})),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
   identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC'}):readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
-   {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
+   {label:'Cost · API estimate',value:selectedCost(g)+unpricedSuffix(g),title:unpricedNote(g)},
    {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
   ]
  }))):h('p',{className:'au-muted',role:!data?.summary?'status':undefined,'data-testid':!data?.summary?'ledger-view-pending':undefined},
@@ -2353,35 +2364,114 @@ function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,w
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',onChange:e=>onEnd(e.target.value)}):null,
   h('span',{className:'au-muted au-window-label'},window?new Date(window.start*1000).toLocaleString()+' — '+new Date(window.end*1000).toLocaleString():''));
 }
+// Unpriced usage is loud, never a bare '*'. The count and reason ride on the
+// shared tooltip (title); fully priced groups (including a known $0.00) show
+// nothing. Older DTOs without `unpriced` fall back to unpriced_requests.
+const UNPRICED_REASONS={no_catalogue:'no price catalogue for this provider yet',
+ model_missing:'model not in the provider or OpenRouter catalogue',
+ ambiguous:'model id matches more than one list price',
+ usage_missing:'usage not reported yet, or a token field is missing',
+ endpoint_unpriced:'tier or endpoint without a published rate (Priority, Batch, US-only…)'};
+function unpricedCount(s){const n=s?.unpriced?.requests??s?.unpriced_requests;return Number.isSafeInteger(n)&&n>0?n:0}
+function unpricedNote(s,lead){
+ const n=unpricedCount(s);if(!n)return undefined;
+ const reasons=Object.entries(s?.unpriced?.reasons||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+ return (lead||'Known cost subtotal.')+' '+count(n)+' request'+(n===1?'':'s')+' unpriced'+
+  (s?.unpriced?.tokens?' ('+count(s.unpriced.tokens)+' tokens)':'')+(reasons.length?': '+reasons.map(([k,v])=>count(v)+' '+(UNPRICED_REASONS[k]||k)).join('; '):'')+'.';
+}
+function unpricedSuffix(s){const n=unpricedCount(s);return n?' ⚠\uFE0E'+count(n):''}
+function UnpricedMark({summary:s,lead}){
+ const n=unpricedCount(s);if(!n)return null;
+ return h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:unpricedNote(s,lead),'aria-label':count(n)+' unpriced requests'},unpricedSuffix(s));
+}
+const compactTokens=n=>Number(n).toLocaleString('en',{notation:'compact',maximumFractionDigits:1});
+function UnpricedBadge({data}){
+ const total=data?.unpriced_total;
+ if(!total||!(total.tokens>0))return null;
+ const rows=[...(data.model_groups||[]).map(g=>[(uiNames[g.provider]||g.provider)+' · '+g.model,g]),
+  ...(data.model_groups?[]:(data.provider_groups||[]).map(g=>[uiNames[g.provider]||g.provider,g]))]
+  .filter(([,g])=>g?.unpriced?.tokens>0).sort((a,b)=>b[1].unpriced.tokens-a[1].unpriced.tokens).slice(0,3);
+ const title='Costs in this window exclude '+count(total.tokens)+' tokens from '+count(total.requests)+' unpriced requests.'+
+  (rows.length?' '+rows.map(([label,g])=>label+': '+compactTokens(g.unpriced.tokens)+' tokens — '+
+   Object.entries(g.unpriced.reasons||{}).filter(([,v])=>v>0).map(([k])=>UNPRICED_REASONS[k]||k).join(', ')).join('; ')+'.':'');
+ return h('span',{className:'au-unpriced-badge','data-testid':'unpriced-badge',tabIndex:0,role:'status',title},compactTokens(total.tokens)+' tokens unpriced');
+}
 function cacheCostValue(s){
  if(!s?.attempts)return money(0);
  return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]??s.attempts)<s.attempts)?money(s.known_cost_usd):'—';
 }
-function cacheAmount(s){return h('span',{title:s?.unpriced_requests?'Known cost subtotal; '+count(s.unpriced_requests)+' requests pending, incomplete or unpriced':''},cacheCostValue(s),s?.unpriced_requests?' *':'')}
+function cacheAmount(s){return h('span',{},cacheCostValue(s),h(UnpricedMark,{summary:s}))}
 // Direct Anthropic rates carry inference_geo plus recorded assumption flags.
 // Show them instead of an indistinguishable 'Standard' (US-only is 1.1x).
 function anthropicRate(rate){return !!rate&&(rate.inference_geo==='global'||rate.inference_geo==='us')}
 function speedInferred(rate){return rate.speed_inferred??(rate.speed_basis!=null&&rate.speed_basis!=='usage.speed')}
+// Assumption labels come from the rate's *_basis fields: unknown_value_as_default
+// (a reported enum outside the catalogue), not_available_as_global,
+// unrecognised_as_global, or list_price_fallback. unknown_values quotes the
+// reported value (bounded enum text recorded by the recorder).
+const UNKNOWN_DEFAULT='unknown_value_as_default';
+function unknownSpeed(rate){return rate.unknown_values?.['usage.speed']!=null||String(rate.speed_basis||'').startsWith('unknown usage.speed')}
+function reportedValue(rate,fields){for(const f of fields){const v=rate.unknown_values?.[f];if(v!=null)return [f,String(v).slice(0,64)]}return null}
+function reportedPhrase(hit,fallback){
+ if(!hit)return fallback;
+ const [field,value]=hit;
+ return field==='requested service_tier'?'the request asked for service_tier "'+value+'"':field+' reported "'+value+'"';
+}
+function assumedLabels(rate){
+ const anth=anthropicRate(rate),labels=[];
+ if(rate.geo_assumption||rate.geo_basis)labels.push('geo');
+ if(anth&&rate.endpoint_assumption)labels.push('endpoint');
+ if(anth&&rate.service_tier!=='fast'&&(speedInferred(rate)||(rate.tier_assumption&&!rate.tier_basis)))labels.push('standard speed');
+ else if(!anth&&unknownSpeed(rate))labels.push('speed');
+ if(rate.tier_basis===UNKNOWN_DEFAULT)labels.push('tier');
+ return labels;
+}
 function rateContext(rate){
  if(!rate)return '—';
- if(rate.context_band&&rate.threshold_tokens!=null)return (rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens);
- if(rate.min_prompt_tokens)return '≥'+count(rate.min_prompt_tokens);
- if(!anthropicRate(rate))return 'Standard';
- const assumed=[rate.geo_assumption&&'geo',rate.endpoint_assumption&&'endpoint',rate.tier_assumption&&'standard speed'].filter(Boolean);
+ const assumed=assumedLabels(rate),suffix=assumed.length?'assumed '+assumed.join('/'):null;
+ // A banded rate keeps its band text; recorded assumptions still follow it.
+ if(rate.context_band&&rate.threshold_tokens!=null)return [(rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens),suffix].filter(Boolean).join(' · ');
+ if(rate.min_prompt_tokens)return ['≥'+count(rate.min_prompt_tokens),suffix].filter(Boolean).join(' · ');
+ if(rate.pricing_basis==='list_price_fallback')return ['List price',suffix].filter(Boolean).join(' · ');
+ if(!anthropicRate(rate))return ['Standard',suffix].filter(Boolean).join(' · ');
  return [rate.inference_geo==='us'?'US-only 1.1×':'Global',
-  rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,
-  assumed.length?'assumed '+assumed.join('/'):null].filter(Boolean).join(' · ');
+  rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,suffix].filter(Boolean).join(' · ');
+}
+function geoNote(rate){
+ if(rate.inference_geo==='us')return 'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).';
+ if(rate.geo_basis===UNKNOWN_DEFAULT)return 'Global routing assumed: '+reportedPhrase(reportedValue(rate,['usage.inference_geo']),'usage.inference_geo reported a value')+', not in the catalogue.';
+ if(rate.geo_basis==='not_available_as_global')return 'Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.';
+ if(rate.geo_basis==='unrecognised_as_global')return 'Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.';
+ if(rate.geo_assumption)return 'Global routing assumed: no usage.inference_geo was reported.';
+ return null;
+}
+function speedNote(rate){
+ const fast=rate.service_tier==='fast';
+ if(unknownSpeed(rate))return (fast?'Fast speed assumed from the request: ':'Standard speed assumed: ')+reportedPhrase(reportedValue(rate,['usage.speed']),'usage.speed reported a value')+', not in the catalogue.';
+ if(!speedInferred(rate))return anthropicRate(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':null;
+ if(fast)return 'Fast speed inferred from the request; the response did not report usage.speed.';
+ return String(rate.speed_basis||'').startsWith('unknown requested tier')?'Standard speed assumed: no usage.speed reported.':
+  'Standard speed assumed: no fast request and no usage.speed reported.';
+}
+function tierNote(rate){
+ if(rate.tier_basis!==UNKNOWN_DEFAULT)return null;
+ return 'Standard tier assumed: '+reportedPhrase(reportedValue(rate,['usage.service_tier','response service_tier','requested service_tier']),'the reported service tier')+', not in the catalogue.';
 }
 function rateContextNote(rate){
- if(!anthropicRate(rate))return undefined;
- const fast=rate.service_tier==='fast';
- return ['Direct Anthropic API list rate.',
-  rate.inference_geo==='us'?'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).':
-   rate.geo_assumption?'Global routing assumed: no usage.inference_geo was reported.':'Global routing.',
+ if(!rate)return undefined;
+ if(rate.pricing_basis==='list_price_fallback'){
+  const id=rate.fallback_model||rate.model;
+  return [String(rate.basis||'OpenRouter list price').replace(/\.?$/,'.'),
+   'Matched OpenRouter id '+id+(rate.fallback_match==='exact'?' (exact).':rate.fallback_match?' (vendor-prefixed).':'.'),
+   tierNote(rate),speedNote(rate),geoNote(rate)].filter(Boolean).join(' ');
+ }
+ if(!anthropicRate(rate)){
+  const notes=[tierNote(rate),unknownSpeed(rate)?speedNote(rate):null,rate.geo_basis?geoNote(rate):null].filter(Boolean);
+  return notes.length?notes.join(' '):undefined;
+ }
+ return ['Direct Anthropic API list rate.',geoNote(rate)||'Global routing.',
   rate.endpoint_assumption?'Endpoint not recorded; api.anthropic.com assumed.':'Endpoint recorded as api.anthropic.com.',
-  !speedInferred(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':
-   fast?'Fast speed inferred from the request; the response did not report usage.speed.':
-   'Standard speed assumed: no fast request and no usage.speed reported.',
+  speedNote(rate),tierNote(rate),
   rate.long_context_flat?'One rate across the full context window.':rate.max_prompt_tokens?'Priced up to '+count(rate.max_prompt_tokens)+' prompt tokens.':null
  ].filter(Boolean).join(' ');
 }
@@ -2398,7 +2488,7 @@ function ComponentCostCards({summary:s}){
   const lines=writes?
     [['Calculated tokens',sessionWrites(s,count),'tokens'],
      ['Read comparisons',count(s.session_cache_writes?.compared_requests||0),'comparisons'],
-     ['Provider write cost',amount+(priceMissing?' *':''),'reported_cost'],
+     ['Provider write cost',amount+(priceMissing?' ⚠\uFE0E'+count(priceMissing):''),'reported_cost'],
      ['Unavailable reported writes',count(tokenMissing),'missing'],
      ['Incomplete cost estimates',count(priceMissing),'unpriced']]:
     [[total?'Processed tokens':'Known tokens',viewTokens(s,tokenKey,count),'tokens'],
@@ -2406,7 +2496,7 @@ function ComponentCostCards({summary:s}){
      ['Incomplete cost estimates',count(priceMissing),'unpriced']];
   return h('article',{key,className:'au-cost-card','data-testid':'cost-card-'+key,'aria-label':label+' cost'},
    h('div',{className:'au-muted'},label),
-   h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?' *':''),
+   h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:total?unpricedNote(s):count(priceMissing)+' requests without a known '+label.toLowerCase()+' cost.'},' ⚠\uFE0E'+count(priceMissing)):''),
    h('div',{className:'au-muted'},writes?sessionWriteNote(s):priceMissing?'API-equivalent cost · subtotal':'API-equivalent cost'),
    h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i,title:field==='missing'?missingFieldNote(s,tokenKey):field==='unpriced'?'A token value or its saved unit rate is unavailable. This is not a count of lost requests.':undefined},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
  }));
@@ -2581,7 +2671,9 @@ const LEDGER_HINT_DEBOUNCE_MS=150, LEDGER_CHECK_REUSE_MS=2000;
 // leading trend bucket holds zero attempts. Fields with no per-bucket
 // evidence are admitted only under the exact guards in rollingEdgeStable. Any
 // other field, including one a future backend adds, forbids the skip.
-const ROLLING_SKIP_FIELDS=new Set(['generated_at','seq','window','summary','request_count','next_offset',
+// unpriced_total is summary-derived (a leading bucket with no attempts
+// leaves it unchanged, as it leaves summary).
+const ROLLING_SKIP_FIELDS=new Set(['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests',
  'requests','cache_read_progression','price_catalogs','applied_rate_groups','compressions',
  'compression_truncated','groups','model_groups','project_groups','session_groups','subagent_groups',
@@ -2734,7 +2826,7 @@ function resumePath(readPath,baseline,rolling){
 // Mirror projection.py's v1 manifest for the only two resumable views. The
 // manifest has no view/group labels: its exact field partition is the scope
 // evidence, alongside the signed receipt and the requested window.
-const OVERVIEW_COMMON=['generated_at','seq','window','summary','request_count','next_offset',
+const OVERVIEW_COMMON=['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
 const OVERVIEW_OTHER=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
  'compressions','compression_truncated','groups','model_groups','project_groups',
@@ -2768,7 +2860,11 @@ function validOverviewSummary(row){
   ['tokens','compared_requests','baseline_requests','missing_requests'].every(key=>
    isCount(row.session_cache_writes[key]))&&
   typeof row.session_cache_writes.basis==='string'&&
-  typeof row.session_cache_writes.method==='string';
+  typeof row.session_cache_writes.method==='string'&&
+  // A DTO or signed receipt without the unpriced signal is rejected (refetch).
+  isObject(row.unpriced)&&row.unpriced.requests===row.unpriced_requests&&isCount(row.unpriced.tokens)&&
+  isObject(row.unpriced.reasons)&&Object.keys(UNPRICED_REASONS).every(key=>isCount(row.unpriced.reasons[key]))&&
+  Object.keys(UNPRICED_REASONS).reduce((n,key)=>n+row.unpriced.reasons[key],0)===row.unpriced.requests;
 }
 // Validate the *consumed* Overview DTO at the REST boundary, including GET.
 // The counts are complete filtered-set partitions; cost, sessions, and known
@@ -2835,6 +2931,8 @@ function validOverviewDto(dto,group,expected,revision,refresh=false){
  if(!validOverviewWindow(dto,expected,refresh)||
     !Number.isFinite(dto.generated_at)||!isCount(dto.seq)||
     !validOverviewSummary(dto.summary)||dto.request_count!==dto.summary.attempts||
+    !isObject(dto.unpriced_total)||dto.unpriced_total.requests!==dto.summary.unpriced.requests||
+    dto.unpriced_total.tokens!==dto.summary.unpriced.tokens||
     (dto.next_offset!==null&&!isCount(dto.next_offset))||!isCount(dto.compression_count)||
     !validOverviewSummary(dto.subagent_summary)||!validPeak(dto.subagent_summary.peak_observed)||!isCount(dto.subagent_summary.agents)||
     dto.subagent_summary.attempts>dto.summary.attempts||
@@ -3629,7 +3727,7 @@ function UsagePageScope({selected}){
   setRequestFilters(next);if(tab!=='Overview')setTab('Requests');
  }
  const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),isQuota?null:h(UnpricedBadge,{data:currentData}),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
@@ -3822,7 +3920,7 @@ const plugin = {
 const baseDemoRest=demoRest;
 // Match projection.py's version-1 wire shape. Keep the legacy fixture full:
 // projected reads alone omit fields, rather than silently supplying full DTOs.
-const fixtureCommon=['generated_at','seq','window','summary','request_count','next_offset',
+const fixtureCommon=['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
 const fixtureDetail=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
  'compressions','compression_truncated','groups','model_groups','project_groups',
@@ -3833,9 +3931,29 @@ const fixtureGroups={model:'model_groups',time:null,project:'project_groups',
 const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
  cache:['price_catalogs','applied_rate_groups'],compressions:['compressions','compression_truncated'],
  models:['groups'],skills:[]};
+// Unpriced signal (wire shape of storage.summary): synthetic rows without an
+// injected `unpriced` count every incomplete row as usage_missing, 0 tokens.
+const fixtureUnpricedReasons=['no_catalogue','model_missing','ambiguous','usage_missing','endpoint_unpriced'];
+function fixtureUnpriced(row){
+ if(row?.unpriced)return row.unpriced;
+ const n=row?.unpriced_requests||0;
+ return {requests:n,tokens:0,reasons:Object.fromEntries(fixtureUnpricedReasons.map(k=>[k,k==='usage_missing'?n:0]))};
+}
+// Row-derived unpriced signal on every synthetic summary (tests set
+// `unpriced_reason` on incomplete rows; unset means usage_missing).
+if(typeof summarize==='function'&&!summarize.fixtureUnpriced){
+ const base=summarize;
+ summarize=function(rows){
+  const out=base(rows),gap=rows.filter(r=>!r.cost?.complete);
+  out.unpriced={requests:gap.length,tokens:gap.reduce((n,r)=>n+(r.usage?.total_tokens||0),0),
+   reasons:Object.fromEntries(fixtureUnpricedReasons.map(k=>[k,gap.filter(r=>(r.unpriced_reason||'usage_missing')===k).length]))};
+  return out;
+ };
+ summarize.fixtureUnpriced=true;
+}
 function fixtureOverviewSummary(row){
  const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];
- return {...row,peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,
+ return {...row,unpriced:fixtureUnpriced(row),peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,
   supplemental_requests:row.supplemental_requests||0,
   known_cost_usd:String(row.known_cost_usd),
   missing_reasons:Object.fromEntries(Object.entries(row.missing_fields).map(([key,n])=>
@@ -3845,6 +3963,10 @@ function fixtureOverviewSummary(row){
 }
 function fixtureProject(full,p){
  const view=p.get('view'),group=p.get('group');
+ if(full.summary!==undefined&&full.unpriced_total===undefined){
+  const gap=full.summary?fixtureUnpriced(full.summary):null;
+  full={...full,unpriced_total:gap?{requests:gap.requests,tokens:gap.tokens}:null};
+ }
  if(view==='overview'&&Object.hasOwn(fixtureGroups,group)&&full.summary){
   // The synthetic base predates the backend wire summary; keep only the
   // projected fixture's consumed shape aligned with the real API.
@@ -3881,6 +4003,20 @@ function fixtureProject(full,p){
   projection:{version:1,included,omitted},
   ...(p.has('list_mode')?{list_count:full.list_count,list_next_offset:full.list_next_offset,
     ...(full.list_rows?{list_rows:full.list_rows}:{}),...(full.list_provenance?{list_provenance:full.list_provenance}:{})}:{})};
+}
+// Opt-in synthetic Anthropic subscription shaped like the plugin's limits[]
+// windows (Current session, Current week, then the model-scoped Fable week) plus
+// one recorded request so it has an All-providers row. Not in the default
+// catalogue: call before the pane mounts (scripts inject it before register).
+function fixtureAnthropicFable({fable=true}={}){
+ const event=JSON.parse(JSON.stringify(events[0]));
+ Object.assign(event,{provider:'anthropic',id:'fixture-anthropic-fable',started:now-900,ended:now-899});
+ events.push(event);
+ const windows=[{label:'Current session',used_percent:38,remaining_percent:62,reset_at:new Date((now+3600)*1000).toISOString(),detail:null},
+  {label:'Current week',used_percent:45,remaining_percent:55,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null}];
+ if(fable)windows.push({label:'Fable week',used_percent:15,remaining_percent:85,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null});
+ demoProviders.push({id:'anthropic',label:'Anthropic',active:true,configured:true,quota:{available:true,source:'oauth_usage_api',
+  title:'Account limits',plan:'Max',details:[],windows}});
 }
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
@@ -3990,6 +4126,65 @@ demoRest=async function(path,options={}){
  const result=await fixtureAggregate(u);
  if(window.holdAggregate)return new Promise(resolve=>window.holdAggregate.push(()=>resolve(result)));
  return result;
+};
+
+// Opt-in synthetic Cache & costs rows, one per pricing basis (rate DTO shape
+// of pricing.py). Returns {model: [Context text, ...tooltip phrases]} so the
+// browser test asserts exactly what this fixture seeded. Never called by
+// default: other preview tests see the unchanged synthetic set.
+window.demoPricingBasisRows=function(){
+ const LIST_BASIS='OpenRouter list price for this model id; serving provider has no catalogue here, actual charge may differ';
+ const anth={input_tokens:'5',output_tokens:'25',cache_read_tokens:'.5',cache_write_tokens:'6.25',source:'SYNTHETIC Anthropic public pricing',
+  service_tier:'standard',inference_geo:'global',long_context_flat:true,endpoint_assumption:false,geo_assumption:false,
+  tier_assumption:false,speed_inferred:false,speed_basis:'usage.speed',pricing_basis:'provider_catalog_estimate'};
+ const list={input_tokens:'5',output_tokens:'25',cache_read_tokens:'.5',cache_write_tokens:'6.25',service_tier:'standard',
+  source:'OpenRouter list price (fallback)',basis:LIST_BASIS,pricing_basis:'list_price_fallback',tier_assumption:false,
+  fallback_model:'anthropic/claude-opus-9.5',fallback_match:'vendor_prefixed'};
+ const rows=[
+  ['basis-tier',{...anth,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   'Global · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.','Standard speed reported by usage.speed.']],
+  ['basis-geo',{...anth,geo_assumption:true,geo_basis:'unknown_value_as_default',unknown_values:{'usage.inference_geo':'eu'}},
+   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported "eu", not in the catalogue.']],
+  ['basis-speed',{...anth,tier_assumption:true,speed_inferred:true,speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   'Global · assumed standard speed',['Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-na',{...anth,geo_assumption:true,geo_basis:'not_available_as_global'},
+   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.']],
+  ['basis-unrec',{...anth,geo_assumption:true,geo_basis:'unrecognised_as_global',retrospective:true},
+   'Global · assumed geo',['Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.']],
+  ['basis-absent',{...anth,geo_assumption:true,tier_assumption:true,speed_inferred:true,speed_basis:'assumed standard speed (no fast request)'},
+   'Global · assumed geo/standard speed',['Global routing assumed: no usage.inference_geo was reported.','Standard speed assumed: no fast request and no usage.speed reported.']],
+  ['basis-list',{...list},'List price',[LIST_BASIS+'.','Matched OpenRouter id anthropic/claude-opus-9.5 (vendor-prefixed).']],
+  ['basis-list-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-speed',speed_inferred:true,
+   speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   'List price · assumed speed',['Matched OpenRouter id basis-list-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-routed-tier',{input_tokens:'1',output_tokens:'2',service_tier:'standard',source:'SYNTHETIC routed',pricing_basis:'provider_catalog_estimate',
+   tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'requested service_tier':'turbo'}},
+   'Standard · assumed tier',['Standard tier assumed: the request asked for service_tier "turbo", not in the catalogue.']],
+  // Banded / minimum-prompt rates keep their band text and still show the assumption.
+  ['basis-band-tier',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'short',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   '≤272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+  ['basis-long-tier',{input_tokens:'5',output_tokens:'22.5',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'long',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   '>272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+  ['basis-list-min-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-min-speed',min_prompt_tokens:200000,speed_inferred:true,
+   speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   '≥200,000 · assumed speed',['Matched OpenRouter id basis-list-min-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-band-plain',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
+   context_band:'short',threshold_tokens:128000,tier_assumption:false},'≤128,000',[]],
+ ];
+ const expected={};
+ rows.forEach(([model,rate,text,phrases],i)=>{
+  expected[model]=[text,...phrases];
+  const usage={input_tokens:100,output_tokens:10,cache_read_tokens:0,cache_write_tokens:0,reasoning_tokens:0,prompt_tokens:100,total_tokens:110,usage_source:'SYNTHETIC TEST',request_count:1};
+  events.push({id:'basis-'+i,provider:'openrouter',model,response_model:model,service_tier:'unspecified',started:now-120-i,ended:now-119-i,
+   session_id:'basis-session',task:'main',agent_kind:'primary',status:'completed',usage,
+   cost:{components:{input_tokens:0,output_tokens:0,cache_read_tokens:0,cache_write_tokens:0},total_usd:0,known_components_usd:0,complete:true,rate:{provider:'openrouter',model,...rate},
+    cache_read_savings_usd:0,cache_write_premium_usd:0,cache_savings_usd:0}});
+ });
+ window.demoChange++;
+ for(const s of window.demoSubscribers)s({type:'changed',mode:'native-events'});
+ return expected;
 };
 // END ALL PROFILES OFFLINE FIXTURES
 plugin.register({os:{writeClipboard:async text=>{if(window.demoClipboardFail)return false;window.demoClipboard=text;return true}},rest:demoRest,socket:demoSocket,storage:{get:(k,d)=>window.demoStored[k]??d,set:(k,v)=>{window.demoStored[k]=v}},onDispose:fn=>{window.disposePlugin=fn},register:contribution=>{if(contribution.id==='page')window.page=contribution.render}});
