@@ -1,5 +1,6 @@
 """Offline chart tooltip placement and live theme/point coverage (synthetic only)."""
 import os
+import re
 from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
@@ -28,7 +29,11 @@ def test_chart_tooltip():
             page.wait_for_function('window.demoCalls.filter(p=>p.startsWith("/ledger?")).length >= 2')
             page.wait_for_function('window.tooltipData?.trend?.buckets?.at(-1)?.missing_usage === 1')
             chart = page.get_by_test_id('usage-chart')
-            expect(page.get_by_test_id('subagent-summary')).to_contain_text('Peak observed subagents: 2 · partial')
+            # The approved responsive layout (099060f) compacts the card to
+            # 'Peak N · partial'; the full explanation lives in its title.
+            card_peak = page.get_by_test_id('subagent-summary').locator('span', has_text=re.compile(r'^Peak '))
+            expect(card_peak).to_have_text(re.compile(r'^Peak 2 · partial · '))
+            expect(card_peak).to_have_attribute('title', re.compile(r'^Distinct child identities in overlapping matched start/stop intervals.*\(1 unmatched events\)'))
             page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Model').click()
             expect(page.get_by_role('columnheader', name='Peak observed')).to_be_visible()
             page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Subagents').click()
