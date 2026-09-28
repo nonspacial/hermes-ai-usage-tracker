@@ -1579,12 +1579,12 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
  const {line,area}=allProviders?{line:'',area:''}:traces(vals);
  const stamp=t=>new Date(t*1000).toLocaleString(undefined,(data?.trend?.seconds||86400)<86400?{hour:'numeric',minute:'2-digit',timeZone:'UTC'}:{month:'short',day:'numeric',timeZone:'UTC'}),active=hover==null?null:points[Math.min(hover,points.length-1)];
- const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
+ const pointSummary=active?new Date(active.start*1000).toLocaleString(undefined,{timeZone:'UTC'})+' UTC · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
  const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
   const row=active.provider_buckets.find(item=>item.provider===s.provider);
   return {provider:s.provider,label:providerLabel(s.provider,seriesIds),
    value:(cost?selectedCost(row):viewTokens(row,'total_tokens',count))+(cost?'':' tokens')+' · '+count(row?.attempts||0)+' requests'+
-    (cost&&row?.unpriced_requests?' · partial price coverage':row?.missing_usage?' · includes missing usage':'')+
+    (cost&&row?.unpriced_requests?' · partial price coverage · '+count(row.unpriced_requests)+' requests unpriced':row?.missing_usage?' · includes missing usage':'')+
     (data?.coverage?.status==='partial'?' · partial profile coverage':'')};
  })):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
@@ -1841,26 +1841,72 @@ function cacheAmount(s){return h('span',{},cacheCostValue(s),h(UnpricedMark,{sum
 // Show them instead of an indistinguishable 'Standard' (US-only is 1.1x).
 function anthropicRate(rate){return !!rate&&(rate.inference_geo==='global'||rate.inference_geo==='us')}
 function speedInferred(rate){return rate.speed_inferred??(rate.speed_basis!=null&&rate.speed_basis!=='usage.speed')}
+// Assumption labels come from the rate's *_basis fields: unknown_value_as_default
+// (a reported enum outside the catalogue), not_available_as_global,
+// unrecognised_as_global, or list_price_fallback. unknown_values quotes the
+// reported value (bounded enum text recorded by the recorder).
+const UNKNOWN_DEFAULT='unknown_value_as_default';
+function unknownSpeed(rate){return rate.unknown_values?.['usage.speed']!=null||String(rate.speed_basis||'').startsWith('unknown usage.speed')}
+function reportedValue(rate,fields){for(const f of fields){const v=rate.unknown_values?.[f];if(v!=null)return [f,String(v).slice(0,64)]}return null}
+function reportedPhrase(hit,fallback){
+ if(!hit)return fallback;
+ const [field,value]=hit;
+ return field==='requested service_tier'?'the request asked for service_tier "'+value+'"':field+' reported "'+value+'"';
+}
+function assumedLabels(rate){
+ const anth=anthropicRate(rate),labels=[];
+ if(rate.geo_assumption||rate.geo_basis)labels.push('geo');
+ if(anth&&rate.endpoint_assumption)labels.push('endpoint');
+ if(anth&&rate.service_tier!=='fast'&&(speedInferred(rate)||(rate.tier_assumption&&!rate.tier_basis)))labels.push('standard speed');
+ else if(!anth&&unknownSpeed(rate))labels.push('speed');
+ if(rate.tier_basis===UNKNOWN_DEFAULT)labels.push('tier');
+ return labels;
+}
 function rateContext(rate){
  if(!rate)return '—';
  if(rate.context_band&&rate.threshold_tokens!=null)return (rate.context_band==='long'?'>':'≤')+count(rate.threshold_tokens);
  if(rate.min_prompt_tokens)return '≥'+count(rate.min_prompt_tokens);
- if(!anthropicRate(rate))return 'Standard';
- const assumed=[rate.geo_assumption&&'geo',rate.endpoint_assumption&&'endpoint',rate.tier_assumption&&'standard speed'].filter(Boolean);
+ const assumed=assumedLabels(rate),suffix=assumed.length?'assumed '+assumed.join('/'):null;
+ if(rate.pricing_basis==='list_price_fallback')return ['List price',suffix].filter(Boolean).join(' · ');
+ if(!anthropicRate(rate))return ['Standard',suffix].filter(Boolean).join(' · ');
  return [rate.inference_geo==='us'?'US-only 1.1×':'Global',
-  rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,
-  assumed.length?'assumed '+assumed.join('/'):null].filter(Boolean).join(' · ');
+  rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,suffix].filter(Boolean).join(' · ');
+}
+function geoNote(rate){
+ if(rate.inference_geo==='us')return 'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).';
+ if(rate.geo_basis===UNKNOWN_DEFAULT)return 'Global routing assumed: '+reportedPhrase(reportedValue(rate,['usage.inference_geo']),'usage.inference_geo reported a value')+', not in the catalogue.';
+ if(rate.geo_basis==='not_available_as_global')return 'Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.';
+ if(rate.geo_basis==='unrecognised_as_global')return 'Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.';
+ if(rate.geo_assumption)return 'Global routing assumed: no usage.inference_geo was reported.';
+ return null;
+}
+function speedNote(rate){
+ const fast=rate.service_tier==='fast';
+ if(unknownSpeed(rate))return (fast?'Fast speed assumed from the request: ':'Standard speed assumed: ')+reportedPhrase(reportedValue(rate,['usage.speed']),'usage.speed reported a value')+', not in the catalogue.';
+ if(!speedInferred(rate))return anthropicRate(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':null;
+ if(fast)return 'Fast speed inferred from the request; the response did not report usage.speed.';
+ return String(rate.speed_basis||'').startsWith('unknown requested tier')?'Standard speed assumed: no usage.speed reported.':
+  'Standard speed assumed: no fast request and no usage.speed reported.';
+}
+function tierNote(rate){
+ if(rate.tier_basis!==UNKNOWN_DEFAULT)return null;
+ return 'Standard tier assumed: '+reportedPhrase(reportedValue(rate,['usage.service_tier','response service_tier','requested service_tier']),'the reported service tier')+', not in the catalogue.';
 }
 function rateContextNote(rate){
- if(!anthropicRate(rate))return undefined;
- const fast=rate.service_tier==='fast';
- return ['Direct Anthropic API list rate.',
-  rate.inference_geo==='us'?'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).':
-   rate.geo_assumption?'Global routing assumed: no usage.inference_geo was reported.':'Global routing.',
+ if(!rate)return undefined;
+ if(rate.pricing_basis==='list_price_fallback'){
+  const id=rate.fallback_model||rate.model;
+  return [String(rate.basis||'OpenRouter list price').replace(/\.?$/,'.'),
+   'Matched OpenRouter id '+id+(rate.fallback_match==='exact'?' (exact).':rate.fallback_match?' (vendor-prefixed).':'.'),
+   tierNote(rate),speedNote(rate),geoNote(rate)].filter(Boolean).join(' ');
+ }
+ if(!anthropicRate(rate)){
+  const notes=[tierNote(rate),unknownSpeed(rate)?speedNote(rate):null,rate.geo_basis?geoNote(rate):null].filter(Boolean);
+  return notes.length?notes.join(' '):undefined;
+ }
+ return ['Direct Anthropic API list rate.',geoNote(rate)||'Global routing.',
   rate.endpoint_assumption?'Endpoint not recorded; api.anthropic.com assumed.':'Endpoint recorded as api.anthropic.com.',
-  !speedInferred(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':
-   fast?'Fast speed inferred from the request; the response did not report usage.speed.':
-   'Standard speed assumed: no fast request and no usage.speed reported.',
+  speedNote(rate),tierNote(rate),
   rate.long_context_flat?'One rate across the full context window.':rate.max_prompt_tokens?'Priced up to '+count(rate.max_prompt_tokens)+' prompt tokens.':null
  ].filter(Boolean).join(' ');
 }

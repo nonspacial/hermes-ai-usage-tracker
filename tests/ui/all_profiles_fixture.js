@@ -195,3 +195,50 @@ demoRest=async function(path,options={}){
  if(window.holdAggregate)return new Promise(resolve=>window.holdAggregate.push(()=>resolve(result)));
  return result;
 };
+
+// Opt-in synthetic Cache & costs rows, one per pricing basis (rate DTO shape
+// of pricing.py). Returns {model: [Context text, ...tooltip phrases]} so the
+// browser test asserts exactly what this fixture seeded. Never called by
+// default: other preview tests see the unchanged synthetic set.
+window.demoPricingBasisRows=function(){
+ const LIST_BASIS='OpenRouter list price for this model id; serving provider has no catalogue here, actual charge may differ';
+ const anth={input_tokens:'5',output_tokens:'25',cache_read_tokens:'.5',cache_write_tokens:'6.25',source:'SYNTHETIC Anthropic public pricing',
+  service_tier:'standard',inference_geo:'global',long_context_flat:true,endpoint_assumption:false,geo_assumption:false,
+  tier_assumption:false,speed_inferred:false,speed_basis:'usage.speed',pricing_basis:'provider_catalog_estimate'};
+ const list={input_tokens:'5',output_tokens:'25',cache_read_tokens:'.5',cache_write_tokens:'6.25',service_tier:'standard',
+  source:'OpenRouter list price (fallback)',basis:LIST_BASIS,pricing_basis:'list_price_fallback',tier_assumption:false,
+  fallback_model:'anthropic/claude-opus-9.5',fallback_match:'vendor_prefixed'};
+ const rows=[
+  ['basis-tier',{...anth,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
+   'Global · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.','Standard speed reported by usage.speed.']],
+  ['basis-geo',{...anth,geo_assumption:true,geo_basis:'unknown_value_as_default',unknown_values:{'usage.inference_geo':'eu'}},
+   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported "eu", not in the catalogue.']],
+  ['basis-speed',{...anth,tier_assumption:true,speed_inferred:true,speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   'Global · assumed standard speed',['Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-na',{...anth,geo_assumption:true,geo_basis:'not_available_as_global'},
+   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.']],
+  ['basis-unrec',{...anth,geo_assumption:true,geo_basis:'unrecognised_as_global',retrospective:true},
+   'Global · assumed geo',['Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.']],
+  ['basis-absent',{...anth,geo_assumption:true,tier_assumption:true,speed_inferred:true,speed_basis:'assumed standard speed (no fast request)'},
+   'Global · assumed geo/standard speed',['Global routing assumed: no usage.inference_geo was reported.','Standard speed assumed: no fast request and no usage.speed reported.']],
+  ['basis-list',{...list},'List price',[LIST_BASIS+'.','Matched OpenRouter id anthropic/claude-opus-9.5 (vendor-prefixed).']],
+  ['basis-list-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-speed',speed_inferred:true,
+   speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
+   'List price · assumed speed',['Matched OpenRouter id basis-list-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+  ['basis-routed-tier',{input_tokens:'1',output_tokens:'2',service_tier:'standard',source:'SYNTHETIC routed',pricing_basis:'provider_catalog_estimate',
+   tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'requested service_tier':'turbo'}},
+   'Standard · assumed tier',['Standard tier assumed: the request asked for service_tier "turbo", not in the catalogue.']],
+ ];
+ const expected={};
+ rows.forEach(([model,rate,text,phrases],i)=>{
+  expected[model]=[text,...phrases];
+  const usage={input_tokens:100,output_tokens:10,cache_read_tokens:0,cache_write_tokens:0,reasoning_tokens:0,prompt_tokens:100,total_tokens:110,usage_source:'SYNTHETIC TEST',request_count:1};
+  events.push({id:'basis-'+i,provider:'openrouter',model,response_model:model,service_tier:'unspecified',started:now-120-i,ended:now-119-i,
+   session_id:'basis-session',task:'main',agent_kind:'primary',status:'completed',usage,
+   cost:{components:{input_tokens:0,output_tokens:0,cache_read_tokens:0,cache_write_tokens:0},total_usd:0,known_components_usd:0,complete:true,rate:{provider:'openrouter',model,...rate},
+    cache_read_savings_usd:0,cache_write_premium_usd:0,cache_savings_usd:0}});
+ });
+ window.demoChange++;
+ for(const s of window.demoSubscribers)s({type:'changed',mode:'native-events'});
+ return expected;
+};

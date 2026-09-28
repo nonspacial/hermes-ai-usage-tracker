@@ -4,6 +4,10 @@ Fully priced groups show nothing; a group with unpriced requests shows a
 compact count marker whose reasons ride on the shared tooltip, and the pane
 header shows 'N tokens unpriced' beside the freshness badge. Adjacent cells
 keep their size and style.
+
+The Cache & costs Context column and its tooltip read the rate's *_basis /
+pricing_basis: one synthetic row per basis (fixture demoPricingBasisRows)
+must show its exact label and truthful sentence.
 """
 import os
 import re
@@ -119,8 +123,45 @@ def run():
         page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Overview', exact=True).click()
         expect(page.get_by_test_id('unpriced-marker').first).to_be_visible()
         assert not errors, errors
+        pricing_basis_context(page, errors)
         browser.close()
     print('PASS unpriced marker text/tooltip, pane badge present/absent and placement, no adjacent-cell change; screenshots in', SHOTS)
+
+
+
+def pricing_basis_context(page, errors):
+    """Each *_basis gets its label and its own truthful tooltip sentence."""
+    expected = page.evaluate('() => window.demoPricingBasisRows()')
+    page.get_by_role('tab', name='OpenRouter', exact=True).click()
+    page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Cache & costs', exact=True).click()
+    rates = page.get_by_test_id('published-rates')
+    expect(rates.locator('tbody tr', has_text='basis-tier')).to_have_count(1)
+    by_model = {r.locator('td').nth(1).inner_text().strip(): r for r in rates.locator('tbody tr').all()}
+    seen = set()
+    for model, (text, *phrases) in expected.items():
+        context = by_model[model].locator('td').nth(3)
+        assert context.inner_text().strip() == text, (model, context.inner_text(), text)
+        span = context.locator('span[title]').first
+        title = span.get_attribute('title') or span.get_attribute('data-au-tooltip') or ''
+        for phrase in phrases:
+            assert phrase in title, (model, phrase, title)
+        # 'no ... reported' only when the value was truly absent.
+        if model != 'basis-absent':
+            assert 'no usage.inference_geo was reported' not in title and 'no usage.speed reported' not in title, (model, title)
+        seen.add(model)
+    assert seen == set(expected)
+    tip = page.locator('body > .au-tooltip:visible')
+    for model, name in (('basis-tier', 'context-assumed-tier.png'), ('basis-list', 'context-list-price.png')):
+        row = by_model[model]
+        row.locator('td').nth(3).locator('span[title], span[data-au-tooltip]').first.hover()
+        expect(tip).to_contain_text(expected[model][1][:40])
+        box = row.bounding_box()
+        tb = tip.bounding_box()
+        x0, y0 = min(box['x'], tb['x']) - 8, min(box['y'], tb['y']) - 8
+        x1, y1 = max(box['x'] + box['width'], tb['x'] + tb['width']) + 8, max(box['y'] + box['height'], tb['y'] + tb['height']) + 8
+        page.screenshot(path=str(SHOTS / name), clip={'x': max(0, x0), 'y': max(0, y0), 'width': x1 - max(0, x0), 'height': y1 - max(0, y0)})
+        page.mouse.move(0, 0)
+    assert not errors, errors
 
 
 if __name__ == '__main__':
