@@ -17,7 +17,7 @@ import sqlite3
 import time
 from typing import Any
 
-from .storage import summary
+from .storage import summary, unpriced_total
 from .read_snapshot import snapshot_root, SnapshotBusy, SnapshotUnsupported
 
 
@@ -366,6 +366,7 @@ def ledger(runtime, inventory, *, start: float=0, end=None, offset=0, limit=200,
            'coverage': coverage(inventory, statuses), 'quota': quota_unavailable(), 'quota_observations': [],
            'summary': merge_summaries([r['summary'] for r in data]) if data else None,
            'seq': None, 'profile_sequences': {p['profile_id']: r['seq'] for p, r in reports}}
+    out['unpriced_total'] = unpriced_total(out['summary']) if data else None
     for field in ('request_count', 'compression_count', 'crossing_start', 'crossing_end'):
         if include(field):out[field] = sum(r[field] for r in data) if data else None
     out['next_offset'] = offset + limit if out['request_count'] is not None and offset + limit < out['request_count'] else None

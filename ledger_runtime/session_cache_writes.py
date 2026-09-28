@@ -230,26 +230,34 @@ def project(c, where, params, end):
     # The selected set is already bounded by the query, not the page. One
     # provider catalog per read snapshot serves all its eligible rows; no
     # network and no per-request catalog query or durable ledger mutation.
-    from .pricing import PROVIDERS, select_rate
+    from .pricing import gap_reason, select_rate, source_for
     from .accounting import costs
     catalogs = {}
     projected_costs = {}
+
+    def catalog(source):
+        if source is None:
+            return None
+        if source not in catalogs:
+            row = c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1', (source,)).fetchone()
+            catalogs[source] = (row['id'], json.loads(row['data'])) if row else None
+        return catalogs[source]
     c.execute('CREATE TEMP TABLE session_write_projection(id TEXT PRIMARY KEY,data TEXT NOT NULL)')
     for r in c.execute('SELECT id,data FROM requests WHERE '+where, params):
         data = json.loads(r['data'])
         data['calculated_cache_writes'] = changes.get(r['id']) or observation(data)
         original = data.get('cost') or {}
-        source = PROVIDERS.get(data.get('provider'))
-        if (source and data.get('ended') is not None and data.get('status') not in ('pending','usage_received')
+        # Every provider has a price path: its own catalogue, the labelled
+        # OpenRouter list-price fallback, or a local endpoint's known $0.
+        source, mode = source_for(data)
+        if (data.get('ended') is not None and data.get('status') not in ('pending','usage_received')
                 and not original.get('rate') and not original.get('complete')
                 and Decimal(original.get('known_components_usd') or '0') == 0
                 and data.get('usage') and any(count(data['usage'].get(k)) for k in
                     ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'))):
-            if source not in catalogs:
-                row = c.execute('SELECT id,data FROM provider_catalog WHERE source_id=? ORDER BY observed DESC,id DESC LIMIT 1', (source,)).fetchone()
-                catalogs[source] = (row['id'], json.loads(row['data'])) if row else None
-            snapshot = catalogs[source]
-            rate = select_rate(snapshot[1], data, snapshot[0], data['ended'], retrospective=True) if snapshot else None
+            snapshot = catalog(source)
+            rate = (select_rate(snapshot[1] if snapshot else None, data, snapshot[0] if snapshot else None,
+                                data['ended'], retrospective=True) if snapshot or mode == 'local' else None)
             if rate:
                 # The displayed cost is a TEMP read projection. Its original
                 # (possibly legacy-adjusted) cost and usage remain inspectable;
@@ -258,12 +266,18 @@ def project(c, where, params, end):
                 data['cost'] = costs(data['usage'], rate)
                 data['supplemental_valuation'] = {
                     'basis': 'current_published_rate_for_past_usage',
-                    'not_historical_charge': True, 'source_id': source,
-                    'catalog_revision': snapshot[0], 'observed_at': rate['observed_at'],
+                    'not_historical_charge': True, 'source_id': source or rate['origin'],
+                    'catalog_revision': rate['catalog_revision'], 'observed_at': rate['observed_at'],
                     'request_ended_at': data['ended'], 'model': rate['model'],
                     'service_tier': rate['service_tier'], 'context_band': rate.get('context_band'),
                     'inference_geo': rate.get('inference_geo'),
                     'source_url': rate['source_url'], 'content_sha256': rate['content_sha256']}
+        # Read-time reason for every selected request without a complete
+        # cost; summaries count it. Never written to main.requests.
+        cost = data.get('cost') or {}
+        if not cost.get('complete'):
+            snapshot = catalog(source) if not cost.get('rate') else None
+            data['unpriced_reason'] = gap_reason(data, snapshot[1] if snapshot else None)
         c.execute('INSERT INTO session_write_projection VALUES(?,?)',
                   (r['id'], json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False)))
         # JSON round-trips str/int/float/bool/None/list/dict exactly.

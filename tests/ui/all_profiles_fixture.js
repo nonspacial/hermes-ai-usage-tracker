@@ -2,7 +2,7 @@
 const baseDemoRest=demoRest;
 // Match projection.py's version-1 wire shape. Keep the legacy fixture full:
 // projected reads alone omit fields, rather than silently supplying full DTOs.
-const fixtureCommon=['generated_at','seq','window','summary','request_count','next_offset',
+const fixtureCommon=['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
 const fixtureDetail=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
  'compressions','compression_truncated','groups','model_groups','project_groups',
@@ -13,9 +13,29 @@ const fixtureGroups={model:'model_groups',time:null,project:'project_groups',
 const fixtureViews={overview:[],requests:['requests','cache_read_progression'],
  cache:['price_catalogs','applied_rate_groups'],compressions:['compressions','compression_truncated'],
  models:['groups'],skills:[]};
+// Unpriced signal (wire shape of storage.summary): synthetic rows without an
+// injected `unpriced` count every incomplete row as usage_missing, 0 tokens.
+const fixtureUnpricedReasons=['no_catalogue','model_missing','ambiguous','usage_missing','endpoint_unpriced'];
+function fixtureUnpriced(row){
+ if(row?.unpriced)return row.unpriced;
+ const n=row?.unpriced_requests||0;
+ return {requests:n,tokens:0,reasons:Object.fromEntries(fixtureUnpricedReasons.map(k=>[k,k==='usage_missing'?n:0]))};
+}
+// Row-derived unpriced signal on every synthetic summary (tests set
+// `unpriced_reason` on incomplete rows; unset means usage_missing).
+if(typeof summarize==='function'&&!summarize.fixtureUnpriced){
+ const base=summarize;
+ summarize=function(rows){
+  const out=base(rows),gap=rows.filter(r=>!r.cost?.complete);
+  out.unpriced={requests:gap.length,tokens:gap.reduce((n,r)=>n+(r.usage?.total_tokens||0),0),
+   reasons:Object.fromEntries(fixtureUnpricedReasons.map(k=>[k,gap.filter(r=>(r.unpriced_reason||'usage_missing')===k).length]))};
+  return out;
+ };
+ summarize.fixtureUnpriced=true;
+}
 function fixtureOverviewSummary(row){
  const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];
- return {...row,peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,
+ return {...row,unpriced:fixtureUnpriced(row),peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,
   supplemental_requests:row.supplemental_requests||0,
   known_cost_usd:String(row.known_cost_usd),
   missing_reasons:Object.fromEntries(Object.entries(row.missing_fields).map(([key,n])=>
@@ -25,6 +45,10 @@ function fixtureOverviewSummary(row){
 }
 function fixtureProject(full,p){
  const view=p.get('view'),group=p.get('group');
+ if(full.summary!==undefined&&full.unpriced_total===undefined){
+  const gap=full.summary?fixtureUnpriced(full.summary):null;
+  full={...full,unpriced_total:gap?{requests:gap.requests,tokens:gap.tokens}:null};
+ }
  if(view==='overview'&&Object.hasOwn(fixtureGroups,group)&&full.summary){
   // The synthetic base predates the backend wire summary; keep only the
   // projected fixture's consumed shape aligned with the real API.

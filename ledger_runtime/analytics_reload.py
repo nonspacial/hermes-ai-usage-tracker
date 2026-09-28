@@ -30,7 +30,7 @@ from .read_snapshot import selected_snapshot_root, signature
 RELOADABLE = ('session_cache_writes', 'cache_progression', 'observed_peak', 'storage')
 MAX_RESUME_BYTES = 4 * 1024 * 1024
 DIGEST_SETTLE = 2.0  # seconds; see AnalyticsRuntime._digest
-READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql',
+READ_DEFINITIONS = {'summary', 'DecimalSum', '_exprs', 'summary_from_sql', 'unpriced_total',
                     'sql_summary', 'sql_trend', 'attribution_groups', 'project_options',
                     'cost_admission',
                     'sql_applied_rate_groups', 'legacy_read_view', 'request_predicate'}
@@ -321,10 +321,12 @@ class AnalyticsRuntime:
             buckets=base.get('trend',{}).get('buckets')
             if (revision==generation['revision'] and base.get('incremental',{}).get('revision') is not None
                     and 'peak_observed' in base.get('subagent_summary',{})
+                    # Receipts sealed before the unpriced signal take a full read.
+                    and isinstance(base.get('unpriced_total'),dict) and 'unpriced' in base.get('summary',{})
                     and isinstance(buckets,list) and all(
-                        isinstance(bucket,dict) and 'peak_observed' in bucket
+                        isinstance(bucket,dict) and 'peak_observed' in bucket and 'unpriced' in bucket
                         and isinstance(bucket.get('provider_buckets'),list)
-                        and all(isinstance(row,dict) and isinstance(row.get('provider'),str)
+                        and all(isinstance(row,dict) and isinstance(row.get('provider'),str) and 'unpriced' in row
                                 for row in bucket['provider_buckets'])
                         for bucket in buckets)):
                 from .incremental_refresh import replace_buckets

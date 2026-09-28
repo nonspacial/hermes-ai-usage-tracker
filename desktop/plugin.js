@@ -749,7 +749,7 @@ const ledgerCss = `
 .au-header-picker{min-width:0;flex:1 1 auto}
 .au-header-profile{flex:0 1 176px;min-width:70px}
 .au-ledger .au-header-picker>:is(button,select){width:100%;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.au-header-main>.au-refresh-split,.au-page-header>.au-connection{flex-shrink:0}
+.au-header-main>.au-refresh-split,.au-page-header>.au-connection,.au-page-header>.au-unpriced-badge{flex-shrink:0}
 .au-header-main>button{white-space:nowrap;flex-shrink:0}
 @container(max-width:1000px){.au-header-chip-label{display:none}.au-header-chip{flex-basis:224px}}
 @container(max-width:650px){
@@ -762,10 +762,13 @@ const ledgerCss = `
  .au-header-title{font-size:.6875rem}.au-page-header>.au-connection span:last-child{display:none}
  .au-header-chip,.au-header-profile{min-width:0}
  .au-ledger .au-page-header>.au-connection{padding:7px}
+ .au-ledger .au-page-header>.au-unpriced-badge{max-width:92px;overflow:hidden;text-overflow:ellipsis}
  .au-ledger .au-header-picker>:is(button,select){padding-left:5px;padding-right:5px}
 }
 .au-ledger .au-connection{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;font-size:.6875rem;line-height:1.4;white-space:nowrap;border-radius:999px;background:transparent;flex:none}
 .au-ledger .au-connection-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.au-ledger .au-unpriced-mark{color:var(--ui-text-warning,#d2b776);font-weight:inherit;white-space:nowrap}
+.au-ledger .au-unpriced-badge{display:inline-flex;align-items:center;padding:5px 9px;font-size:.6875rem;line-height:1.4;white-space:nowrap;border:1px solid var(--ui-stroke-warning,#5b5135);border-radius:999px;color:var(--ui-text-warning,#d2b776);flex:none}
 .au-ledger .au-connection[data-state="online"]{color:var(--ui-text-success,#64bba8);border-color:var(--ui-stroke-success,#2d514b)}
 .au-ledger .au-connection[data-state="limited"],.au-ledger .au-connection[data-state="unverified"]{color:var(--ui-text-warning,#d2b776);border-color:var(--ui-stroke-warning,#5b5135)}
 .au-ledger .au-connection[data-state="disconnected"],.au-ledger .au-connection[data-state="not_recording"]{color:var(--ui-text-error,#d58c96);border-color:var(--ui-stroke-error,#613f49)}
@@ -1647,7 +1650,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row','data-provider':g.provider,style:{'--au-provider-accent':providerAccent(g.provider)}},
    h('span',{title:providerLabel(g.provider,providerIds)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
-   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
+   h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),h(UnpricedMark,{summary:g})),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
    h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider))})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
@@ -1698,10 +1701,10 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
  rows.length?table([group==='time'?timeName+' (UTC)':grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
-  return [name(g),h('span',{title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':''},selectedCost(g),g.unpriced_requests?' *':''),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
+  return [name(g),h('span',{},selectedCost(g),h(UnpricedMark,{summary:g})),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
   identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString(undefined,{timeZone:'UTC'}):readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
-   {label:'Cost · API estimate',value:selectedCost(g)+(g.unpriced_requests?' *':''),title:g.unpriced_requests?g.unpriced_requests+' incomplete/unpriced records':undefined},
+   {label:'Cost · API estimate',value:selectedCost(g)+unpricedSuffix(g),title:unpricedNote(g)},
    {label:'Processed tokens'+(g.missing_fields?.total_tokens?' · known subtotal':''),value:viewTokens(g,'total_tokens'),title:g.missing_fields?.total_tokens?missingFieldNote(g,'total_tokens'):undefined}
   ]
  }))):h('p',{className:'au-muted',role:!data?.summary?'status':undefined,'data-testid':!data?.summary?'ledger-view-pending':undefined},
@@ -1797,11 +1800,43 @@ function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,w
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',onChange:e=>onEnd(e.target.value)}):null,
   h('span',{className:'au-muted au-window-label'},window?new Date(window.start*1000).toLocaleString()+' — '+new Date(window.end*1000).toLocaleString():''));
 }
+// Unpriced usage is loud, never a bare '*'. The count and reason ride on the
+// shared tooltip (title); fully priced groups (including a known $0.00) show
+// nothing. Older DTOs without `unpriced` fall back to unpriced_requests.
+const UNPRICED_REASONS={no_catalogue:'no price catalogue for this provider yet',
+ model_missing:'model not in the provider or OpenRouter catalogue',
+ ambiguous:'model id matches more than one list price',
+ usage_missing:'usage not reported yet, or a token field is missing',
+ endpoint_unpriced:'tier or endpoint without a published rate (Priority, Batch, US-only…)'};
+function unpricedCount(s){const n=s?.unpriced?.requests??s?.unpriced_requests;return Number.isSafeInteger(n)&&n>0?n:0}
+function unpricedNote(s,lead){
+ const n=unpricedCount(s);if(!n)return undefined;
+ const reasons=Object.entries(s?.unpriced?.reasons||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+ return (lead||'Known cost subtotal.')+' '+count(n)+' request'+(n===1?'':'s')+' unpriced'+
+  (s?.unpriced?.tokens?' ('+count(s.unpriced.tokens)+' tokens)':'')+(reasons.length?': '+reasons.map(([k,v])=>count(v)+' '+(UNPRICED_REASONS[k]||k)).join('; '):'')+'.';
+}
+function unpricedSuffix(s){const n=unpricedCount(s);return n?' ⚠\uFE0E'+count(n):''}
+function UnpricedMark({summary:s,lead}){
+ const n=unpricedCount(s);if(!n)return null;
+ return h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:unpricedNote(s,lead),'aria-label':count(n)+' unpriced requests'},unpricedSuffix(s));
+}
+const compactTokens=n=>Number(n).toLocaleString('en',{notation:'compact',maximumFractionDigits:1});
+function UnpricedBadge({data}){
+ const total=data?.unpriced_total;
+ if(!total||!(total.tokens>0))return null;
+ const rows=[...(data.model_groups||[]).map(g=>[(uiNames[g.provider]||g.provider)+' · '+g.model,g]),
+  ...(data.model_groups?[]:(data.provider_groups||[]).map(g=>[uiNames[g.provider]||g.provider,g]))]
+  .filter(([,g])=>g?.unpriced?.tokens>0).sort((a,b)=>b[1].unpriced.tokens-a[1].unpriced.tokens).slice(0,3);
+ const title='Costs in this window exclude '+count(total.tokens)+' tokens from '+count(total.requests)+' unpriced requests.'+
+  (rows.length?' '+rows.map(([label,g])=>label+': '+compactTokens(g.unpriced.tokens)+' tokens — '+
+   Object.entries(g.unpriced.reasons||{}).filter(([,v])=>v>0).map(([k])=>UNPRICED_REASONS[k]||k).join(', ')).join('; ')+'.':'');
+ return h('span',{className:'au-unpriced-badge','data-testid':'unpriced-badge',tabIndex:0,role:'status',title},compactTokens(total.tokens)+' tokens unpriced');
+}
 function cacheCostValue(s){
  if(!s?.attempts)return money(0);
  return Object.keys(bucketNames).some(k=>(s.cost_missing_fields?.[k]??s.attempts)<s.attempts)?money(s.known_cost_usd):'—';
 }
-function cacheAmount(s){return h('span',{title:s?.unpriced_requests?'Known cost subtotal; '+count(s.unpriced_requests)+' requests pending, incomplete or unpriced':''},cacheCostValue(s),s?.unpriced_requests?' *':'')}
+function cacheAmount(s){return h('span',{},cacheCostValue(s),h(UnpricedMark,{summary:s}))}
 // Direct Anthropic rates carry inference_geo plus recorded assumption flags.
 // Show them instead of an indistinguishable 'Standard' (US-only is 1.1x).
 function anthropicRate(rate){return !!rate&&(rate.inference_geo==='global'||rate.inference_geo==='us')}
@@ -1842,7 +1877,7 @@ function ComponentCostCards({summary:s}){
   const lines=writes?
     [['Calculated tokens',sessionWrites(s,count),'tokens'],
      ['Read comparisons',count(s.session_cache_writes?.compared_requests||0),'comparisons'],
-     ['Provider write cost',amount+(priceMissing?' *':''),'reported_cost'],
+     ['Provider write cost',amount+(priceMissing?' ⚠\uFE0E'+count(priceMissing):''),'reported_cost'],
      ['Unavailable reported writes',count(tokenMissing),'missing'],
      ['Incomplete cost estimates',count(priceMissing),'unpriced']]:
     [[total?'Processed tokens':'Known tokens',viewTokens(s,tokenKey,count),'tokens'],
@@ -1850,7 +1885,7 @@ function ComponentCostCards({summary:s}){
      ['Incomplete cost estimates',count(priceMissing),'unpriced']];
   return h('article',{key,className:'au-cost-card','data-testid':'cost-card-'+key,'aria-label':label+' cost'},
    h('div',{className:'au-muted'},label),
-   h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?' *':''),
+   h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:total?unpricedNote(s):count(priceMissing)+' requests without a known '+label.toLowerCase()+' cost.'},' ⚠\uFE0E'+count(priceMissing)):''),
    h('div',{className:'au-muted'},writes?sessionWriteNote(s):priceMissing?'API-equivalent cost · subtotal':'API-equivalent cost'),
    h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i,title:field==='missing'?missingFieldNote(s,tokenKey):field==='unpriced'?'A token value or its saved unit rate is unavailable. This is not a count of lost requests.':undefined},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
  }));
@@ -2025,7 +2060,9 @@ const LEDGER_HINT_DEBOUNCE_MS=150, LEDGER_CHECK_REUSE_MS=2000;
 // leading trend bucket holds zero attempts. Fields with no per-bucket
 // evidence are admitted only under the exact guards in rollingEdgeStable. Any
 // other field, including one a future backend adds, forbids the skip.
-const ROLLING_SKIP_FIELDS=new Set(['generated_at','seq','window','summary','request_count','next_offset',
+// unpriced_total is summary-derived (a leading bucket with no attempts
+// leaves it unchanged, as it leaves summary).
+const ROLLING_SKIP_FIELDS=new Set(['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests',
  'requests','cache_read_progression','price_catalogs','applied_rate_groups','compressions',
  'compression_truncated','groups','model_groups','project_groups','session_groups','subagent_groups',
@@ -2178,7 +2215,7 @@ function resumePath(readPath,baseline,rolling){
 // Mirror projection.py's v1 manifest for the only two resumable views. The
 // manifest has no view/group labels: its exact field partition is the scope
 // evidence, alongside the signed receipt and the requested window.
-const OVERVIEW_COMMON=['generated_at','seq','window','summary','request_count','next_offset',
+const OVERVIEW_COMMON=['generated_at','seq','window','summary','unpriced_total','request_count','next_offset',
  'provider_groups','trend','subagent_summary','project_options','providers','compression_count','tests'];
 const OVERVIEW_OTHER=['requests','cache_read_progression','price_catalogs','applied_rate_groups',
  'compressions','compression_truncated','groups','model_groups','project_groups',
@@ -2212,7 +2249,11 @@ function validOverviewSummary(row){
   ['tokens','compared_requests','baseline_requests','missing_requests'].every(key=>
    isCount(row.session_cache_writes[key]))&&
   typeof row.session_cache_writes.basis==='string'&&
-  typeof row.session_cache_writes.method==='string';
+  typeof row.session_cache_writes.method==='string'&&
+  // A DTO or signed receipt without the unpriced signal is rejected (refetch).
+  isObject(row.unpriced)&&row.unpriced.requests===row.unpriced_requests&&isCount(row.unpriced.tokens)&&
+  isObject(row.unpriced.reasons)&&Object.keys(UNPRICED_REASONS).every(key=>isCount(row.unpriced.reasons[key]))&&
+  Object.keys(UNPRICED_REASONS).reduce((n,key)=>n+row.unpriced.reasons[key],0)===row.unpriced.requests;
 }
 // Validate the *consumed* Overview DTO at the REST boundary, including GET.
 // The counts are complete filtered-set partitions; cost, sessions, and known
@@ -2279,6 +2320,8 @@ function validOverviewDto(dto,group,expected,revision,refresh=false){
  if(!validOverviewWindow(dto,expected,refresh)||
     !Number.isFinite(dto.generated_at)||!isCount(dto.seq)||
     !validOverviewSummary(dto.summary)||dto.request_count!==dto.summary.attempts||
+    !isObject(dto.unpriced_total)||dto.unpriced_total.requests!==dto.summary.unpriced.requests||
+    dto.unpriced_total.tokens!==dto.summary.unpriced.tokens||
     (dto.next_offset!==null&&!isCount(dto.next_offset))||!isCount(dto.compression_count)||
     !validOverviewSummary(dto.subagent_summary)||!validPeak(dto.subagent_summary.peak_observed)||!isCount(dto.subagent_summary.agents)||
     dto.subagent_summary.attempts>dto.summary.attempts||
@@ -3073,7 +3116,7 @@ function UsagePageScope({selected}){
   setRequestFilters(next);if(tab!=='Overview')setTab('Requests');
  }
  const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtIst(quota.data.generated_at)} IST · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),isQuota?null:h(UnpricedBadge,{data:currentData}),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
