@@ -258,13 +258,15 @@ function useUsage(profile, intervalMs) {
 
 // Quota windows reach the pane by host label only, and labels differ per
 // provider: Anthropic five_hour/seven_day are 'Current session'/'Current week'
-// (plus 'Opus week'/'Sonnet week'); Codex reports 'Session'/'Weekly'; Z.AI and
+// (plus model-scoped weeks such as 'Fable week', 'Opus week'/'Sonnet week' from
+// the OAuth limits[] array); Codex reports 'Session'/'Weekly'; Z.AI and
 // OpenCode 'Session (5h)'/'Rolling (5h)'. Every allowance bar fill uses the
 // provider colour (Codex keeps the host accent); tone badges keep their meaning.
 function compactWindowLabel(label){
  const text=String(label||'').trim();
  if(/^(current\s+)?week(ly)?$/i.test(text))return 'Weekly';
  if(/\b5h\b|five[\s-]?hour|^(current\s+)?session$/i.test(text))return 'Five hour';
+ if(/^fable\s+week$/i.test(text))return 'Fable';
  return text||'Limit';
 }
 // Only reported windows with an actual remaining percentage become bars;
@@ -808,7 +810,7 @@ const ledgerCss = `
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
 .au-ledger .au-provider-row .au-dot{background:var(--au-provider-accent)}
-.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
+.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota[data-layout="stacked"]{flex-wrap:wrap}.au-ledger .au-row-quota[data-layout="stacked"]>.au-row-quota-window:first-child{flex-basis:100%}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-line{stroke:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-area{fill:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-point{fill:var(--au-provider-accent)}
@@ -1624,12 +1626,18 @@ function peakValue(value,coverage){return value?.value==null?'—':count(value.v
 function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
 function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
 // Compact per-provider allowance bars under each All-providers summary row:
-// label above bar only, from the already-loaded /usage catalogue.
-function ProviderRowQuota({windows}){
+// label above bar only, from the already-loaded /usage catalogue. Hovering a
+// bar shows its remaining percentage through the shared title tooltip.
+// Anthropic with both a five-hour and a Fable week window stacks them: five
+// hour full width, then Weekly and Fable (and any other week) side by side.
+function ProviderRowQuota({windows,provider}){
  if(!windows.length)return null;
- return h('div',{className:'au-row-quota','data-testid':'provider-row-quota'},...windows.map((w,index)=>{
-  const text=compactWindowLabel(w.label),left=Math.max(0,Math.min(100,w.remaining_percent));
-  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label},
+ const label=w=>compactWindowLabel(w.label);
+ const stacked=provider==='anthropic'&&windows.some(w=>label(w)==='Five hour')&&windows.some(w=>label(w)==='Fable');
+ if(stacked)windows=[...windows.filter(w=>label(w)==='Five hour'),...windows.filter(w=>label(w)!=='Five hour')];
+ return h('div',{className:'au-row-quota','data-testid':'provider-row-quota',...(stacked?{'data-layout':'stacked'}:{})},...windows.map((w,index)=>{
+  const text=label(w),left=Math.max(0,Math.min(100,w.remaining_percent));
+  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label,title:pct(left)+' left'},
    h('span',{className:'au-row-quota-label'},text),
    h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining','aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
     h('div',{className:'au-row-quota-fill',style:{width:Math.max(1,left)+'%'}})));
@@ -1649,7 +1657,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),g.unpriced_requests?' · partial':''),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
-   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider))})));
+   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider)),provider:g.provider})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
  metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
