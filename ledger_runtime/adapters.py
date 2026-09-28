@@ -4,7 +4,8 @@ Never change provider request arguments, inference results, retries, compaction
 decisions, or exceptions. The hook summary gains a numeric-only usage envelope. No on-disk Hermes core patches. Signature drift is reported.
 """
 from __future__ import annotations
-import contextvars, functools, importlib, inspect, threading, time, uuid
+import contextvars, functools, importlib, inspect, re, threading, time, uuid
+from urllib.parse import urlsplit
 from . import recorder as r
 from .accounting import mapping,normalize,safe_usage,num
 _LOCK=threading.RLock();_LAST=0
@@ -70,6 +71,61 @@ def aux_endpoint(provider,client):
     except Exception:kind=None
     return {'anthropic_endpoint':kind or 'unverified'}
 
+# Routing labels Hermes core reports for an auxiliary call when it has no
+# concrete provider id at hand (``request_provider = effective_provider or
+# resolved_provider`` in ``_prepare_aux_request``; ``_set_relay_auxiliary_route``
+# substitutes 'auxiliary'). The request still went to a concrete provider.
+_AUX_PLACEHOLDERS=frozenset({'','unknown','auto','main','auxiliary','custom'})
+# Same pattern as core's ``auxiliary_client._fallback_provider_from_label``.
+_AUX_FALLBACK=re.compile(r'(?:fallback_chain\[\d+\]|fallback_providers\[\d+\]|main-agent)\(([^)]+)\)$')
+_AUX_HOSTS={'chatgpt.com':'openai-codex','api.openai.com':'openai','openrouter.ai':'openrouter'}
+_AUX_HOST_SUFFIXES=(('githubcopilot.com','copilot'),('x.ai','xai'))
+# Core's native-Anthropic wrappers. Only a secondary signal when the endpoint is
+# unreadable; its endpoint class is then 'unverified' (unpriced). The Codex
+# wrapper is deliberately absent: core also uses it for xAI, Copilot, Bedrock
+# and custom Responses endpoints, so its class names no provider.
+_AUX_ANTHROPIC_CLASSES=frozenset({'AnthropicAuxiliaryClient','AsyncAnthropicAuxiliaryClient'})
+
+def aux_placeholder(label):
+    label=(label or '').strip().lower()
+    return label in _AUX_PLACEHOLDERS or label.startswith(('fallback_','main-agent'))
+
+def aux_host_provider(base_url):
+    """Provider id for an exactly known host, else None. Hostname only, never stored."""
+    from .pricing import anthropic_endpoint
+    if not isinstance(base_url,str) or not base_url.strip():return None
+    if anthropic_endpoint(base_url)=='first_party':return 'anthropic'
+    try:host=(urlsplit(base_url.strip()).hostname or '').lower()
+    except ValueError:return None
+    if host.endswith('.'):host=host[:-1]  # Hermes' single canonical trailing dot
+    if host in _AUX_HOSTS:return _AUX_HOSTS[host]
+    for suffix,provider in _AUX_HOST_SUFFIXES:
+        if host==suffix or host.endswith('.'+suffix):return provider
+    return None
+
+def aux_provider(reported,client):
+    """(provider, requested_provider) for one auxiliary call.
+
+    A concrete label passes through untouched with no requested_provider. A
+    placeholder/fallback label resolves from core's own fallback label, else
+    the hostname of the client the relay funnel received, else the Anthropic
+    wrapper class when its endpoint is unreadable. Fails closed to the label.
+    """
+    if not aux_placeholder(reported):return reported,None
+    try:
+        match=_AUX_FALLBACK.match(reported.strip())
+        inner=match.group(1).strip() if match else ''
+        if inner and not aux_placeholder(inner):return r.text(inner),reported
+        try:
+            raw=getattr(client,'base_url',None)
+            url=None if raw is None else raw if isinstance(raw,str) else str(raw)
+        except Exception:url=None
+        found=aux_host_provider(url)
+        if found:return found,reported
+        if not (url or '').strip() and type(client).__name__ in _AUX_ANTHROPIC_CLASSES:return 'anthropic',reported
+    except Exception:pass
+    return reported,None
+
 def aux_metadata(module,kwargs,options,client=None):
     context={}
     var=getattr(module,'_RELAY_AUX_CALL_CONTEXT',None)
@@ -83,9 +139,9 @@ def aux_metadata(module,kwargs,options,client=None):
         except Exception:pass
     comp=r.COMPRESSION.get()
     cur=r.CURRENT.get() or {}
-    provider=r.text(options.get('provider') or context.get('provider') or 'unknown')
+    provider,requested=aux_provider(r.text(options.get('provider') or context.get('provider') or 'unknown'),client)
     return {'id':f'{r.PROCESS}:aux:{uuid.uuid4().hex}','started':time.time(),'status':'pending','source':'auxiliary_adapter',
-      'process':r.PROCESS,'owner':r.identity(),'provider':provider,
+      'process':r.PROCESS,'owner':r.identity(),'provider':provider,**({'requested_provider':requested} if requested else {}),
       'api_mode':r.text(options.get('api_mode') or context.get('api_mode')),
       'model':r.text(kwargs.get('model') or context.get('model')),
       'session_id':r.text((comp or {}).get('session_id') or runtime.get('session_id') or cur.get('session_id')),
@@ -304,9 +360,7 @@ def codex_direct_wrapper(module):
             if r.AUX.get():return original(self,**kwargs)
             # Handles the Codex MoA direct-stream special case that bypasses Relay.
             # Only hostname is inspected locally; no endpoint or key is exported.
-            from urllib.parse import urlparse
-            host=urlparse(str(getattr(getattr(self,'_client',None),'base_url',''))).hostname or ''
-            provider='openai-codex' if host=='chatgpt.com' else 'copilot' if host.endswith('githubcopilot.com') else 'xai' if host.endswith('x.ai') else 'unknown'
+            provider=aux_host_provider(str(getattr(getattr(self,'_client',None),'base_url','') or '')) or 'unknown'
             item=aux_begin(module,kwargs,{'provider':provider,'api_mode':'codex_responses'});token=r.AUX.set(item)
             try:
                 try:result=original(self,**kwargs)
