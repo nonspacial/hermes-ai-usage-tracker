@@ -93,6 +93,24 @@ def badge_contrast(page):
     }''')
 
 
+LEDGER_READS='scopeCalls.filter(x=>new URL(x.path,"https://offline.test").pathname==="/ledger").length'
+
+
+def track_reads(page):
+    # Count settled transport calls so the test waits for the coordinator's
+    # follow-up read rather than racing it (no sleeps).
+    page.evaluate('''() => {window.auInflight=0;const original=rest;rest=async (...args)=>{
+        window.auInflight++;try{return await original(...args)}finally{window.auInflight--}}}''')
+
+
+def settle(page,reads):
+    # The mounted pane's follow-up /ledger read (~150ms later) moves the rolling
+    # window start and UsageChart resets its selected point, clearing the
+    # tooltip provider rows; inspect only once both reads have settled and painted.
+    page.wait_for_function(f'{LEDGER_READS}>={reads}&&window.auInflight===0')
+    page.evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))')
+
+
 def test_colours():
     with sync_playwright() as pw:
         browser=pw.chromium.launch(executable_path=CHROME,headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
@@ -100,11 +118,17 @@ def test_colours():
             page=browser.new_page(viewport={'width':1480,'height':900})
             errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
             page.set_content(fixture(),wait_until='domcontentloaded')
+            track_reads(page)
             nav=page.get_by_role('navigation',name='Providers',exact=True)
             nav.get_by_role('tab',name='All providers').click()
             panel=page.get_by_test_id('provider-page')
             expect(panel.locator('.au-provider-row')).to_have_count(9)
-            page.get_by_test_id('usage-chart').focus();page.get_by_test_id('usage-chart').press('ArrowRight')
+            settle(page,2);page.mouse.move(0,0)
+            reads=page.evaluate(LEDGER_READS)
+            chart_el=page.get_by_test_id('usage-chart');chart_el.focus();chart_el.press('ArrowRight')
+            # The focused chart owns the one shared tooltip; bind to it by id.
+            tooltip=page.locator('#'+str(chart_el.get_attribute('aria-describedby')))
+            expect(tooltip.locator('.au-tooltip-provider')).to_have_count(9)
             original=colour_state(page);baseline=assert_palette(page)
             assert original['area'] is None
             assert original['line'] in {v['colour'] for v in baseline.values()}
@@ -119,9 +143,11 @@ def test_colours():
             dots=page.evaluate('''() => [...document.querySelectorAll('.au-provider-row')]
               .map(row=>getComputedStyle(row.querySelector('.au-dot')).backgroundColor)''')
             assert len(set(dots))==9,dots
-            tooltip_rows=page.locator('.au-tooltip:visible .au-tooltip-provider').all_text_contents()
-            assert len(tooltip_rows)==9 and any('Ollama Cloud (ollama)' in row for row in tooltip_rows)
-            assert any('Ollama Cloud (ollama-cloud)' in row for row in tooltip_rows)
+            tooltip_rows=tooltip.locator('.au-tooltip-provider').all_text_contents()
+            assert len(tooltip_rows)==9 and any('Ollama Cloud (ollama)' in row for row in tooltip_rows),tooltip_rows
+            assert any('Ollama Cloud (ollama-cloud)' in row for row in tooltip_rows),tooltip_rows
+            # No read landed mid-inspection (which would reset the point).
+            assert page.evaluate(LEDGER_READS)==reads
             page.screenshot(path=str(SCRATCH/'provider-colours-all-synthetic.png'))
             for id,label in [('openai-codex','Codex'),('nous','Nous Portal'),('ollama','Ollama Cloud'),('ollama-cloud','ollama-cloud'),('openrouter','OpenRouter'),*[(id,id) for id in EXTRA[1:]]]:
                 nav.get_by_role('tab',name=label,exact=True).click()
