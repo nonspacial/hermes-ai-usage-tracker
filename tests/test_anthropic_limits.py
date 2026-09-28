@@ -235,6 +235,7 @@ MERGE_CASES = {
                              HOST_WINDOWS + [FABLE]),
     'string_percent': ([_limit('session', '12'), _limit('weekly_scoped', '15')], HOST_WINDOWS),
     'bool_percent': ([_limit('session', True)], HOST_WINDOWS),
+    'huge_int_percent_drops_only_itself': ([_limit('session', 10**400), LIMITS[2]], HOST_WINDOWS + [FABLE]),
     'negative_percent': ([_limit('session', -1), LIMITS[2]], HOST_WINDOWS + [FABLE]),
     'over_100_percent': ([_limit('weekly_all', 100.5), LIMITS[2]], HOST_WINDOWS + [FABLE]),
     'bounds_0_and_100': ([_limit('session', 0), _limit('weekly_all', 100)],

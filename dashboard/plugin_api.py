@@ -670,7 +670,10 @@ def _usable_limits(limits: Any) -> list[_Limit]:
         percent = item.get("percent")
         if isinstance(percent, bool) or not isinstance(percent, (int, float)):
             continue
-        percent = float(percent)
+        try:
+            percent = float(percent)
+        except (OverflowError, ValueError):  # e.g. a huge integer: drop only this entry
+            continue
         if not math.isfinite(percent) or not 0.0 <= percent <= 100.0:
             continue
         kind = item.get("kind")

@@ -504,9 +504,9 @@ _ANTHROPIC_PREMIUM_TIERS={'priority','batch'}
 # Documented-value gap in the recorder allow-list, admitted in 0d5ade4: before
 # then Anthropic's documented 'not_available' geo was stored as the
 # 'unrecognised' sentinel (raw value not kept). Anthropic documents only
-# global/us/not_available, 'us' is returned only when requested and Hermes
-# never sends inference_geo, so such a row is estimated at the global rate
-# (a workspace default geo cannot be excluded, so it is always flagged). The
+# global/us/not_available and Hermes never sends inference_geo, so any US
+# routing could only come from a workspace default, which cannot be excluded:
+# such a row is estimated at the global rate and always flagged. The
 # rule is read-time only (retrospective projection), bounded to a returned
 # 'standard' service tier and standard speed that was neither returned nor
 # requested as fast, and keeps its own geo_basis. Every other unknown geo

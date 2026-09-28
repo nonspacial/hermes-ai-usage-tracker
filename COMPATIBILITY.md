@@ -30,7 +30,8 @@ Other providers, including Gemini, may record tokens while remaining unpriced.
 Anthropic capture additionally keeps only the documented `usage.speed`,
 `usage.inference_geo` and `usage.service_tier` enums (undocumented values become
 `unrecognised`), a requested `fast`/`standard` speed, and a
-`first_party`/`custom` endpoint class; no base URL or other raw field is stored.
+`first_party`/`custom`/`unverified` endpoint class (`unverified` when an
+auxiliary client's endpoint is unreadable; unpriced); no base URL or other raw field is stored.
 Missing
 prices are not zero costs. Subscription cards use only provider-reported quota
 windows. Nous supplies a subscription gauge when monthly allowance/remaining

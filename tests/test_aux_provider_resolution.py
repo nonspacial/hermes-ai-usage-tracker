@@ -262,3 +262,48 @@ def test_resolved_provider_feeds_usage_normalisation(env):
     record = run(env, 'auto', PlainClient('https://api.anthropic.com'), response=response)
     assert record['provider'] == 'anthropic' and record['status'] == 'completed'
     assert record['usage']['cache_read_tokens'] == 5 and record['usage']['cache_write_tokens'] == 1
+
+
+def run_codex_direct(env, base_url):
+    """Drive the installed Codex MoA direct-stream wrapper (``_CodexCompletionsAdapter.create``)."""
+    response = NS(model='gpt-9', usage=NS(prompt_tokens=10, completion_tokens=2))
+
+    class _CodexCompletionsAdapter:
+        def __init__(self):
+            self._client = PlainClient(base_url)
+
+        def create(self, **kwargs):
+            return response
+
+    mod = module('auto', api_mode='codex_responses')
+    mod._relay_sync_completion = lambda client, kwargs, **kw: None
+    mod._relay_async_completion = lambda client, kwargs, **kw: None
+    mod._CodexCompletionsAdapter = _CodexCompletionsAdapter
+    ad.install_aux(mod)
+    assert _CodexCompletionsAdapter().create(model='gpt-9', messages=['AUX SECRET']) is response
+    with r.store(str(env)).db() as c:
+        [(raw,)] = c.execute("SELECT data FROM requests WHERE json_extract(data,'$.source')='auxiliary_adapter'").fetchall()
+        c.execute('DELETE FROM requests')
+    for secret in ('AUX SECRET', 'base_url', 'chatgpt.com', 'githubcopilot.com', 'x.ai', 'gw.example'):
+        assert secret not in raw
+    return json.loads(raw)
+
+
+@pytest.mark.parametrize('base_url,provider', [
+    ('https://chatgpt.com/backend-api/codex', 'openai-codex'),
+    ('https://CHATGPT.COM./backend-api/codex', 'openai-codex'),
+    ('https://api.individual.githubcopilot.com', 'copilot'),
+    ('https://githubcopilot.com', 'copilot'),
+    ('https://api.x.ai/v1', 'xai'),
+    # Look-alikes and unknown hosts are never guessed.
+    ('https://chatgpt.com.evil.example', 'unknown'),
+    ('https://githubcopilot.com.evil.example', 'unknown'),
+    ('https://fox.ai', 'unknown'),
+    ('https://notx.ai', 'unknown'),
+    ('https://gw.example/v1', 'unknown'),
+    ('', 'unknown'),
+])
+def test_codex_moa_direct_path_uses_the_same_host_table(env, base_url, provider):
+    record = run_codex_direct(env, base_url)
+    assert record['provider'] == provider and record['api_mode'] == 'codex_responses'
+    assert 'requested_provider' not in record and 'anthropic_endpoint' not in record
