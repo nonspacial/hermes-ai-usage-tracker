@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import inspect
+import json
 import logging
 import math
 import os
@@ -26,6 +27,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as _FutureTimeout
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -580,15 +582,22 @@ def _probe_anthropic() -> dict[str, Any]:
     The host windows are the baseline and are never dropped: usable
     ``limits[]`` entries only override a host window of the same label or
     append a model-scoped week (``_merge_limit_windows``). With no usable
-    entry the host DTO is returned untouched. The extra GET gets only what is
+    entry the host windows are returned untouched. The extra GET gets only what is
     left of ``_PROBE_TIMEOUT`` after the host fetch, enforced by wall clock.
+    An available DTO also carries a content-free ``limits_status``
+    (``state``/``reason``/``checked_at``) saying whether a model-scoped week
+    was read; ``get_usage`` may then carry a last known-good one.
     """
     started = time.monotonic()
     serialized = _probe_standard("anthropic")
     if serialized.get("available"):
-        limits = _anthropic_limits(_PROBE_TIMEOUT - (time.monotonic() - started))
+        limits, reason = _fetch_anthropic_limits(_PROBE_TIMEOUT - (time.monotonic() - started))
         if limits:
             serialized["windows"] = _merge_limit_windows(serialized.get("windows") or [], limits)
+        # Content-free diagnosis of the model-scoped weekly read; ``_carry_scoped_weeks``
+        # may later turn 'unavailable' into 'stale'. Never carries token/headers/body.
+        serialized["limits_status"] = {"state": "ok" if reason is None else "unavailable",
+                                       "reason": reason, "checked_at": round(time.time(), 3)}
     return serialized
 
 
@@ -604,7 +613,27 @@ class _Limit(NamedTuple):
 
 
 def _anthropic_limits(budget: float) -> list[_Limit]:
-    """Usable OAuth usage ``limits[]`` entries; ``[]`` keeps the host's windows.
+    """Usable ``limits[]`` entries only (see ``_fetch_anthropic_limits``)."""
+    return _fetch_anthropic_limits(budget)[0]
+
+
+def _limits_failure(reason: str, exc: Optional[BaseException] = None, status: Optional[int] = None) -> str:
+    """Log why scoped limits are unavailable: reason code, exception type and HTTP status only."""
+    level = logging.INFO if reason in ("empty", "no_token") else logging.WARNING
+    log.log(level, "Anthropic model-scoped limits unavailable: reason=%s exception=%s http_status=%s",
+            reason, type(exc).__name__ if exc is not None else None, status)
+    return reason
+
+
+def _fetch_anthropic_limits(budget: float) -> tuple[list[_Limit], Optional[str]]:
+    """Usable OAuth usage ``limits[]`` entries and why no model-scoped entry was read.
+
+    The reason is ``None`` when at least one usable ``weekly_scoped`` entry was
+    read, else one content-free code: ``no_budget``, ``no_token`` (empty or
+    non-OAuth token), ``timeout``, ``http_<status>``, ``transport``, ``parse``
+    (non-JSON or non-object body), ``empty`` (no usable model-scoped entry) or
+    ``error`` (resolver/refresh failure or any other exception).
+    Usable session/week entries are still returned with ``empty``.
 
     The host maps only the legacy ``five_hour``/``seven_day``/``seven_day_*``
     keys, so model-scoped weekly limits (e.g. Fable) are absent from its
@@ -613,18 +642,22 @@ def _anthropic_limits(budget: float) -> list[_Limit]:
     resolver the host fetcher itself uses; the token is used only for the
     request header and never returned, stored or logged. The GET runs in a
     context-copied helper thread bounded by ``budget`` seconds of wall clock
-    (the probe returns without waiting for a late response). Any failure (no
-    budget, no resolver, non-OAuth token, timeout, HTTP/parse error) returns
-    ``[]`` so the host snapshot is served unchanged.
+    (the probe returns without waiting for a late response). Any failure
+    returns ``[]`` so the host snapshot windows are served unchanged; it is
+    logged (WARNING; ``empty``/``no_token`` at INFO) with the reason code,
+    exception type and HTTP status only — never the token, headers or body.
     """
     if not budget > 0:
-        return []
+        return [], _limits_failure("no_budget")
     try:
         from agent.anthropic_credentials import _is_oauth_token, resolve_anthropic_token
 
         token = str(resolve_anthropic_token() or "").strip()
         if not token or not _is_oauth_token(token):
-            return []
+            return [], _limits_failure("no_token")
+    except Exception as exc:  # noqa: BLE001 - resolver absent/refused/refresh failed: host windows stand
+        return [], _limits_failure("error", exc)
+    try:
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -638,10 +671,23 @@ def _anthropic_limits(budget: float) -> list[_Limit]:
             payload = future.result(timeout=budget)
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
-        return _usable_limits(payload.get("limits") if isinstance(payload, dict) else None)
+    except (_FutureTimeout, TimeoutError, httpx.TimeoutException) as exc:
+        return [], _limits_failure("timeout", exc)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        return [], _limits_failure(f"http_{status}", exc, status)
+    except httpx.TransportError as exc:
+        return [], _limits_failure("transport", exc)
+    except ValueError as exc:  # JSON decode error
+        return [], _limits_failure("parse", exc)
     except Exception as exc:  # noqa: BLE001 - never worse than the host snapshot
-        log.debug("Anthropic limits[] unavailable (%s); using host windows", type(exc).__name__)
-        return []
+        return [], _limits_failure("error", exc)
+    if not isinstance(payload, dict):
+        return [], _limits_failure("parse")
+    usable = _usable_limits(payload.get("limits"))
+    if not any(limit.scoped for limit in usable):
+        return usable, _limits_failure("empty")
+    return usable, None
 
 
 def _get_limits_json(headers: dict[str, str], timeout: float) -> Any:
@@ -650,6 +696,172 @@ def _get_limits_json(headers: dict[str, str], timeout: float) -> Any:
         response = client.get(_ANTHROPIC_USAGE_URL, headers=headers)
         response.raise_for_status()
         return response.json()
+
+
+# Last known-good model-scoped weeks, per profile home, in process memory only:
+# {home: _ScopedMemory}. Holds percentages/resets only, never a token or body.
+class _ScopedMemory(NamedTuple):
+    as_of: float  # last authoritative read (``ok`` or ``empty``); older ledger rows are superseded
+    weeks: dict[str, tuple[dict[str, Any], float]]  # label -> (window, observed epoch)
+    seen: bool  # a usable model-scoped week has been read for this profile
+
+
+_scoped_memory: dict[str, _ScopedMemory] = {}
+_scoped_memory_lock = threading.Lock()
+_LEDGER_QUOTA_ROWS = 200  # newest stored quota snapshots searched for a carry
+_LIMITS_SOURCE = "limits"  # window ``source`` marker: read from a ``weekly_scoped`` limits[] entry
+# Labels the host fetcher itself produces for legacy ``seven_day_opus``/``seven_day_sonnet``.
+# A stored ledger row keeps no ``source``, so these labels are never carried from the ledger.
+_HOST_SCOPED_LABELS = frozenset({"Opus week", "Sonnet week"})
+
+
+def _is_scoped_week(label: Any) -> bool:
+    """A model-scoped weekly window label (``<model> week``), not the all-model ``Current week``."""
+    return isinstance(label, str) and label.endswith(" week") and label != "Current week" and len(label) > 5
+
+
+def _future_reset(window: Mapping[str, Any], now: float) -> bool:
+    """A carry needs a parseable reset still in the future: that bounds how long it may be shown."""
+    reset = _parse_reset(window.get("reset_at"))
+    return reset is not None and datetime.fromisoformat(reset).timestamp() > now
+
+
+def _measured(window: Mapping[str, Any]) -> bool:
+    value = window.get("remaining_percent")
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0.0 <= value <= 100.0)
+
+
+def _observed_iso(observed: Any) -> Optional[str]:
+    """ISO time of an observation epoch; ``None`` for a non-finite or out-of-range value."""
+    try:
+        value = float(observed)
+        if not math.isfinite(value):
+            return None
+        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _stored_scoped_weeks(home: Path, now: float, after: Optional[float] = None
+                         ) -> tuple[dict[str, tuple[dict[str, Any], float]], bool]:
+    """Newest carryable scoped weeks per label from this profile's stored quota snapshots (read-only).
+
+    Reads the ledger's existing ``quota`` rows (``Store.save_quota``) with a
+    ``mode=ro`` connection; nothing is written or migrated. Rows at or before
+    ``after`` (a later authoritative read) are superseded; rows with a
+    non-finite/out-of-range ``ts`` are skipped; host legacy labels are never
+    carried. Also returns whether any usable model-scoped week was ever stored.
+    Missing/unreadable ledgers simply yield nothing.
+    """
+    path = Path(home) / "usage-ledger" / "events.sqlite3"
+    found: dict[str, tuple[dict[str, Any], float]] = {}
+    seen = False
+    if not path.is_file():
+        return found, seen
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=1.0)) as conn:
+            rows = conn.execute("SELECT ts, data FROM quota ORDER BY seq DESC LIMIT ?",
+                                (_LEDGER_QUOTA_ROWS,)).fetchall()
+    except sqlite3.Error as exc:
+        log.debug("stored quota snapshots unreadable (%s)", type(exc).__name__)
+        return found, seen
+    for ts, data in rows:
+        try:
+            snapshot = json.loads(data)
+        except (TypeError, ValueError):
+            continue
+        if _observed_iso(ts) is None:
+            continue
+        observed = float(ts)
+        for provider in (snapshot.get("providers") or ()) if isinstance(snapshot, dict) else ():
+            if not isinstance(provider, dict) or provider.get("provider") != "anthropic" or not provider.get("available"):
+                continue
+            for window in provider.get("windows") or ():
+                if not (isinstance(window, dict) and _is_scoped_week(window.get("label"))
+                        and window["label"] not in _HOST_SCOPED_LABELS and _measured(window)):
+                    continue
+                seen = True
+                if ((after is None or observed > after) and window["label"] not in found
+                        and _future_reset(window, now)):
+                    found[window["label"]] = (window, observed)
+    return found, seen
+
+
+def _carry_scoped_weeks(quota: dict[str, Any], home: Path, now: Optional[float] = None) -> None:
+    """Remember fresh scoped weeks, or append the last known-good ones flagged ``stale``.
+
+    ``quota`` is the Anthropic DTO from ``_probe_anthropic``. ``ok`` makes its
+    ``source: 'limits'`` scoped weeks this profile's in-memory last known-good.
+    ``empty`` is authoritative (the API answered with no scoped entry): it
+    clears that memory and carries nothing; with no known-good scoped read
+    ever (memory or ledger) its state becomes ``none``. Any other failure
+    appends every remembered or stored (newer than the last authoritative
+    read) scoped week whose label the fresh DTO lacks and whose original reset
+    is still in the future, unchanged (values, reset) with ``stale: true`` and
+    its ``observed_at``; the state becomes ``stale``. Nothing is fabricated,
+    persisted or written back to the ledger.
+    """
+    status = quota.get("limits_status")
+    if not isinstance(status, dict) or not quota.get("available"):
+        return
+    now = time.time() if now is None else now
+    key = str(Path(home).resolve())
+    windows = quota.get("windows") or []
+    with _scoped_memory_lock:
+        memory = _scoped_memory.get(key)
+    if status.get("state") == "ok":
+        fresh = {w["label"]: (dict(w), now) for w in windows
+                 if isinstance(w, dict) and w.get("source") == _LIMITS_SOURCE
+                 and _is_scoped_week(w.get("label")) and _measured(w)}
+        with _scoped_memory_lock:
+            _scoped_memory[key] = _ScopedMemory(now, fresh, True)
+        return
+    if status.get("reason") == "empty":
+        seen = bool(memory and memory.seen) or _stored_scoped_weeks(home, now)[1]
+        with _scoped_memory_lock:
+            _scoped_memory[key] = _ScopedMemory(now, {}, seen)
+        if not seen:
+            status["state"] = "none"
+        return
+    candidates, _ = _stored_scoped_weeks(home, now, memory.as_of if memory else None)
+    for label, (window, observed) in (memory.weeks if memory else {}).items():
+        if _future_reset(window, now) and observed >= candidates.get(label, (None, -1.0))[1]:
+            candidates[label] = (window, observed)
+    present = {w.get("label") for w in windows if isinstance(w, dict)}
+    carried = []
+    for label, (window, observed) in candidates.items():
+        observed_at = _observed_iso(observed)
+        if label in present or observed_at is None:
+            continue
+        carried.append({"label": label, "used_percent": window.get("used_percent"),
+                        "remaining_percent": window.get("remaining_percent"), "reset_at": window.get("reset_at"),
+                        "detail": None, "stale": True, "observed_at": observed_at})
+    if carried:
+        quota["windows"] = list(windows) + carried
+        status["state"] = "stale"
+
+
+def _carry_payload_scoped_weeks(payload: dict[str, Any], home: Path) -> None:
+    """Apply ``_carry_scoped_weeks`` to a built ``/usage`` payload's Anthropic DTO; never fails the read."""
+    try:
+        for provider in payload.get("providers") or ():
+            if isinstance(provider, dict) and provider.get("id") == "anthropic" and isinstance(provider.get("quota"), dict):
+                _carry_scoped_weeks(provider["quota"], home)
+    except Exception as exc:  # noqa: BLE001 - last known-good is best effort
+        log.warning("Anthropic scoped-week carry skipped (%s)", type(exc).__name__)
+
+
+def _without_stale(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as a quota observation: carried ``stale`` windows are replays, never stored."""
+    providers = []
+    for provider in payload.get("providers") or ():
+        quota = provider.get("quota") if isinstance(provider, dict) else None
+        if isinstance(quota, dict) and any(isinstance(w, dict) and w.get("stale") for w in quota.get("windows") or ()):
+            quota = {**quota, "windows": [w for w in quota["windows"] if not (isinstance(w, dict) and w.get("stale"))]}
+            provider = {**provider, "quota": quota}
+        providers.append(provider)
+    return {**payload, "providers": providers}
 
 
 def _usable_limits(limits: Any) -> list[_Limit]:
@@ -713,11 +925,18 @@ def _merge_limit_windows(host_windows: list[dict[str, Any]], limits: list[_Limit
         if limit is None:
             merged.append(window)
         else:
-            merged.append(_window(limit.label, limit.used, limit.reset_at or window.get("reset_at"),
-                                  window.get("detail")))
-    merged.extend(_window(limit.label, limit.used, limit.reset_at)
+            merged.append(_scoped_source(limit, _window(limit.label, limit.used, limit.reset_at or window.get("reset_at"),
+                                                        window.get("detail"))))
+    merged.extend(_scoped_source(limit, _window(limit.label, limit.used, limit.reset_at))
                   for limit in limits if limit.scoped and limit.label in by_label)
     return merged
+
+
+def _scoped_source(limit: _Limit, window: dict[str, Any]) -> dict[str, Any]:
+    """Mark a window read from a ``weekly_scoped`` entry (``source: 'limits'``): only these are carried."""
+    if limit.scoped:
+        window["source"] = _LIMITS_SOURCE
+    return window
 
 
 def _parse_reset(value: Any) -> Optional[str]:
@@ -1210,9 +1429,11 @@ def get_usage(
         # Raised only by discovery binding (probe failures are caught per probe);
         # any other exception still propagates.
         payload, degraded = _scope_unavailable_payload(home, resolved), True
+    if not degraded:  # last known-good model-scoped weeks, keyed like the snapshot store
+        _carry_payload_scoped_weeks(payload, home or _server_home())
     try:
         if _ledger_store is not None and not degraded:  # not a quota observation
-            _ledger_store(home or _server_home()).save_quota(payload)
+            _ledger_store(home or _server_home()).save_quota(_without_stale(payload))
     except Exception:
         log.warning("AI usage quota snapshot could not be stored; quota display still works.")
     payload["cached"] = False

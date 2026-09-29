@@ -871,6 +871,27 @@ function compactWindowLabel(label){
 function measuredWindows(quota){
  return quota?.available?(quota.windows||[]).filter(w=>Number.isFinite(w?.remaining_percent)):[];
 }
+// Anthropic model-scoped weekly limits come from a best-effort second read
+// (backend `limits_status`). A window the backend carried from its last good
+// read arrives with `stale:true` and `observed_at`; it renders muted with this
+// explanation, never as a fresh value.
+const LIMITS_REASONS={no_budget:'time budget exhausted',timeout:'timed out',parse:'unreadable response',
+ empty:'no model-scoped limit returned',transport:'connection failed',no_token:'no OAuth token',error:'unexpected error'};
+function limitsReasonText(reason){
+ const code=String(reason||'');
+ return LIMITS_REASONS[code]||(/^http_\d{3}$/.test(code)?'HTTP '+code.slice(5):code||'unknown reason');
+}
+function staleWindowNote(window,status){
+ return `Model-scoped weekly limit could not be refreshed (${limitsReasonText(status?.reason)}); showing the value observed at ${fmtLocal(window?.observed_at)||'an unknown time'}`;
+}
+// Unavailable with nothing carried: one line in the card's existing details.
+// State `none` (the API answered with no scoped entry and this profile never
+// had one) adds nothing.
+function limitsStatusDetail(quota){
+ const status=quota?.limits_status;
+ if(!quota?.available||status?.state!=='unavailable')return null;
+ return `Model-scoped weekly limit unavailable (${limitsReasonText(status.reason)}).`;
+}
 function QuotaBar({ window, providerId }) {
   const remaining = window.remaining_percent
   if (remaining === null || remaining === undefined) {
@@ -911,6 +932,44 @@ function QuotaBar({ window, providerId }) {
           style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: providerAccent(providerId) }
         })
       })
+    ]
+  })
+}
+// A backend-carried last known-good window (`stale:true`) renders apart from
+// the preserved QuotaBar: same row layout, but muted label/value/fill, a
+// compact `stale` marker, no low/watch alarm badge, and the shared tooltip
+// saying when it was observed and why it could not be refreshed. The same
+// explanation is repeated as visually hidden text (`.au-sr-only`) so keyboard
+// and screen-reader users reach it without hovering.
+function StaleQuotaBar({ window, limitsStatus }) {
+  const remaining = window.remaining_percent
+  const note = staleWindowNote(window, limitsStatus)
+  return jsxs('div', {
+    className: 'flex flex-col gap-1',
+    'data-stale': 'true',
+    title: note,
+    children: [
+      jsxs('div', {
+        className: 'flex flex-wrap items-baseline gap-2 text-xs',
+        children: [
+          jsx('span', { className: 'w-28 shrink-0 text-(--ui-text-quaternary)', children: window.label }),
+          jsx('span', { className: 'au-quota-stale text-(--ui-text-quaternary)', children: 'stale' }),
+          jsx('span', { className: 'font-medium tabular-nums text-(--ui-text-quaternary)', children: `${pct(remaining)} left` }),
+          window.detail ? jsx('span', { className: 'text-(--ui-text-quaternary)', children: window.detail }) : null,
+          resetLabel(window.reset_at)
+            ? jsx('span', { className: 'text-(--ui-text-quaternary)', children: resetLabel(window.reset_at) })
+            : null
+        ]
+      }),
+      jsx('div', {
+        className: 'h-1.5 w-full overflow-hidden rounded-[2px]',
+        style: { background: 'var(--ui-stroke-secondary)' },
+        children: jsx('div', {
+          className: 'h-full rounded-[2px]',
+          style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: 'var(--ui-text-quaternary)' }
+        })
+      }),
+      jsx('span', { className: 'au-sr-only', children: note + '.' })
     ]
   })
 }
@@ -1124,7 +1183,8 @@ function CodexResetControls({profile}) {
 function ProviderCard({ provider, isHidden, onNavigate, profile }) {
   const status = statusOf(provider)
   const windows = provider.quota?.windows || []
-  const details = provider.quota?.details || []
+  const limitsDetail = limitsStatusDetail(provider.quota)
+  const details = [...(provider.quota?.details || []), ...(limitsDetail ? [limitsDetail] : [])]
 
   return jsxs('div', {
     className: cn(
@@ -1172,7 +1232,9 @@ function ProviderCard({ provider, isHidden, onNavigate, profile }) {
           className: 'au-quota-rows',
           'data-columns': windows.length + details.length >= 6 ? 'multiple' : 'single',
           children: [
-            ...windows.map((window, index) => jsx(QuotaBar, { window, providerId:provider.id }, `window-${index}`)),
+            ...windows.map((window, index) => window.stale === true && Number.isFinite(window.remaining_percent)
+              ? jsx(StaleQuotaBar, { window, limitsStatus:provider.quota?.limits_status }, `window-${index}`)
+              : jsx(QuotaBar, { window, providerId:provider.id }, `window-${index}`)),
             ...details.map((detail, index) =>
               jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: localiseStamps(detail) }, `detail-${index}`)
             )
@@ -1410,7 +1472,7 @@ const ledgerCss = `
 .au-ledger .au-provider-totals{margin-top:28px}.au-ledger .au-provider-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin:17px 0}
 .au-ledger .au-provider-row small{font-size:.6875rem;color:var(--ui-text-tertiary);font-weight:400}.au-ledger .au-provider-row .au-muted{grid-column:1 / -1}
 .au-ledger .au-provider-row .au-dot{background:var(--au-provider-accent)}
-.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota[data-layout="stacked"]{flex-wrap:wrap}.au-ledger .au-row-quota[data-layout="stacked"]>.au-row-quota-window:first-child{flex-basis:100%}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}
+.au-ledger .au-row-quota{grid-column:1 / -1;display:flex;gap:8px;min-width:0}.au-ledger .au-row-quota[data-layout="stacked"]{flex-wrap:wrap}.au-ledger .au-row-quota[data-layout="stacked"]>.au-row-quota-window:first-child{flex-basis:100%}.au-ledger .au-row-quota-window{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:1px}.au-ledger .au-row-quota-label{font-size:.625rem;line-height:1.1;color:var(--ui-text-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.au-ledger .au-row-quota-track{height:3px;overflow:hidden;border-radius:2px;background:var(--ui-stroke-secondary)}.au-ledger .au-row-quota-fill{height:100%;border-radius:2px;background:var(--au-provider-accent)}.au-ledger .au-row-quota-window[data-stale="true"] .au-row-quota-label{color:var(--ui-text-quaternary)}.au-ledger .au-row-quota-window[data-stale="true"] .au-row-quota-fill{background:var(--ui-text-quaternary)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-line{stroke:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-area{fill:var(--au-provider-accent)}
 .au-ledger .au-provider-pane:not([data-provider="all"]) .au-chart .au-point{fill:var(--au-provider-accent)}
@@ -1517,6 +1579,7 @@ ${tooltipCss}
 .au-quota-rows{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 24px}
 .au-quota-rows>*{min-width:0;overflow-wrap:anywhere}
 .au-quota-rows:empty{display:none}
+.au-sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 @container (min-width:520px){.au-quota-rows[data-columns="multiple"]{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .au-ledger .au-provider-limits .border button{background:transparent;border:0;padding:0 4px}
 .au-ledger .au-provider-quota-status{display:flex;align-items:center;gap:10px;min-height:44px;color:var(--ui-text-tertiary)}
@@ -2246,16 +2309,17 @@ function peakTitle(value,coverage){return 'Distinct child identities in overlapp
 // bar shows its remaining percentage through the shared title tooltip.
 // Anthropic with both a five-hour and a Fable week window stacks them: five
 // hour full width, then Weekly and Fable (and any other week) side by side.
-function ProviderRowQuota({windows,provider}){
+function ProviderRowQuota({windows,provider,limitsStatus}){
  if(!windows.length)return null;
  const label=w=>compactWindowLabel(w.label);
  const stacked=provider==='anthropic'&&windows.some(w=>label(w)==='Five hour')&&windows.some(w=>label(w)==='Fable');
  if(stacked)windows=[...windows.filter(w=>label(w)==='Five hour'),...windows.filter(w=>label(w)!=='Five hour')];
  return h('div',{className:'au-row-quota','data-testid':'provider-row-quota',...(stacked?{'data-layout':'stacked'}:{})},...windows.map((w,index)=>{
-  const text=label(w),left=Math.max(0,Math.min(100,w.remaining_percent));
-  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label,title:pct(left)+' left'},
-   h('span',{className:'au-row-quota-label'},text),
-   h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining','aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
+  const text=label(w),left=Math.max(0,Math.min(100,w.remaining_percent)),stale=w.stale===true;
+  return h('div',{key:index,className:'au-row-quota-window','data-window':w.label,...(stale?{'data-stale':'true'}:{}),
+    title:pct(left)+' left'+(stale?' · stale. '+staleWindowNote(w,limitsStatus):'')},
+   h('span',{className:'au-row-quota-label'},text,stale?h('span',{className:'au-row-quota-stale'},' stale'):null),
+   h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining'+(stale?' (stale)':''),'aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
     h('div',{className:'au-row-quota-fill',style:{width:Math.max(1,left)+'%'}})));
  }));
 }
@@ -2273,7 +2337,7 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),h(UnpricedMark,{summary:g})),
    h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
-   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider)),provider:g.provider})));
+   h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider)),provider:g.provider,limitsStatus:quotaById.get(g.provider)?.limits_status})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
  metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
@@ -4105,15 +4169,22 @@ function fixtureProject(full,p){
 // windows (Current session, Current week, then the model-scoped Fable week) plus
 // one recorded request so it has an All-providers row. Not in the default
 // catalogue: call before the pane mounts (scripts inject it before register).
-function fixtureAnthropicFable({fable=true}={}){
+// `stale:true` marks the Fable week as the backend's carried last known-good
+// window (`stale`, `observed_at`, `limits_status.state='stale'`; `fableLeft`
+// sets its remaining percentage); `unavailable:'<reason>'` drops it with
+// `limits_status.state='unavailable'` (or `state`, e.g. 'none').
+function fixtureAnthropicFable({fable=true,stale=false,unavailable=null,fableLeft=85,state=null}={}){
  const event=JSON.parse(JSON.stringify(events[0]));
  Object.assign(event,{provider:'anthropic',id:'fixture-anthropic-fable',started:now-900,ended:now-899});
  events.push(event);
  const windows=[{label:'Current session',used_percent:38,remaining_percent:62,reset_at:new Date((now+3600)*1000).toISOString(),detail:null},
   {label:'Current week',used_percent:45,remaining_percent:55,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null}];
- if(fable)windows.push({label:'Fable week',used_percent:15,remaining_percent:85,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null});
+ if(fable&&!unavailable)windows.push({label:'Fable week',used_percent:100-fableLeft,remaining_percent:fableLeft,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null,
+  ...(stale?{stale:true,observed_at:new Date((now-1800)*1000).toISOString()}:{})});
+ const limits_status=unavailable?{state:state||'unavailable',reason:unavailable,checked_at:now}
+  :{state:stale?'stale':'ok',reason:stale?'timeout':null,checked_at:now};
  demoProviders.push({id:'anthropic',label:'Anthropic',active:true,configured:true,quota:{available:true,source:'oauth_usage_api',
-  title:'Account limits',plan:'Max',details:[],windows}});
+  title:'Account limits',plan:'Max',details:[],windows,limits_status}});
 }
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.

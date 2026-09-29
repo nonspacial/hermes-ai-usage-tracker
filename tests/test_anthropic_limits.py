@@ -301,8 +301,12 @@ def test_absent_or_unusable_limits_serve_byte_identical_host_dto(host, limits):
     _preserved(quota)
     assert _windows(quota) == HOST_WINDOWS
     assert len(host.requests) == 2  # the limits GET ran, then changed nothing
-    # main's Anthropic probe was ``_probe_standard('anthropic')`` (preserved, unchanged).
+    # main's Anthropic probe was ``_probe_standard('anthropic')`` (preserved, unchanged);
+    # the only addition is the content-free ``limits_status`` diagnosis.
     main = host.module._run_in_home(host.work, lambda: host.module._probe_standard('anthropic'))
+    status = quota.pop('limits_status')
+    # Authoritative empty answer with no known-good scoped read ever: nothing applies.
+    assert (status['state'], status['reason']) == ('none', 'empty')
     assert json.dumps(quota, sort_keys=True) == json.dumps(main, sort_keys=True)
 
 
@@ -382,3 +386,368 @@ def test_token_resolution_stays_in_profile_scope(host):
     assert [(r['token'], r['home']) for r in host.requests] == [(WORK_TOKEN, host.work)]
     assert WORK_TOKEN not in json.dumps(limits)
     assert getattr(host.local, 'scope', None) is None and getattr(host.local, 'home', None) is None
+
+
+# ---------------------------------------------------------------- limits_status + stale carry
+# Every failure mode of the second (limits[]) GET, applied only to that GET; the
+# host fetcher's own GET always succeeds. Each yields a content-free
+# ``limits_status`` and, when a prior good scoped week exists, carries it.
+# ``empty`` (the API answered without a scoped entry) is authoritative and
+# never carries; see the dedicated tests below.
+FAILURES = ('no_budget', 'timeout', 'http_429', 'parse')
+
+
+def _fail_limits(host, monkeypatch, failure):
+    release = threading.Event()
+    if failure == 'no_budget':
+        monkeypatch.setattr(host.module, '_PROBE_TIMEOUT', 0.2)
+    if failure == 'timeout':
+        monkeypatch.setattr(host.module, '_PROBE_TIMEOUT', 0.6)
+    def respond(request):
+        host_fetch = len(host.requests) % 2 == 1  # handler appends before responding
+        if failure == 'no_budget':
+            time.sleep(0.3)  # the host fetch consumes the whole budget
+            return httpx.Response(200, json=_payload(LIMITS))
+        if host_fetch:
+            return httpx.Response(200, json=_payload(None))
+        if failure == 'timeout':
+            release.wait(10)
+            raise httpx.ReadTimeout('synthetic stalled read', request=request)
+        if failure == 'http_429':
+            return httpx.Response(429, json={'error': {'type': 'rate_limit_error'}})
+        if failure == 'parse':
+            return httpx.Response(200, text='<html>')
+        return httpx.Response(200, json=_payload(LIMITS[:2]))  # no model-scoped entry
+    host.response = respond
+    return release
+
+
+def _status(quota):
+    status = quota['limits_status']
+    assert set(status) == {'state', 'reason', 'checked_at'}
+    assert isinstance(status['checked_at'], float) and abs(status['checked_at'] - time.time()) < 30
+    return status['state'], status['reason']
+
+
+def _stale_fable(quota):
+    stale = [w for w in quota['windows'] if w.get('stale')]
+    assert [w['label'] for w in stale] == ['Fable week'], quota['windows']
+    [fable] = stale
+    assert (fable['used_percent'], fable['remaining_percent'], fable['reset_at']) == (15.0, 85.0, FABLE[2])
+    assert quota['windows'][-1] is fable or quota['windows'][-1] == fable  # appended after fresh windows
+    return fable
+
+
+def test_fresh_scoped_week_reports_ok(host):
+    quota = host.quota()
+    assert _status(quota) == ('ok', None)
+    assert not any(w.get('stale') for w in quota['windows'])
+
+
+@pytest.mark.parametrize('failure', FAILURES)
+def test_failure_without_prior_good_is_unavailable_and_adds_nothing(host, monkeypatch, failure):
+    release = _fail_limits(host, monkeypatch, failure)
+    try:
+        quota = host.quota()
+    finally:
+        release.set()
+    _preserved(quota)
+    assert _status(quota) == ('unavailable', failure)
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+    assert not any('stale' in w or 'observed_at' in w for w in quota['windows'])
+
+
+@pytest.mark.parametrize('failure', FAILURES)
+def test_failure_after_good_read_carries_in_memory_scoped_week_as_stale(host, monkeypatch, failure):
+    before = time.time()
+    good = host.quota()
+    assert _status(good) == ('ok', None) and FABLE in _windows(good)
+    release = _fail_limits(host, monkeypatch, failure)
+    try:
+        quota = host.quota()
+    finally:
+        release.set()
+    _preserved(quota)
+    assert _status(quota) == ('stale', failure)
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week', 'Fable week']
+    fable = _stale_fable(quota)
+    observed = datetime.fromisoformat(fable['observed_at']).timestamp()
+    assert before - 1 <= observed <= quota['limits_status']['checked_at'] + 1
+
+
+def _seed_ledger(home, fable_reset, *, ts=None):
+    """A disposable per-profile ledger with one stored Anthropic quota snapshot (Store.save_quota shape)."""
+    from _hermes_ai_usage_ledger_v2.storage import Store
+    store = Store(home)
+    store.save_quota({'generated_at': '2029-12-31T00:00:00+00:00', 'providers': [
+        {'id': 'anthropic', 'quota': {'available': True, 'windows': [
+            {'label': 'Current session', 'used_percent': 12.0, 'remaining_percent': 88.0, 'reset_at': SESSION[2]},
+            {'label': 'Current week', 'used_percent': 16.0, 'remaining_percent': 84.0, 'reset_at': WEEK[2]},
+            {'label': 'Fable week', 'used_percent': 15.0, 'remaining_percent': 85.0, 'reset_at': fable_reset}]}}]})
+    path = home / 'usage-ledger' / 'events.sqlite3'
+    import sqlite3
+    with sqlite3.connect(path) as c:
+        if ts is not None:
+            c.execute('UPDATE quota SET ts=?', (ts,))
+        return path, c.execute('SELECT seq, ts, data FROM quota ORDER BY seq').fetchall()
+
+
+@pytest.mark.parametrize('failure', FAILURES)
+def test_failure_carries_latest_stored_snapshot_scoped_week(host, monkeypatch, failure):
+    # Fresh process (no in-memory good read): the stored per-profile snapshot supplies it.
+    path, rows = _seed_ledger(host.work, FABLE[2], ts=1893456000.0)
+    release = _fail_limits(host, monkeypatch, failure)
+    try:
+        quota = host.quota()
+    finally:
+        release.set()
+    assert _status(quota) == ('stale', failure)
+    fable = _stale_fable(quota)
+    assert fable['observed_at'] == '2030-01-01T00:00:00+00:00'  # the stored row's own time
+    import sqlite3
+    with sqlite3.connect(path) as c:  # read-only use: no new row, no mutation
+        assert c.execute('SELECT seq, ts, data FROM quota ORDER BY seq').fetchall() == rows
+
+
+def test_stale_replay_is_never_stored_as_a_quota_observation(host, monkeypatch):
+    from _hermes_ai_usage_ledger_v2.storage import Store
+    path, rows = _seed_ledger(host.work, FABLE[2], ts=1893456000.0)
+    monkeypatch.setattr(host.module, '_ledger_store', Store)
+    _fail_limits(host, monkeypatch, 'http_429')
+    quota = host.quota()
+    assert _status(quota) == ('stale', 'http_429') and _stale_fable(quota)
+    import sqlite3
+    with sqlite3.connect(path) as c:
+        stored = c.execute('SELECT seq, ts, data FROM quota ORDER BY seq').fetchall()
+    assert stored[:len(rows)] == rows  # existing rows untouched
+    [(_, _, data)] = stored[len(rows):]  # this read's own observation, without the replay
+    [anthropic] = json.loads(data)['providers']
+    assert [w['label'] for w in anthropic['windows']] == ['Current session', 'Current week']
+
+
+def test_carried_week_is_dropped_once_its_reset_has_passed(host, monkeypatch):
+    # Stored snapshot whose Fable reset is already past: never replayed.
+    _seed_ledger(host.work, '2020-01-01T00:00:00+00:00', ts=1577000000.0)
+    _fail_limits(host, monkeypatch, 'http_429')
+    quota = host.quota()
+    assert _status(quota) == ('unavailable', 'http_429')
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+    # In-memory carry expires at its original reset too.
+    m = host.module
+    fresh = {'available': True, 'windows': [dict(zip(('label', 'used_percent', 'reset_at'), FABLE),
+                                                 remaining_percent=85.0, detail=None, source='limits')],
+             'limits_status': {'state': 'ok', 'reason': None, 'checked_at': 0.0}}
+    m._carry_scoped_weeks(fresh, host.work / 'memory-only', now=1893456000.0)
+    reset = datetime.fromisoformat(FABLE[2]).timestamp()
+    def failed():
+        return {'available': True, 'windows': [], 'limits_status': {'state': 'unavailable', 'reason': 'timeout',
+                                                                   'checked_at': 0.0}}
+    before_reset = failed()
+    m._carry_scoped_weeks(before_reset, host.work / 'memory-only', now=reset - 1)
+    assert before_reset['limits_status']['state'] == 'stale' and before_reset['windows'][0]['stale'] is True
+    after_reset = failed()
+    m._carry_scoped_weeks(after_reset, host.work / 'memory-only', now=reset + 1)
+    assert after_reset['limits_status']['state'] == 'unavailable' and after_reset['windows'] == []
+
+
+def test_fresh_scoped_week_is_never_duplicated_by_a_carry(host):
+    _seed_ledger(host.work, FABLE[2], ts=1893456000.0)
+    quota = host.quota()
+    assert _status(quota) == ('ok', None)
+    assert [w['label'] for w in quota['windows']].count('Fable week') == 1
+    assert not any(w.get('stale') for w in quota['windows'])
+
+
+@pytest.mark.parametrize('failure', FAILURES + ('empty', 'transport'))
+def test_failure_logs_reason_type_and_status_only(host, monkeypatch, caplog, failure):
+    if failure == 'transport':
+        def respond(request):
+            if len(host.requests) % 2 == 1:
+                return httpx.Response(200, json=_payload(None))
+            raise httpx.ConnectError(f'synthetic refusal {WORK_TOKEN}', request=request)
+        host.response = respond
+        release = threading.Event()
+    else:
+        release = _fail_limits(host, monkeypatch, failure)
+    caplog.set_level('DEBUG')
+    try:
+        quota = host.quota()
+    finally:
+        release.set()
+    assert _status(quota) == ('none' if failure == 'empty' else 'unavailable', failure)
+    records = [r for r in caplog.records if 'model-scoped limits unavailable' in r.getMessage()]
+    assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    [record] = records
+    assert record.levelname == ('INFO' if failure == 'empty' else 'WARNING')
+    assert f'reason={failure}' in record.getMessage()
+    if failure == 'http_429':
+        assert 'http_status=429' in record.getMessage() and 'HTTPStatusError' in record.getMessage()
+    for r in caplog.records:
+        text = r.getMessage() + repr(r.args) + str(r.exc_info or '')
+        assert WORK_TOKEN not in text and 'Bearer' not in text and 'rate_limit_error' not in text
+        assert '<html>' not in text
+
+
+def test_empty_without_known_good_is_none_and_adds_nothing(host, monkeypatch):
+    _fail_limits(host, monkeypatch, 'empty')
+    quota = host.quota()
+    _preserved(quota)
+    assert _status(quota) == ('none', 'empty')
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+
+
+def test_empty_is_authoritative_and_never_carries(host, monkeypatch):
+    # After a good read (memory), an empty answer drops the scoped week: no stale replay.
+    good = host.quota()
+    assert _status(good) == ('ok', None)
+    _fail_limits(host, monkeypatch, 'empty')
+    quota = host.quota()
+    assert _status(quota) == ('unavailable', 'empty')  # a scoped week was known before
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+    # ...and a later genuine failure does not resurrect the pre-empty week either.
+    _fail_limits(host, monkeypatch, 'http_429')
+    later = host.quota()
+    assert _status(later) == ('unavailable', 'http_429') and not any(w.get('stale') for w in later['windows'])
+
+
+def test_empty_does_not_carry_a_stored_scoped_week(host, monkeypatch):
+    # Fresh process with a stored scoped week: empty still carries nothing, but the
+    # profile has had a known-good read, so the state stays 'unavailable'.
+    _seed_ledger(host.work, FABLE[2], ts=1893456000.0)
+    _fail_limits(host, monkeypatch, 'empty')
+    quota = host.quota()
+    assert _status(quota) == ('unavailable', 'empty')
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+
+
+def _levels(caplog):
+    return [(r.levelname, r.getMessage()) for r in caplog.records if 'model-scoped limits unavailable' in r.getMessage()]
+
+
+def test_non_oauth_token_is_no_token_at_info(host, caplog):
+    host.token_kind = 'api_key'
+    caplog.set_level('DEBUG')
+    quota = host.quota()
+    assert _status(quota) == ('unavailable', 'no_token')
+    [(level, message)] = _levels(caplog)
+    assert level == 'INFO' and 'reason=no_token' in message and 'exception=None' in message
+
+
+def test_resolver_exception_is_error_at_warning(host, monkeypatch, caplog):
+    # The host fetcher still resolves its own token; only the plugin's resolver call fails.
+    def refused():
+        raise RuntimeError(f'synthetic refresh failure {WORK_TOKEN}')
+    monkeypatch.setattr(sys.modules['agent.anthropic_credentials'], 'resolve_anthropic_token', refused)
+    caplog.set_level('DEBUG')
+    quota = host.quota()
+    _preserved(quota)
+    assert _status(quota) == ('unavailable', 'error')
+    assert len(host.requests) == 1  # host GET only
+    [(level, message)] = _levels(caplog)
+    assert level == 'WARNING' and 'reason=error' in message and 'exception=RuntimeError' in message
+    for r in caplog.records:
+        assert WORK_TOKEN not in r.getMessage() + repr(r.args) + str(r.exc_info or '')
+
+
+def test_stale_then_ok_clears_the_stale_window(host, monkeypatch):
+    assert _status(host.quota()) == ('ok', None)
+    _fail_limits(host, monkeypatch, 'http_429')
+    stale = host.quota()
+    assert _status(stale) == ('stale', 'http_429') and _stale_fable(stale)
+    host.response = lambda request: httpx.Response(200, json=_payload(LIMITS))
+    fresh = host.quota()
+    assert _status(fresh) == ('ok', None)
+    assert _windows(fresh) == [SESSION, WEEK, FABLE]
+    assert not any('stale' in w or 'observed_at' in w for w in fresh['windows'])
+
+
+def test_memory_is_per_profile_home(host, monkeypatch):
+    # Profile A's known-good week is never carried into profile B.
+    other = host.work.parent / 'other'
+    other.mkdir()
+    rows = host.module._profile_rows()
+    monkeypatch.setattr(host.module, '_profile_rows', lambda: rows + [
+        {'name': 'other', 'path': str(other), 'is_default': False, 'is_server': False, 'gateway_running': False}])
+    assert _status(host.quota()) == ('ok', None)
+    _fail_limits(host, monkeypatch, 'http_429')
+    response = host.client.get('/usage', params={'profile': 'other', 'refresh': 'true'})
+    assert response.status_code == 200, response.text
+    [b] = [p['quota'] for p in response.json()['providers'] if p['id'] == 'anthropic']
+    assert _status(b) == ('unavailable', 'http_429')
+    assert [w['label'] for w in b['windows']] == ['Current session', 'Current week']
+    # Profile A itself still carries its own week.
+    a = host.quota()
+    assert _status(a) == ('stale', 'http_429') and _stale_fable(a)
+
+
+def test_host_legacy_scoped_labels_are_never_carried(host, monkeypatch):
+    fetch = sys.modules['agent.account_usage'].fetch_account_usage
+    legacy = {'on': True}
+    def with_sonnet(provider):
+        snapshot = fetch(provider)
+        if not legacy['on']:
+            return snapshot
+        sonnet = SimpleNamespace(label='Sonnet week', used_percent=30.0,
+                                 reset_at=datetime.fromisoformat(FABLE[2]), detail=None)
+        return SimpleNamespace(**{**vars(snapshot), 'windows': snapshot.windows + (sonnet,)})
+    monkeypatch.setattr(sys.modules['agent.account_usage'], 'fetch_account_usage', with_sonnet)
+    good = host.quota()
+    assert _status(good) == ('ok', None)
+    assert [(w['label'], w.get('source')) for w in good['windows']] == [
+        ('Current session', None), ('Current week', None), ('Sonnet week', None), ('Fable week', 'limits')]
+    # Memory: the host no longer reports Sonnet and the limits read fails; only Fable is carried.
+    legacy['on'] = False
+    _fail_limits(host, monkeypatch, 'http_429')
+    quota = host.quota()
+    assert _status(quota) == ('stale', 'http_429') and _stale_fable(quota)
+    assert 'Sonnet week' not in [w['label'] for w in quota['windows']]
+
+
+def test_host_legacy_labels_in_the_ledger_are_never_carried(host, monkeypatch):
+    from _hermes_ai_usage_ledger_v2.storage import Store
+    Store(host.work).save_quota({'generated_at': '2029-12-31T00:00:00+00:00', 'providers': [
+        {'id': 'anthropic', 'quota': {'available': True, 'windows': [
+            {'label': 'Opus week', 'used_percent': 40.0, 'remaining_percent': 60.0, 'reset_at': FABLE[2]},
+            {'label': 'Sonnet week', 'used_percent': 30.0, 'remaining_percent': 70.0, 'reset_at': FABLE[2]}]}}]})
+    _fail_limits(host, monkeypatch, 'http_429')
+    quota = host.quota()
+    assert _status(quota) == ('unavailable', 'http_429')
+    assert [w['label'] for w in quota['windows']] == ['Current session', 'Current week']
+
+
+@pytest.mark.parametrize('bad_ts', [float('inf'), float('-inf'), 1e300])
+def test_non_finite_stored_ts_is_skipped(host, monkeypatch, bad_ts):
+    # A newer row with an unusable ts is skipped; the older valid row still carries.
+    path, _ = _seed_ledger(host.work, FABLE[2], ts=1893456000.0)
+    from _hermes_ai_usage_ledger_v2.storage import Store
+    Store(host.work).save_quota({'generated_at': '2030-01-01T06:00:00+00:00', 'providers': [
+        {'id': 'anthropic', 'quota': {'available': True, 'windows': [
+            {'label': 'Fable week', 'used_percent': 50.0, 'remaining_percent': 50.0, 'reset_at': FABLE[2]}]}}]})
+    import sqlite3
+    with sqlite3.connect(path) as c:
+        c.execute('UPDATE quota SET ts=? WHERE seq=(SELECT MAX(seq) FROM quota)', (bad_ts,))
+    _fail_limits(host, monkeypatch, 'http_429')
+    quota = host.quota()
+    assert _status(quota) == ('stale', 'http_429')
+    assert _stale_fable(quota)['observed_at'] == '2030-01-01T00:00:00+00:00'
+
+
+def test_empty_supersession_does_not_survive_a_restart(host, monkeypatch):
+    # ``empty`` supersedes older stored scoped weeks only for the process
+    # (``_ScopedMemory.as_of`` is in memory, nothing is written to the ledger).
+    # After a restart a genuine failure carries the newest pre-empty ledger row
+    # again while its reset is still in the future: documented, pinned here.
+    stored_ts = float(int(time.time()) - 3600)  # observed before the empty read
+    _seed_ledger(host.work, FABLE[2], ts=stored_ts)
+    host.module._scoped_memory.clear()
+    _fail_limits(host, monkeypatch, 'empty')
+    assert _status(host.quota()) == ('unavailable', 'empty')
+    _fail_limits(host, monkeypatch, 'http_429')
+    same_process = host.quota()  # superseded while the process lives
+    assert _status(same_process) == ('unavailable', 'http_429')
+    assert not any(w.get('stale') for w in same_process['windows'])
+    host.module._scoped_memory.clear()  # simulated dashboard restart
+    after_restart = host.quota()
+    assert _status(after_restart) == ('stale', 'http_429')
+    fable = _stale_fable(after_restart)
+    assert datetime.fromisoformat(fable['observed_at']).timestamp() == stored_ts

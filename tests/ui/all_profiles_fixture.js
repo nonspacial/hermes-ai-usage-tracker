@@ -114,15 +114,22 @@ function fixtureProject(full,p){
 // windows (Current session, Current week, then the model-scoped Fable week) plus
 // one recorded request so it has an All-providers row. Not in the default
 // catalogue: call before the pane mounts (scripts inject it before register).
-function fixtureAnthropicFable({fable=true}={}){
+// `stale:true` marks the Fable week as the backend's carried last known-good
+// window (`stale`, `observed_at`, `limits_status.state='stale'`; `fableLeft`
+// sets its remaining percentage); `unavailable:'<reason>'` drops it with
+// `limits_status.state='unavailable'` (or `state`, e.g. 'none').
+function fixtureAnthropicFable({fable=true,stale=false,unavailable=null,fableLeft=85,state=null}={}){
  const event=JSON.parse(JSON.stringify(events[0]));
  Object.assign(event,{provider:'anthropic',id:'fixture-anthropic-fable',started:now-900,ended:now-899});
  events.push(event);
  const windows=[{label:'Current session',used_percent:38,remaining_percent:62,reset_at:new Date((now+3600)*1000).toISOString(),detail:null},
   {label:'Current week',used_percent:45,remaining_percent:55,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null}];
- if(fable)windows.push({label:'Fable week',used_percent:15,remaining_percent:85,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null});
+ if(fable&&!unavailable)windows.push({label:'Fable week',used_percent:100-fableLeft,remaining_percent:fableLeft,reset_at:new Date((now+4*86400)*1000).toISOString(),detail:null,
+  ...(stale?{stale:true,observed_at:new Date((now-1800)*1000).toISOString()}:{})});
+ const limits_status=unavailable?{state:state||'unavailable',reason:unavailable,checked_at:now}
+  :{state:stale?'stale':'ok',reason:stale?'timeout':null,checked_at:now};
  demoProviders.push({id:'anthropic',label:'Anthropic',active:true,configured:true,quota:{available:true,source:'oauth_usage_api',
-  title:'Account limits',plan:'Max',details:[],windows}});
+  title:'Account limits',plan:'Max',details:[],windows,limits_status}});
 }
 // Synthetic reset responses; never connect to a Codex account. Tests can
 // change window.demoResets before invalidating the reset query.
