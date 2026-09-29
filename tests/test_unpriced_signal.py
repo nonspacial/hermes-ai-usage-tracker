@@ -290,13 +290,16 @@ def test_priced_rows_and_existing_fields_identical_to_reference(tmp_path, refere
         extra = {'anthropic_endpoint': 'first_party'} if provider == 'anthropic' else {}
         put(store, f'priced-{i}', stamp + i, provider, model, **extra)
     put(store, 'pending', 7300, 'openai-codex', 'gpt-5.5', usage=None)
-    new = {'full': store.read(*ARGS[:2])}
+    # A <=2h window: the reference and current trend ladders both use 120 s
+    # buckets there, so the whole-DTO parity isolates the unpriced fields.
+    window = (1000., 8000.)
+    new = {'full': store.read(*window)}
     for group in ('time', 'model'):
-        new[group] = store.read(*ARGS[:2], view='overview', group=group)
+        new[group] = store.read(*window, view='overview', group=group)
     old_store = reference_store(tmp_path)
-    old = {'full': old_store.read(*ARGS[:2])}
+    old = {'full': old_store.read(*window)}
     for group in ('time', 'model'):
-        old[group] = old_store.read(*ARGS[:2], view='overview', group=group)
+        old[group] = old_store.read(*window, view='overview', group=group)
     priced = [r for r in new['full']['requests'] if (r.get('cost') or {}).get('complete')]
     assert {r['provider'] for r in priced} >= {'openai-codex', 'openrouter', 'nous', 'ollama', 'anthropic'}, \
         sorted({r['provider'] for r in priced})

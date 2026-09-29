@@ -65,7 +65,7 @@ def run():
             page.get_by_role('tab',name='All providers',exact=True).click()
             expect(freshness(page)).to_contain_text('Updated')
             group=page.get_by_role('group',name='Breakdown grouping')
-            group.get_by_role('button',name='Hour').click()
+            group.get_by_role('button').nth(1).click()  # time grouping; label follows trend.unit
             expect(freshness(page)).to_contain_text('Updated')
             # The populated Hour row is an actual backend trend bucket, not a
             # guessed wall-clock grid cell. Activate its first-column link.
@@ -142,7 +142,7 @@ def run():
             # A malformed successful GET, whether its bound, nested DTO or
             # exact partition count, must not paint the selected view.
             for kind in ('window','nested','count'):
-                group.get_by_role('button',name='Hour').click()
+                group.get_by_role('button').nth(1).click()  # time grouping; label follows trend.unit
                 expect(freshness(page)).to_contain_text('Updated')
                 fault=kind
                 page.locator('.au-breakdown tbody tr').first.locator('td').first.locator('button.au-drill').click()

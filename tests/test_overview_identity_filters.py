@@ -259,7 +259,10 @@ def test_old_selected_marker_fact_survives_recent_cap_without_cross_profile_leak
 @pytest.mark.parametrize(('duration', 'step', 'unit'), [
     (1799, 60, 'minute'), (1800, 60, 'minute'),
     (1800.1, 120, '2 minutes'), (3600, 120, '2 minutes'),
-    (86400, 3600, 'hour'), (604800, 86400, 'day'),
+    (21600, 300, '5 minutes'), (43200, 600, '10 minutes'),
+    (86400, 900, '15 minutes'), (172800, 1800, '30 minutes'),
+    (604800, 3600, 'hour'), (2592000, 21600, '6 hours'),
+    (7776000, 86400, 'day'), (7776001, 86400, 'day'),
 ])
 def test_zoom_resolution_and_clipped_half_open_edges(reports, duration, step, unit):
     root, _, runtime = reports

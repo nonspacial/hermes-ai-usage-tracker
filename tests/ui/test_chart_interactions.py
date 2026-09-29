@@ -45,6 +45,17 @@ def test_chart_interactions():
                 assert box is not None
                 return box['x'] + box['width'] * fraction, box['y'] + box['height'] / 2
 
+            def open_custom():
+                # Custom bounds live in a closed disclosure until opened.
+                custom = page.locator('.au-custom-range')
+                if custom.count() and custom.get_attribute('open') is None:
+                    custom.locator('summary').click()
+
+            def close_custom():
+                custom = page.locator('.au-custom-range')
+                if custom.count() and custom.get_attribute('open') is not None:
+                    custom.locator('summary').click()
+
             def stroke():
                 return plot.evaluate('e=>getComputedStyle(e).stroke')
 
@@ -144,7 +155,8 @@ def test_chart_interactions():
                 assert ':' in (chart.locator('svg text').last.text_content() or ''), 'Minute-level axis labels'
                 page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='2 minutes', exact=True).click()
                 labels = page.get_by_role('region', name='Usage breakdown').locator('tbody tr td:first-child').all_text_contents()
-                assert len(labels) >= 30 and len(set(labels)) == len(labels)
+                # Time rows are server-paged ten at a time (record paging contract).
+                assert len(labels) == 10 and len(set(labels)) == len(labels), labels
                 assert all(':' in label for label in labels)
                 plot.scroll_into_view_if_needed()
                 before = len(calls())
@@ -173,7 +185,7 @@ def test_chart_interactions():
                 right = box['x'] + box['width'] * (snapped[1]-lo)/(hi-lo)
                 assert abs(shade['x']-left)<2 and abs(shade['x']+shade['width']-right)<2, (shade, left, right)
                 page.mouse.up()
-                expect(page.get_by_label('Window start', exact=True)).to_be_visible()
+                expect(page.get_by_label('Window start', exact=True)).to_have_count(1)
                 page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n', arg=before)
                 query = parse_qs(urlsplit(calls()[-1]).query)
                 assert float(query['start'][0]) == snapped[0], (reverse, query, snapped)
@@ -252,7 +264,7 @@ def test_chart_interactions():
             page.get_by_role('group', name='Time window').get_by_role('button', name='Past hour', exact=True).click()
             plot.scroll_into_view_if_needed()
             page.wait_for_function('window.chartData?.trend?.seconds === 120')
-            expect(chart.locator('.au-chart-title')).to_contain_text('2 minutes bucket')
+            expect(chart.locator('.au-chart-title')).to_contain_text('2-minute buckets')
             before = len(calls())
             x, y = position(0)
             page.mouse.move(x+1,y);page.mouse.down();page.mouse.move(x+7,y);page.mouse.up()
@@ -262,6 +274,7 @@ def test_chart_interactions():
             # Manual controls share the half-hour grid and do not query while
             # a pasted/off-grid or shorter-than-half-hour interval is invalid.
             page.get_by_role('group', name='Time window').get_by_role('button', name='Custom', exact=True).click()
+            open_custom()
             beginning=page.get_by_label('Window start',exact=True)
             ending=page.get_by_label('Window end',exact=True)
             assert beginning.get_attribute('step')==ending.get_attribute('step')=='1800'
@@ -277,6 +290,24 @@ def test_chart_interactions():
             page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n',arg=before)
             query=parse_qs(urlsplit(calls()[-1]).query)
             assert float(query['end'][0])-float(query['start'][0])==1800
+            # Open-ended Custom: an empty end means "until now" once the start
+            # is at least 30 minutes in the past; the read omits `end`.
+            def local_half_hour(offset_seconds):
+                return page.evaluate('''(o)=>{const t=(Math.floor(Date.now()/1800000)*1800+o)*1000,d=new Date(t);
+                  return new Date(t-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}''', offset_seconds)
+            before=len(calls())
+            beginning.fill(local_half_hour(1800))
+            ending.fill('')
+            expect(page.get_by_role('alert').filter(has_text='leave end empty for until now')).to_be_visible()
+            page.wait_for_timeout(300)
+            assert len(calls())==before, 'A future open start must not read'
+            beginning.fill(local_half_hour(-7200))
+            page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n',arg=before)
+            query=parse_qs(urlsplit(calls()[-1]).query)
+            assert 'end' not in query and 'test_id' not in query, query
+            assert page.get_by_role('alert').filter(has_text='until now').count()==0
+            page.wait_for_function('window.chartData && !new URLSearchParams(window.demoCalls.filter(p=>p.startsWith("/ledger?")).at(-1).split("?")[1]).has("end")')
+            assert ending.input_value()==''
 
             # Cancelled pointer gestures do not apply a time window.
             page.evaluate('window.chartData=null')
@@ -284,9 +315,14 @@ def test_chart_interactions():
             page.wait_for_function('window.chartData?.trend?.seconds === 120')
             plot.scroll_into_view_if_needed()
             before = len(calls())
-            page.mouse.move(*position(.2))
+            # Drag between real half-hour edges; fixed fractions can snap to
+            # one boundary depending on the wall-clock minute.
+            data = page.evaluate('window.chartData')
+            first, last = data['trend']['buckets'][0]['start'], data['trend']['buckets'][-1]['end']
+            edges = [t for t in [first, *[b['end'] for b in data['trend']['buckets']]] if t % 1800 == 0]
+            page.mouse.move(*position((edges[0]-first)/(last-first)))
             page.mouse.down()
-            page.mouse.move(*position(.6), steps=4)
+            page.mouse.move(*position((edges[0]+1800-first)/(last-first)), steps=4)
             expect(chart.locator('.au-plot-selection')).to_be_visible()
             plot.dispatch_event('pointercancel', {'pointerId': 1})
             page.mouse.up()
@@ -297,12 +333,15 @@ def test_chart_interactions():
             page.get_by_role('button', name='Start test marker').click()
             page.wait_for_function('savedTests.length > 0')
             marker=page.evaluate('savedTests[0]')
+            open_custom()
             expect(page.get_by_label('Window start',exact=True)).to_have_value(datetime.fromtimestamp(
                 (marker['started']//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
+            close_custom()
             page.get_by_role('button', name='End test marker').click()
             page.wait_for_function('savedTests[0].ended != null')
             ended=page.evaluate('savedTests[0]')
             assert ended['started']==marker['started'] and ended['ended']-ended['started']<1800
+            open_custom()
             beginning=page.get_by_label('Window start',exact=True).input_value()
             ending=page.get_by_label('Window end',exact=True).input_value()
             assert (datetime.fromisoformat(ending)-datetime.fromisoformat(beginning)).total_seconds()>=1800
@@ -319,6 +358,9 @@ def test_chart_interactions():
                 started:Math.floor(started/1800)*1800+1,ended:Math.floor(started/1800)*1800+2};
               events.push(r);window.demoChange++;for(const fn of window.demoSubscribers)fn({type:'changed',mode:'native-events'});
             }''')
+            close_custom()
+            # Only the Requests projection carries request rows.
+            page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Requests').click()
             page.get_by_role('combobox', name='Saved tests').select_option('boundary-fixture')
             page.wait_for_function('window.chartData?.window?.start === savedTests[0].started')
             assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
@@ -332,19 +374,84 @@ def test_chart_interactions():
             query=parse_qs(urlsplit(calls()[-1]).query)
             assert query['test_id']==['boundary-fixture']
             assert page.get_by_role('button',name='Remove saved test marker filter').is_visible()
+            open_custom()
             page.get_by_label('Window start',exact=True).fill(datetime.fromtimestamp(
                 (page.evaluate('savedTests[0].started')//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
             page.get_by_label('Window end',exact=True).fill(datetime.fromtimestamp(
                 ((page.evaluate('savedTests[0].ended')+1799)//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
             assert parse_qs(urlsplit(calls()[-1]).query)['test_id']==['boundary-fixture']
             assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
+            close_custom()
             page.get_by_role('button',name='Remove saved test marker filter').click()
             page.wait_for_function('window.chartData?.requests?.some(r=>r.id==="outside-marker-fixture")')
             assert 'test_id' not in parse_qs(urlsplit(calls()[-1]).query)
             assert 'outside-marker-fixture' in [r['id'] for r in page.evaluate('window.chartData.requests')]
+
+            # Adaptive bucket labels follow trend.unit/seconds for every step
+            # of the backend ladder (fixture mirror, opt-in), and the half-hour
+            # drag grid survives finer (5/15-minute) and coarser (6-hour) steps.
+            page.get_by_role('navigation', name='Provider subpages').get_by_role('tab', name='Overview').click()
+            page.evaluate('window.demoTrendLadder=true')
+            breakdown = page.get_by_role('group', name='Breakdown grouping')
+
+            def check_labels(label, seconds, title, button, drag=False):
+                expect(chart.locator('.au-chart-title')).to_contain_text(title)
+                close_custom()
+                breakdown.get_by_role('button', name=button, exact=True).click()
+                expect(breakdown.get_by_role('button', name=button, exact=True)).to_have_attribute('aria-pressed', 'true')
+                region = page.get_by_role('region', name='Usage breakdown')
+                expect(region.locator('thead th').first).to_contain_text(button)
+                cells = region.locator('tbody tr td:first-child').all_text_contents()
+                assert cells and len(set(cells)) == len(cells), (label, cells[:4])
+                if seconds < 3600:
+                    assert all(':' in c for c in cells), (label, cells[:4])
+                if seconds < 86400:
+                    assert ':' in (chart.locator('svg text').last.text_content() or ''), label
+                if drag:
+                    data = page.evaluate('window.chartData')
+                    plot.scroll_into_view_if_needed()
+                    before = len(calls())
+                    page.mouse.move(*position(.3)); page.mouse.down()
+                    page.mouse.move(*position(.7), steps=6)
+                    expect(chart.locator('.au-plot-selection')).to_be_visible()
+                    page.mouse.up()
+                    page.wait_for_function('(n)=>window.demoCalls.filter(p=>p.startsWith("/ledger?")).length>n', arg=before)
+                    query = parse_qs(urlsplit(calls()[-1]).query)
+                    edges = [data['trend']['buckets'][0]['start'], *[b['end'] for b in data['trend']['buckets']]]
+                    assert float(query['start'][0]) % 1800 == 0 and float(query['end'][0]) % 1800 == 0, query
+                    assert float(query['start'][0]) in edges and float(query['end'][0]) in edges, query
+                    assert float(query['end'][0]) - float(query['start'][0]) >= 1800
+
+            # Rolling periods whose duration (plus sampling slack) stays inside
+            # one ladder step.
+            for label, seconds, title, button in (
+                    ('Past hour', 120, '2-minute buckets', '2 minutes'),
+                    ('Past 24h', 900, '15-minute buckets', '15 minutes'),
+                    ('90 days', 86400, 'Daily', 'Day')):
+                page.evaluate('window.chartData=null')
+                page.get_by_role('group', name='Time window').get_by_role('button', name=label, exact=True).click()
+                page.wait_for_function('(s)=>window.chartData?.trend?.seconds === s', arg=seconds)
+                check_labels(label, seconds, title, button, drag=seconds == 900)
+            # Exact closed Custom windows cover the remaining steps.
+            for hours, seconds, title, button in (
+                    (6, 300, '5-minute buckets', '5 minutes'),
+                    (12, 600, '10-minute buckets', '10 minutes'),
+                    (48, 1800, '30-minute buckets', '30 minutes'),
+                    (168, 3600, 'Hourly', 'Hour'),
+                    (720, 21600, '6-hour buckets', '6 hours')):
+                page.evaluate('window.chartData=null')
+                page.get_by_role('group', name='Time window').get_by_role('button', name='Custom', exact=True).click()
+                open_custom()
+                page.get_by_label('Window end', exact=True).fill(local_half_hour(-1800))
+                page.get_by_label('Window start', exact=True).fill(local_half_hour(-1800 - hours * 3600))
+                expected_start = page.evaluate('(h)=>Math.floor(Date.now()/1800000)*1800-1800-h*3600', hours)
+                page.wait_for_function('([s,start])=>window.chartData?.trend?.seconds === s && window.chartData.window.start === start',
+                                       arg=[seconds, expected_start])
+                check_labels(f'{hours}h', seconds, title, button, drag=seconds == 21600)
+            page.evaluate('window.demoTrendLadder=false')
             assert not errors, errors
             assert not network, network
-            print('PASS plot-only hover/focus, dual tooltip, click/jitter/keyboard, forward/reverse zoom, letterboxed SVG, cancellation and minute labels')
+            print('PASS plot-only hover/focus, dual tooltip, click/jitter/keyboard, forward/reverse zoom, letterboxed SVG, cancellation, minute labels, open-ended Custom (no end) and ladder labels 2/5/10/15/30-minute, Hourly, 6-hour, Daily')
         finally:
             browser.close()
 

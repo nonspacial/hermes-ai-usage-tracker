@@ -72,7 +72,10 @@ def run():
             page.set_content(text)
             page.get_by_role('tab',name='All providers',exact=True).click()
             expect(freshness(page)).to_contain_text('Updated')
-            assert len(calls)==1 and calls[-1][:2]==('GET','/ledger')
+            # A post-read change hint may add one follow-up GET; never a POST.
+            # Let that follow-up settle before snapshotting the cached DTO.
+            page.wait_for_timeout(1000);expect(freshness(page)).to_contain_text('Updated')
+            assert 1<=len(calls)<=2 and all(c[:2]==('GET','/ledger') for c in calls),calls
             assert 'list_mode=page' in calls[-1][2]
             initial=page.evaluate('''()=>JSON.parse(ledgerMemory.values().next().value.payload)''')
             assert initial['summary']['attempts']==1 and initial['list_count']==1
@@ -104,7 +107,7 @@ def run():
             assert page.evaluate('''()=>JSON.parse(ledgerMemory.values().next().value.payload)''')==before
             page.evaluate('signalLedger()')
             page.wait_for_function('''()=>!document.querySelector('[data-testid=ledger-freshness]')?.textContent.includes('Update failed')''')
-            page.get_by_role('group',name='Breakdown grouping').get_by_role('button',name='Hour').click()
+            page.get_by_role('group',name='Breakdown grouping').get_by_role('button').nth(1).click()  # time grouping
             expect(freshness(page)).to_contain_text('Updated')
             assert calls[-1][:2]==('GET','/ledger') and 'group=time' in calls[-1][2]
             page.get_by_role('tab',name='Requests',exact=True).click()

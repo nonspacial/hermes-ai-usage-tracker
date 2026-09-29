@@ -92,6 +92,15 @@ def run():
   expect(page.get_by_label('Window start',exact=True)).to_have_value(a)
   expect(page.get_by_label('Window end',exact=True)).to_have_value(b)
   expect(rates.locator('tbody tr')).to_have_count(1)
+  # Same open-ended rule here: an empty end reads until now (no `end` param)
+  # once the start is at least 30 minutes ago; the header copy stays in sync.
+  opened=page.evaluate('new Date((Math.floor(Date.now()/1800000)*1800-7200)*1000-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)')
+  reads=page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger?')).length")
+  filters.get_by_label('Cache window start',exact=True).fill(opened)
+  filters.get_by_label('Cache window end',exact=True).fill('')
+  expect(page.get_by_label('Window end',exact=True)).to_have_value('')
+  page.wait_for_function("n=>demoCalls.filter(p=>p.startsWith('/ledger?')).slice(n).some(p=>!new URLSearchParams(p.split('?')[1]).has('end'))",arg=reads)
+  assert page.get_by_role('alert').filter(has_text='until now').count()==0
   local.get_by_role('button',name='Past 24h',exact=True).click()
   # Scope from the same dashboard is retained, including empty results.
   page.get_by_role('textbox',name='Session ID',exact=True).fill('no-matching-session')

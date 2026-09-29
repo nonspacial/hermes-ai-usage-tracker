@@ -138,7 +138,8 @@ def test_all_time_trends_align_across_different_profile_history(tmp_path, runtim
     database(tmp_path, [request(ts=1)])
     database(tmp_path / 'profiles' / 'recent', [request(ts=999999)])
     out = aggregate.ledger(runtime, inventory(tmp_path), end=1000000)
-    assert out['trend']['seconds'] == 86400
+    # ~11.6 days of all-time history: six-hour buckets on one shared UTC grid.
+    assert out['trend']['seconds'] == 21600 and out['trend']['unit'] == '6 hours'
     buckets = out['trend']['buckets']
     assert sum(b['attempts'] for b in buckets) == 2
     assert buckets[0]['start'] == 1 and buckets[-1]['end'] == 1000000

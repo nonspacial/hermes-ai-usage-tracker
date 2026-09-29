@@ -1,4 +1,4 @@
-"""Short trend windows use aligned, UTC two-minute buckets on fixture ledgers."""
+"""Trend windows use UTC-aligned, clipped buckets whose step follows the adaptive duration ladder (1 min up to N days) on fixture ledgers."""
 
 import pytest
 
@@ -59,11 +59,17 @@ def test_short_trend_respects_filters_and_empty_windows(tmp_path):
 @pytest.mark.parametrize(('duration', 'unit', 'seconds'), [
     (3600.5, '2 minutes', 120),
     (7200, '2 minutes', 120),
-    (7201, 'hour', 3600),
-    (172800, 'hour', 3600),
-    (172801, 'day', 86400),
+    (7201, '5 minutes', 300),
+    (21661, '10 minutes', 600),
+    (43261, '15 minutes', 900),
+    (86400, '15 minutes', 900),
+    (86461, '30 minutes', 1800),
+    (172800, '30 minutes', 1800),
+    (172861, 'hour', 3600),
+    (604861, '6 hours', 21600),
+    (2592061, 'day', 86400),
 ])
-def test_longer_windows_preserve_existing_granularity(tmp_path, duration, unit, seconds):
+def test_longer_windows_follow_the_adaptive_ladder(tmp_path, duration, unit, seconds):
     trend = Store(tmp_path).read(7200, 7200 + duration)['trend']
     assert (trend['unit'], trend['seconds'], trend['timezone']) == (unit, seconds, 'UTC')
 

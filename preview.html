@@ -2177,7 +2177,9 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
  const {line,area}=allProviders?{line:'',area:''}:traces(vals);
- const stamp=t=>(data?.trend?.seconds||86400)<86400?bucketStamp(t,{date:false,time:'minute'}):bucketStamp(t),zone=spanZoneName(points.map(p=>p.start)),active=hover==null?null:points[Math.min(hover,points.length-1)];
+ // Sub-day buckets show clock times; the date is added once the plotted span
+ // exceeds one day (e.g. 7-day hourly or 30-day 6-hour buckets).
+ const stamp=t=>(data?.trend?.seconds||86400)<86400?bucketStamp(t,{date:plotEnd-plotStart>86400,time:'minute'}):bucketStamp(t),zone=spanZoneName(points.map(p=>p.start)),active=hover==null?null:points[Math.min(hover,points.length-1)];
  const activeZone=active?localZoneName(new Date(active.start*1000)):'';
  const pointSummary=active?new Date(active.start*1000).toLocaleString()+(activeZone?' '+activeZone:'')+' · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
  const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
@@ -2199,8 +2201,8 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   if(range&&onSelectRange)onSelectRange(...range);
  };
  return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
- h('div',{className:'au-chart-title'},(unit==='hour'?'Hourly':unit==='day'?'Daily':unit+' bucket')+(cost?' cost':' processed tokens'),h('span',{className:'au-muted'},(zone?zone+' · ':'')+'by request start')),
- h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' '+unit+' buckets'+(zone?', times in '+zone:'')},
+ h('div',{className:'au-chart-title'},bucketTitle(unit)+(/ buckets$/.test(bucketTitle(unit))?' · ':' ')+(cost?'cost':'processed tokens'),h('span',{className:'au-muted'},(zone?zone+' · ':'')+'by request start')),
+ h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' '+bucketLabels(unit).size+' buckets'+(zone?', times in '+zone:'')},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
  ...(allProviders?series.map(s=>h('path',{key:s.provider,d:traces(s.values).line,className:'au-line au-provider-series','data-provider':s.provider,style:{stroke:providerAccent(s.provider)}})):
   [h('path',{d:area,className:'au-area'}),h('path',{d:line,className:'au-line'})]),
@@ -2216,6 +2218,19 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
+// Bucket wording follows the server's trend.unit ladder ('minute', '2 minutes',
+// … 'hour', '6 hours', 'day', 'N days') generically: Hourly/Daily/Per-minute,
+// otherwise '<N>-<unit> buckets' (e.g. '5-minute buckets', '6-hour buckets').
+// One table feeds the chart title, SVG label and Breakdown grouping name.
+const BUCKET_LABELS={minute:{title:'Per-minute',group:'Minute',size:'per-minute'},hour:{title:'Hourly',group:'Hour',size:'hourly'},day:{title:'Daily',group:'Day',size:'daily'}};
+function bucketLabels(unit){
+ const text=String(unit||'day').replace(/^1 (minute|hour|day)s$/,'$1');
+ if(BUCKET_LABELS[text])return BUCKET_LABELS[text];
+ const match=/^(\d+) (minute|hour|day)s$/.exec(text),size=match?match[1]+'-'+match[2]:text,cap=v=>v.charAt(0).toUpperCase()+v.slice(1);
+ return {title:(match?size:cap(text))+' buckets',group:cap(text),size};
+}
+function bucketTitle(unit){return bucketLabels(unit).title}
+function bucketGroupName(trend){return trend?.seconds===60?'Minute':bucketLabels(trend?.unit).group}
 function missingFieldNote(summary,key){
  const n=summary?.missing_fields?.[key]||0;if(!n)return 'Reported tokens';
  const labels={awaiting_usage:'awaiting usage (owner process observed live)',unresolved_execution:'unresolved execution; usage unknown',abandoned_execution:'abandoned execution; field not reported',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
@@ -2284,8 +2299,8 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
 }
 
 function Breakdown({data,header,mode,onDrill,group,setGroup}){
- const seconds=(data||header)?.trend?.seconds||86400,minuteBuckets=seconds<3600;
- const timeName=seconds===60?'Minute':minuteBuckets?(data||header)?.trend?.unit||'2 minutes':(data||header)?.trend?.unit==='hour'?'Hour':'Day';
+ const trend=(data||header)?.trend,seconds=trend?.seconds||86400;
+ const timeName=bucketGroupName(trend);
  // Only the time table is reversed; the shared chart keeps chronological buckets.
  // Other groups arrive ordered by their latest call across the full filtered set.
  const rows=!data?.summary?[]:group==='time'?(data.list_rows||[...(data.trend?.buckets||[])].sort((a,b)=>b.start-a.start)):({model:data.model_groups,project:data.project_groups,session:data.session_groups,subagent:data.subagent_groups})[group]||[];
@@ -2297,7 +2312,7 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
   if(group==='model')return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},g.model,
    h('span',{className:'au-muted',style:{display:'block'}},uiNames[g.provider]||g.provider));
   if(group==='time'){
-   const label=bucketStamp(g.start,{time:minuteBuckets?'minute':timeName==='Hour'?'hour':'auto'});
+   const label=bucketStamp(g.start,{time:seconds<3600?'minute':seconds<86400?'hour':'auto'});
    return h(actionable?'button':'span',{className:actionable?'au-drill':'',...(actionable?{type:'button',onClick:()=>onDrill(group,g)}:{})},label);
   }
   const label=group==='project'?(g.label||'Unattributed project')+provenance(g):readable(g,'key');
@@ -2404,7 +2419,7 @@ function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,w
   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Cache time window'},...Object.entries(choices).map(([value,label])=>h('button',{key:value,type:'button','aria-pressed':period===value,onClick:()=>onPeriod(value)},label))),
   h('select',{className:'au-period-select','aria-label':'Cache time window',value:period,onChange:e=>onPeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([value,label])=>h('option',{key:value,value},label))),
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:startValue,'aria-label':'Cache window start',onChange:e=>onStart(e.target.value)}):null,
-  period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',onChange:e=>onEnd(e.target.value)}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',title:'Leave empty to view until now; the window keeps growing.',onChange:e=>onEnd(e.target.value)}):null,
   h('span',{className:'au-muted au-window-label'},window?new Date(window.start*1000).toLocaleString()+' — '+new Date(window.end*1000).toLocaleString():''));
 }
 // Unpriced usage is loud, never a bare '*'. The count and reason ride on the
@@ -2594,6 +2609,10 @@ const HALF_HOUR=1800;
 const validHalfHour=value=>typeof value==='string'&&/^\d{4}-\d\d-\d\dT\d\d:(00|30)$/.test(value)&&
  Number.isFinite(Date.parse(value))&&Date.parse(value)/1000%HALF_HOUR===0;
 const validCustomWindow=(start,end)=>validHalfHour(start)&&validHalfHour(end)&&Date.parse(end)-Date.parse(start)>=HALF_HOUR*1000;
+// Open-ended Custom ("until now"): an empty end with a half-hour start at
+// least 30 minutes in the past. The read omits `end` (the server resolves now)
+// and the view keeps growing; a saved open marker keeps its own older rule.
+const validOpenCustom=(start,now=Date.now())=>validHalfHour(start)&&Date.parse(start)<=now-HALF_HOUR*1000;
 const localHalfHour=(seconds,round=Math.floor)=>{
  const epoch=round(seconds/HALF_HOUR)*HALF_HOUR,date=new Date(epoch*1000);
  return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);
@@ -2621,7 +2640,8 @@ function readView(profile){
  const chartBounds=period==='custom'&&customStart&&customEnd&&Number.isFinite(exact?.start)&&Number.isFinite(exact?.end)&&
   validCustomWindow(customStart,customEnd)&&exact.start===Date.parse(customStart)/1000&&
   exact.end===Date.parse(customEnd)/1000?{start:exact.start,end:exact.end}:null;
- const restoredPeriod=period==='custom'&&!validCustomWindow(customStart,customEnd)&&!(raw.filterTest&&customStart&&!customEnd)?'24h':period;
+ const restoredPeriod=period==='custom'&&!validCustomWindow(customStart,customEnd)&&!(raw.filterTest&&customStart&&!customEnd)&&
+  !(!customEnd&&validOpenCustom(customStart))?'24h':period;
  const model=safeId(filters.model),modelProvider=safeId(filters.modelProvider);
  const bucketStart=Number.isFinite(filters.bucketStart)&&filters.bucketStart>=0?filters.bucketStart:null;
  const bucketEnd=bucketStart!=null&&Number.isFinite(filters.bucketEnd)&&filters.bucketEnd>bucketStart?filters.bucketEnd:null;
@@ -3031,7 +3051,7 @@ function sharedLedgerRead(path,options,identity=path){
 let liveLedgerOwnerId=0;
 // The token is a filesystem hint, not a database revision. Only a full REST
 // response publishes accounting; a hint never modifies totals or event rows.
-function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalThis,connection=null}){
+function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish,clock=globalThis,connection=null}){
   let alive=true,active=false,dirty=false,manual=false,manualForNext=false,token=null;
   let unsupported=false,failures=0,checkFailures=0,followup=null,retry=null;
   // checkFlight: the most recently started change-token probe still in flight
@@ -3064,8 +3084,10 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   // Any factual request filter (see rollingEdgeStable's progression rule).
   const filtered=['provider','model','model_provider','session','agent','project','subagent',
    'test_id','bucket_start','bucket_end'].some(key=>!!query.get(key));
+  // The backend's `end is None` resume branch pins the *sealed* end, so an
+  // open-ended (growing) Custom read would stop growing: it always uses a GET.
   const canResume=!query.has('list_mode')&&!!memoryKey&&['time','model'].includes(query.get('group'))&&validateOverview&&
-   !query.has('test_id')&&!query.has('bucket_start')&&!query.has('bucket_end')&&
+   !query.has('test_id')&&!query.has('bucket_start')&&!query.has('bucket_end')&&!growing&&
    (!windowSeconds||windowSeconds===86400&&
    !query.has('end'));
   let baseline=null,refreshUnavailable=false;
@@ -3264,9 +3286,12 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
   // flight is re-evaluated when that flight settles; a queued read already
   // samples a new start. A tick during failure backoff reads, as a hint does.
   async function expire(){
-   if(!current()||!windowSeconds)return;
+   if(!current()||!windowSeconds&&!growing)return;
    if(active){expireAfter=true;return}
    if(followup)return;
+   // Open-ended Custom has no rolling-edge proof: every tick reads (the old
+   // 60s behaviour). The server resolves the omitted end to its own now.
+   if(!windowSeconds){schedule(LEDGER_HINT_DEBOUNCE_MS);return}
    if(retry||!lastShown||lastReadStarted===null||now()-lastReadStarted>=LEDGER_RECONCILE_MS||
       unsupported||checkFailures>=3||query.get('view')==='compressions'||
       !rollingEdgeStable(lastShown,windowSeconds,Date.now(),filtered)){schedule(LEDGER_HINT_DEBOUNCE_MS);return}
@@ -3318,7 +3343,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,publish,clock=globalT
  return {start,hint,expire,refresh,checkForChanges,dispose,get unsupported(){return unsupported}};
 }
 const $missingConnection=atom(null);
-function useLiveLedger({profile,path,view,enabled,windowSeconds}){
+function useLiveLedger({profile,path,view,enabled,windowSeconds,growing=false}){
   const connection=useValue(host.state.connectionId||$missingConnection);
   const hostProfile=useValue(host.state.profile||$missingConnection);
   // The installed SDK exposes the actual registry connection ID. Legacy SDKs
@@ -3326,12 +3351,12 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds}){
   if(ledgerMemoryConnection!==connection){clearLedgerMemory();ledgerMemoryConnection=connection}
   const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
   const [owner]=useState(()=>({key:null,epoch:0,coordinator:null}));
-  const key=JSON.stringify([connection,hostProfile,pickerValue(profile),view,path,windowSeconds]);
+  const key=JSON.stringify([connection,hostProfile,pickerValue(profile),view,path,windowSeconds,!!growing]);
   if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.epoch++;owner.coordinator=null}
   useEffect(()=>{
    if(!enabled)return;
    const epoch=owner.epoch;
-   const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,connection,publish:patch=>{
+   const coordinator=makeLedgerCoordinator({profile,path,windowSeconds,growing,connection,publish:patch=>{
     if(owner.key===key&&owner.epoch===epoch)setState(previous=>({...previous.view===key&&previous.epoch===epoch?previous:{data:null,error:null,manual:false,checkLimited:false},...patch,view:key,epoch}));
    }});
    owner.coordinator=coordinator;
@@ -3339,9 +3364,11 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds}){
    const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
    // A filesystem hint can miss mutations; force bounded reconciliation even
    // with unchanged metadata. Rolling bounds are re-evaluated every visible
-   // minute and read only when the edge or hint requires it (expire()).
-   const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')windowSeconds?coordinator.expire():coordinator.hint()},windowSeconds?60000:LEDGER_RECONCILE_MS);
-   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();windowSeconds?coordinator.expire():coordinator.hint()}};
+   // minute and read only when the edge or hint requires it (expire()); an
+   // open-ended Custom window also ticks each visible minute and always reads.
+   const minute=!!(windowSeconds||growing);
+   const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')minute?coordinator.expire():coordinator.hint()},minute?60000:LEDGER_RECONCILE_MS);
+   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();minute?coordinator.expire():coordinator.hint()}};
    document.addEventListener('visibilitychange',visible);
    return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
   },[key,enabled]);
@@ -3612,7 +3639,10 @@ function UsagePageScope({selected}){
  useEffect(()=>installTooltips(document.querySelector('.au-ledger')),[isQuota]);
  const ranges={'1h':3600,'24h':86400,'7d':604800,'30d':2592000,'90d':7776000,all:0}
  const initialStart=period==='custom'?(customStart?new Date(customStart).getTime()/1000:0):(ranges[period]?anchor-ranges[period]:0)
- const customValid=period!=='custom'||validCustomWindow(customStart,customEnd)||!!(filterTest&&validHalfHour(customStart)&&!customEnd);
+ const customValid=period!=='custom'||validCustomWindow(customStart,customEnd)||!customEnd&&(!!(filterTest&&validHalfHour(customStart))||validOpenCustom(customStart));
+ // An empty Custom end reads until now; re-read it every visible minute.
+ // A saved open marker keeps its previous hint/5-minute cadence.
+ const growing=period==='custom'&&!chartBounds&&!customEnd&&!filterTest&&customValid;
  const start=chartBounds&&period==='custom'?chartBounds.start:Number.isFinite(initialStart)?Math.max(0,initialStart):0,end=chartBounds&&period==='custom'?chartBounds.end:period==='custom'&&customEnd?new Date(customEnd).getTime()/1000:undefined
  const params=new URLSearchParams({...scopeParams(selected),provider:isQuota?'':provider,start:String(start),limit:'10',offset:'0',list_mode:'page',session,session_scope:sessionScope,agent,project,subagent:subagentId,model,model_provider:modelProvider});if(end)params.set('end',String(end));if(filterTest)params.set('test_id',filterTest);
  if(bucketStart!=null&&bucketEnd!=null){params.set('bucket_start',String(bucketStart));params.set('bucket_end',String(bucketEnd))}
@@ -3625,7 +3655,7 @@ function UsagePageScope({selected}){
   useValue(host.state.profile||$missingConnection),navigationContext,requestFilters]);
  const projectionScope=JSON.stringify([readScope,projectionView,projectionView==='overview'?breakdownGroup:null,projectionView==='compressions'?compMode:null]);
  const windowSeconds=period!=='custom'?ranges[period]:0;
- const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:projectionScope,enabled:!isQuota&&customValid,windowSeconds});
+ const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:projectionScope,enabled:!isQuota&&customValid,windowSeconds,growing});
  const connection=useRecorderHealth({profile:selected,enabled:!isQuota,onHint:ledger.hint,readError:ledger.error,changeLimited:ledger.checkLimited});
  useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
@@ -3808,8 +3838,8 @@ function UsagePageScope({selected}){
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
    period==='custom'?h('details',{className:'au-custom-range'},h('summary',{},'Custom range'),h('div',{className:'au-custom-panel',role:'group','aria-label':'Custom time bounds'},
     h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}),
-    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
-    !customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart. No data is requested until valid.'):null)):null)),
+    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',title:'Leave empty to view until now; the window keeps growing.',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
+    !customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart, or leave end empty for until now (start at least 30 minutes ago). No data is requested until valid.'):null)):null)),
   h('div',{className:'au-toolbar au-filters'},
   filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
@@ -3993,6 +4023,30 @@ if(typeof summarize==='function'&&!summarize.fixtureUnpriced){
   return out;
  };
  summarize.fixtureUnpriced=true;
+}
+// Opt-in mirror of the backend trend ladder (trend_resolution nested in storage.sql_trend): set
+// window.demoTrendLadder=true before a read. Off by default, so scripts that
+// assert the older minute/2-minute/hour/day preview grid are unchanged.
+const fixtureTrendLadder=[[1800,60,'minute'],[7200,120,'2 minutes'],[21600,300,'5 minutes'],
+ [43200,600,'10 minutes'],[86460,900,'15 minutes'],[172800,1800,'30 minutes'],[604800,3600,'hour'],
+ [2592000,21600,'6 hours'],[7776000,86400,'day']];
+if(typeof trendFor==='function'&&!trendFor.fixtureLadder){
+ const legacy=trendFor;
+ trendFor=function(rows,start,end){
+  if(!window.demoTrendLadder)return legacy(rows,start,end);
+  if(!start)start=rows.length?Math.min(...rows.map(r=>r.started)):end-86400;
+  const duration=end-start,hit=fixtureTrendLadder.find(([limit])=>duration<=limit);
+  let step=hit?hit[1]:86400;
+  if(!hit&&duration/step>400)step=86400*(Math.floor(duration/86400/400)+1);
+  const unit=hit?hit[2]:step===86400?'day':step/86400+' days',buckets=[];
+  for(let t=Math.floor(start/step)*step;t<end;t+=step){
+   const members=rows.filter(r=>r.started>=t&&r.started<t+step);
+   buckets.push({start:Math.max(start,t),end:Math.min(end,t+step),...summarize(members),
+    provider_buckets:grouped(members,['provider']).sort((a,b)=>a.provider.localeCompare(b.provider))});
+  }
+  return {unit,timezone:'UTC',seconds:step,buckets};
+ };
+ trendFor.fixtureLadder=true;
 }
 function fixtureOverviewSummary(row){
  const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];

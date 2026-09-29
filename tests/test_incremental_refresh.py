@@ -585,6 +585,8 @@ def test_default_rolling_get_seeds_normalized_end_and_refresh(tmp_path):
     assert base['incremental']['resume_token']
     end=base['window']['end']
     assert 86400<=end-start<86460
+    # Rolling 24h (plus sampling slack) stays on the fifteen-minute rung.
+    assert (base['trend']['seconds'],base['trend']['unit'])==(900,'15 minutes')
     put(store,'new',start+1100,2)
     refreshed=runtime.refresh(tmp_path,start+100,end+100,*ARGS[2:],
                               resume_token=base['incremental']['resume_token'],group='model')

@@ -33,6 +33,30 @@ if(typeof summarize==='function'&&!summarize.fixtureUnpriced){
  };
  summarize.fixtureUnpriced=true;
 }
+// Opt-in mirror of the backend trend ladder (trend_resolution nested in storage.sql_trend): set
+// window.demoTrendLadder=true before a read. Off by default, so scripts that
+// assert the older minute/2-minute/hour/day preview grid are unchanged.
+const fixtureTrendLadder=[[1800,60,'minute'],[7200,120,'2 minutes'],[21600,300,'5 minutes'],
+ [43200,600,'10 minutes'],[86460,900,'15 minutes'],[172800,1800,'30 minutes'],[604800,3600,'hour'],
+ [2592000,21600,'6 hours'],[7776000,86400,'day']];
+if(typeof trendFor==='function'&&!trendFor.fixtureLadder){
+ const legacy=trendFor;
+ trendFor=function(rows,start,end){
+  if(!window.demoTrendLadder)return legacy(rows,start,end);
+  if(!start)start=rows.length?Math.min(...rows.map(r=>r.started)):end-86400;
+  const duration=end-start,hit=fixtureTrendLadder.find(([limit])=>duration<=limit);
+  let step=hit?hit[1]:86400;
+  if(!hit&&duration/step>400)step=86400*(Math.floor(duration/86400/400)+1);
+  const unit=hit?hit[2]:step===86400?'day':step/86400+' days',buckets=[];
+  for(let t=Math.floor(start/step)*step;t<end;t+=step){
+   const members=rows.filter(r=>r.started>=t&&r.started<t+step);
+   buckets.push({start:Math.max(start,t),end:Math.min(end,t+step),...summarize(members),
+    provider_buckets:grouped(members,['provider']).sort((a,b)=>a.provider.localeCompare(b.provider))});
+  }
+  return {unit,timezone:'UTC',seconds:step,buckets};
+ };
+ trendFor.fixtureLadder=true;
+}
 function fixtureOverviewSummary(row){
  const reasons=['awaiting_usage','unresolved_execution','abandoned_execution','unverified_accounting','ended_without_usage','unreported_field'];
  return {...row,unpriced:fixtureUnpriced(row),peak_observed:row.peak_observed||{value:window.demoPeakValue??null,unmatched:window.demoPeakUnmatched||0,basis:'matched_child_lifecycle'},unresolved:row.unresolved||0,abandoned:row.abandoned||0,

@@ -20,7 +20,7 @@ PROBE = r'''async () => {
  // one hourly trend bucket unless a case moves it deliberately.
  let wall=Math.floor(realNow()/3600000)*3600000+20*60000;
  Date.now=()=>wall;
- function setup({windowSeconds=86400,view='requests',extra={}}={}){
+ function setup({windowSeconds=86400,view='requests',extra={},growing=false}={}){
   let token='t1',revision='rev-1',reads=[],calls=[],publications=[],tasks=[],time=0,holdToken=null;
   // pin: hold only the next change-token probe (later probes answer at once).
   let pinNext=false,pinned=[];
@@ -59,7 +59,7 @@ PROBE = r'''async () => {
   const install=()=>{rest=transport};install();
   const owner=makeLedgerCoordinator({profile:'infra',
    path:'/ledger?'+new URLSearchParams({profile:'infra',start:'0',view,...extra}),
-   windowSeconds,clock,connection:ledgerMemoryConnection,publish:p=>publications.push(p)});
+   windowSeconds,growing,clock,connection:ledgerMemoryConnection,publish:p=>publications.push(p)});
   const run=async()=>{const pending=tasks;tasks=[];for(const task of pending)task.fn();await flush()};
   const count=route=>calls.filter(c=>c===route).length;
   return {owner,reads,publications,run,count,shape,install,get tasks(){return tasks},
@@ -198,6 +198,29 @@ PROBE = r'''async () => {
    throw Error('tick after a recent read not confirmed');
   recent.owner.dispose();
   reports.push('expiry during a flight re-evaluated on settle; recent read does not suppress a tick');
+
+  // Open-ended Custom (start only, end omitted = server now): windowSeconds is
+  // 0, yet every visible-minute tick reads after the 150 ms debounce without a
+  // rolling-edge probe (the old 60 s behaviour). A closed fixed window's tick
+  // stays a no-op (its 5-minute reconcile is a hint).
+  const open=setup({windowSeconds:0,growing:true});open.owner.start();await flush();await read(open);
+  if(new URLSearchParams(open.reads[0].path.split('?')[1]).has('end'))throw Error('open-ended read sent an end');
+  for(let i=0;i<3;i++){
+   const n=open.count('/ledger/change-token'),before=open.reads.length;
+   open.advance(60000);await open.owner.expire();await flush();
+   if(open.tasks.length!==1||open.tasks[0].ms!==150)throw Error('open-ended tick did not schedule a read');
+   if(open.count('/ledger/change-token')!==n)throw Error('open-ended tick probed for a skip');
+   await open.run();if(open.reads.length!==before+1)throw Error('open-ended tick read missing');
+   await read(open);
+  }
+  const ends=open.publications.filter(p=>p.data).map(p=>p.data.window.end);
+  if(!(ends.at(-1)>ends[0]))throw Error('open-ended window did not grow '+JSON.stringify(ends));
+  open.owner.dispose();
+  const fixed=setup({windowSeconds:0});fixed.owner.start();await flush();await read(fixed);
+  fixed.advance(60000);await fixed.owner.expire();await flush();
+  if(fixed.tasks.length||fixed.reads.length!==1)throw Error('closed fixed window read on a minute tick');
+  fixed.owner.dispose();
+  reports.push('open-ended Custom: end omitted, each minute tick reads (no skip probe) and the window grows; closed fixed tick unchanged');
 
   // M1: a notify arriving while an expiry probe is held does not reuse that
   // probe's answer; its read (no certifying token while the probe is held)
@@ -391,6 +414,50 @@ def mounted(browser):
     return delay
 
 
+def mounted_open_custom(browser):
+    """Mounted open-ended Custom: start only, GET without end, grows each visible minute."""
+    page = browser.new_page(viewport={'width': 1500, 'height': 1000})
+    errors, outbound = [], []
+    page.on('pageerror', lambda e: errors.append(str(e)))
+    page.on('request', lambda r: outbound.append(r.url))
+    page.route('**/*', lambda r: r.abort())
+    page.clock.install(time=datetime(2026, 9, 27, 10, 20, tzinfo=timezone.utc))
+    page.set_content((ROOT / 'preview.html').read_text(), wait_until='domcontentloaded')
+    page.evaluate('''()=>{window.demoTrendLadder=true;window.ledgerReads=[];const o=rest;
+      rest=async(path,options)=>{const r=await o(path,options);
+        if(path.startsWith('/ledger')&&!path.startsWith('/ledger/change-token')&&!path.startsWith('/ledger/analytics')&&!path.startsWith('/ledger/status')&&!path.startsWith('/ledger/profiles'))
+          ledgerReads.push({path,method:options?.method||'GET',end:r?.window?.end,unit:r?.trend?.unit});
+        return r}}''')
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    expect(page.locator('.au-quality-line').first).to_contain_text(re.compile(r'\d+ requests'))
+    page.get_by_role('group', name='Time window').get_by_role('button', name='Custom', exact=True).click()
+    page.locator('.au-custom-range summary').click()
+    start = page.evaluate('''()=>{const t=Math.floor(Date.now()/1800000)*1800000-3*3600000,d=new Date(t);
+      return new Date(t-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}''')
+    page.get_by_label('Window start', exact=True).fill(start)
+    page.get_by_label('Window end', exact=True).fill('')
+    page.clock.run_for(500)
+    page.wait_for_function("()=>ledgerReads.some(r=>!new URLSearchParams(r.path.split('?')[1]).has('end')&&r.end)")
+    assert page.get_by_role('alert').filter(has_text='until now').count() == 0
+    first = page.evaluate("ledgerReads.filter(r=>!new URLSearchParams(r.path.split('?')[1]).has('end')).at(-1)")
+    assert first['unit'] == '5 minutes', first
+    expect(page.get_by_test_id('usage-chart').locator('.au-chart-title')).to_contain_text('5-minute buckets')
+    reads = page.evaluate('ledgerReads.length')
+    ends = []
+    for _ in range(2):
+        page.clock.run_for(60000)
+        page.wait_for_function('n=>ledgerReads.length>n', arg=reads)
+        reads = page.evaluate('ledgerReads.length')
+        ends.append(page.evaluate('ledgerReads.at(-1).end'))
+    assert ends[1] - ends[0] >= 59 and ends[0] > first['end'], (first, ends)
+    assert all(r['method'] == 'GET' for r in page.evaluate('ledgerReads')), 'open-ended Custom must stay GET-only'
+    assert page.evaluate("ledgerReads.slice(-2).every(r=>!new URLSearchParams(r.path.split('?')[1]).has('end'))")
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return ends
+
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
@@ -406,6 +473,8 @@ def run():
         print(f'PASS mounted pane: aged-out leading compression read and repainted 1 → 0 compressions; notify read '
               f'started {delay:.0f} ms (fake clock) after the event and repainted; three quiet rolling minutes made '
               'change checks only, the freshness age resetting each minute as on main; reconciliation and later notify still read')
+        ends = mounted_open_custom(browser)
+        print(f'PASS mounted open-ended Custom: GET without end, 5-minute buckets labelled, one read per visible minute, window end grew {ends[0]:.0f} → {ends[1]:.0f}')
         browser.close()
 
 

@@ -77,12 +77,36 @@ def run():
             expect(page.get_by_label('Skills model')).to_have_value('')
             # Custom bounds are restored as local input values, not rolling timestamps.
             page.get_by_role('group', name='Time window').get_by_role('button', name='Custom').click()
+            page.locator('.au-custom-range summary').click()
             page.get_by_label('Window start').fill('2026-09-01T09:30')
             page.get_by_label('Window end').fill('2026-09-05T10:30')
             page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));
                 ReactDOM.render(h(() => window.page(), {}), document.getElementById('root'))}''')
             expect(page.get_by_label('Window start')).to_have_value('2026-09-01T09:30')
             expect(page.get_by_label('Window end')).to_have_value('2026-09-05T10:30')
+            # An open-ended Custom ("until now": start only) is persisted and
+            # restored, and its restored read still omits `end`.
+            page.locator('.au-custom-range summary').click()
+            page.get_by_label('Window end').fill('')
+            page.wait_for_function('window.demoStored["usage-view-v1:profile%3Ainfra"].customEnd === ""')
+            stored = page.evaluate('window.demoStored["usage-view-v1:profile%3Ainfra"]')
+            assert stored['period'] == 'custom' and stored['customStart'] == '2026-09-01T09:30' and stored['chartBounds'] is None, stored
+            page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));window.demoCalls=[];
+                ReactDOM.render(h(() => window.page(), {}), document.getElementById('root'))}''')
+            expect(page.get_by_role('group', name='Time window').get_by_role('button', name='Custom')).to_have_attribute('aria-pressed', 'true')
+            expect(page.get_by_label('Window start')).to_have_value('2026-09-01T09:30')
+            expect(page.get_by_label('Window end')).to_have_value('')
+            page.wait_for_function('window.demoCalls.some(c=>c.startsWith("/ledger?"))')
+            restored = [c for c in page.evaluate('window.demoCalls') if c.startswith('/ledger?')]
+            assert restored and all('&end=' not in c and '?end=' not in c for c in restored), restored
+            # A future open start is not restorable (it would read nothing yet).
+            page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));
+                const key='usage-view-v1:profile%3Ainfra';
+                const t=(Math.floor(Date.now()/1800000)*1800+3600)*1000,d=new Date(t);
+                window.demoStored[key]={...window.demoStored[key],period:'custom',
+                    customStart:new Date(t-d.getTimezoneOffset()*60000).toISOString().slice(0,16),customEnd:''};
+                ReactDOM.render(h(() => window.page(), {}), document.getElementById('root'))}''')
+            expect(page.get_by_role('group',name='Time window').get_by_role('button',name='Past 24h')).to_have_attribute('aria-pressed','true')
             # Old saved free-minute windows cannot bypass the new selectable
             # range invariant or trigger an unconstrained ledger read.
             page.evaluate('''() => {ReactDOM.render(null, document.getElementById('root'));
@@ -220,7 +244,7 @@ def run():
             page.evaluate('window.pendingQuota.shift()()')
             assert not network, network
             assert not errors, errors
-            print('PASS remount preferences, delayed valid catalogue, bad/foreign/malformed/unavailable fallback, All providers and GET-only')
+            print('PASS remount preferences, open-ended Custom restore without end, delayed valid catalogue, bad/foreign/malformed/unavailable fallback, All providers and GET-only')
         finally:
             browser.close()
 

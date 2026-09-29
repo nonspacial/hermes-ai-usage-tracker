@@ -241,7 +241,8 @@ def test_trend_includes_all_pages_and_zero_buckets(tmp_path):
     d=s.read(t,t+3*86400,limit=5)
     assert len(d['requests'])==5 and d['request_count']==206
     assert sum(b['known']['total_tokens'] for b in d['trend']['buckets'])==d['summary']['known']['total_tokens']
-    assert len(d['trend']['buckets'])==3 and d['trend']['buckets'][-1]['attempts']==0
+    assert d['trend']['seconds']==3600
+    assert len(d['trend']['buckets'])==72 and d['trend']['buckets'][-1]['attempts']==0
     assert d['model_groups'][0]['attempts']==206 and d['provider_groups'][0]['attempts']==206
     assert d['summary']['sessions']==1
 

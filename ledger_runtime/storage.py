@@ -1069,16 +1069,60 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
 
     UTC calendar buckets clipped to the selected bounds. A bucket with attempts
     but no measured value remains unknown in the UI, not a zero-consumption claim.
+
+    The bucket ladder lives inside this function (a READ_DEFINITIONS member) so
+    changing it stays hot-reloadable without altering the storage writer
+    contract; callers observe it only through the returned ``seconds``/``unit``.
     """
+    # Trend bucket ladder: (nominal maximum window seconds, bucket seconds,
+    # unit label). Every step divides 1800 or is a multiple of it, so buckets
+    # stay on the frontend's half-hour selection grid. Rolling periods compute
+    # their start client-side while an omitted end resolves to the server's
+    # now, so a rolling 24h/7d/30d/90d read arrives a few seconds over nominal:
+    # each rung accepts TREND_SLACK beyond its nominal maximum. The two fine
+    # rungs (30 min, 2 h) keep their exact legacy boundaries (1800.1 s is
+    # already 2-minute, 7200.1 s is already coarser); no rolling period sits on
+    # them, so they need no slack.
+    TREND_LADDER=(
+        (1800,60,'minute'),
+        (7200,120,'2 minutes'),
+        (21600,300,'5 minutes'),
+        (43200,600,'10 minutes'),
+        (86400,900,'15 minutes'),
+        (172800,1800,'30 minutes'),
+        (604800,3600,'hour'),
+        (2592000,21600,'6 hours'),
+        (7776000,86400,'day'),
+    )
+    TREND_MAX_BUCKETS=400
+    # Coincides with analytics_reload's signed-refresh 24h width bound (86460 =
+    # 86400+60) but is independent: changing one does not change the other.
+    TREND_SLACK=60
+    TREND_EXACT_LIMITS=frozenset({1800,7200})
+
+    def trend_resolution(duration):
+        """Return (step seconds, unit label) for a window duration in seconds.
+
+        A pure function of duration only. Each rung except TREND_EXACT_LIMITS
+        admits TREND_SLACK seconds beyond its nominal maximum. Beyond the
+        table, windows use one-day buckets, widening to N-day multiples once
+        one-day buckets would exceed TREND_MAX_BUCKETS (no slack applies to
+        that widening).
+        """
+        for limit,step,unit in TREND_LADDER:
+            if duration<=limit+(0 if limit in TREND_EXACT_LIMITS else TREND_SLACK):
+                return step,unit
+        step=86400
+        if duration/step>TREND_MAX_BUCKETS:
+            step=86400*(int(duration/86400/TREND_MAX_BUCKETS)+1)
+        return step,('day' if step==86400 else str(step//86400)+' days')
+
     if trend_start is not None:
         start=trend_start
     elif start==0:
         first=c.execute('SELECT MIN(started) FROM requests WHERE '+where,params).fetchone()[0]
         start=first if first is not None else max(0,end-86400)
-    # Allow short windows above one hour: rolling start and server end are sampled separately.
-    duration=end-start
-    step=60 if duration<=1800 else (120 if duration<=7200 else (3600 if duration<=172800 else 86400))
-    if (end-start)/step>400:step=86400*max(1,int((end-start)/86400/400)+1)
+    step,unit=trend_resolution(end-start)
     lo=int(start//step)*step
     rows={int(row['bucket']):summary_from_sql(row) for row in c.execute(
       'SELECT CAST(started / ? AS INTEGER) * ? AS bucket,'+summary_sql+' FROM requests WHERE '+where+' GROUP BY bucket', [step,step]+params)}
@@ -1091,7 +1135,7 @@ def sql_trend(c,where,params,start,end,summary_sql=SUMMARY_SQL,*,trend_start=Non
     buckets=[dict(start=max(start,t),end=min(end,t+step),**rows.get(t,blank),
                   provider_buckets=sorted(provider_rows.get(t,[]),key=lambda r:r['provider']))
              for t in range(lo,int(end)+1,step) if t<end]
-    return {'unit':'minute' if step==60 else ('2 minutes' if step==120 else ('hour' if step==3600 else ('day' if step==86400 else str(step//86400)+' days'))),'timezone':'UTC','seconds':step,'buckets':buckets}
+    return {'unit':unit,'timezone':'UTC','seconds':step,'buckets':buckets}
 
 
 def canonical_rate(value):

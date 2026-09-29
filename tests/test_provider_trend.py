@@ -87,8 +87,14 @@ def test_signed_full_and_changed_bucket(tmp_path):
 @pytest.mark.parametrize('end,bucket,first,second,seconds',[
     (360,120,10,20,60),
     (3660,240,70,90,120),
-    (50000,3600,300,420,3600),
-    (259260,86400,3600,7200,86400),
+    (21660,3600,30,90,300),
+    (43260,3600,30,90,600),
+    (50000,3600,300,420,900),
+    (172860,3600,300,420,1800),
+    (259260,86400,600,1200,3600),
+    (2592060,86400,3600,7200,21600),
+    (7776060,172800,3600,7200,86400),
+    (60+401*86400,172800,3600,7200,172800),
 ])
 @pytest.mark.parametrize('group',['time','model'])
 def test_signed_changed_bucket_preserves_full_window_provider_partition(
