@@ -288,16 +288,35 @@ def test_different_accounts_have_independent_authority(fixture, monkeypatch):
                          expected_episode=fresh['episode'], expected_count=2)['outcome'] == 'nothingToReset'
 
 
-def _account_process(home, account, output, gate):
+# Per-worker-process handshake for the concurrent-accounts test (set after fork).
+_OVERLAP = {}
+OVERLAP_WAIT_SECONDS = 10
+
+
+def _account_process(home, account, output, role, events):
+    # The two accounts' short SQLite transactions (observe, admission,
+    # finalisation) are sequenced by explicit events, so they never contend for
+    # the shared authority's 0.1 s writer-lock budget; only the two consume RPCs,
+    # which hold no SQLite lock, are in flight at the same time. Contention on
+    # the transactions themselves is a scheduling race, not what this test
+    # proves. No sleep decides the order.
     resets._credentials = lambda: ('fixture-token', account, 'binding-' + account)
-    gate.wait()
-    view = resets.observe(home)
+    _OVERLAP.update(role=role, **events)
+    result = {'account': account}
     try:
-        outcome = resets.redeem(home, expected_binding=view['binding'],
-                                expected_episode=view['episode'], expected_count=2)['outcome']
-        output.put(outcome)
-    except resets.Unavailable:
-        output.put('blocked')
+        if role == 'second' and not events['first_in_consume'].wait(OVERLAP_WAIT_SECONDS):
+            raise AssertionError('first consume never started')
+        view = resets.observe(home)
+        result.update(blocked=view['blocked'], redeemable=view['redeemable'])
+        try:
+            result['outcome'] = resets.redeem(home, expected_binding=view['binding'],
+                expected_episode=view['episode'], expected_count=2)['outcome']
+        except resets.Unavailable as exc:
+            result['outcome'] = 'blocked: %s' % exc
+        if role == 'first':
+            events['first_done'].set()
+    finally:
+        output.put(result)
 
 
 @pytest.mark.parametrize('repeat', range(4))
@@ -310,18 +329,43 @@ def test_different_accounts_can_consume_concurrently(fixture, monkeypatch, repea
         def __exit__(self, *_): pass
         def limits(self): return snapshot(account=self.account)
         def call(self, method, params=None):
-            time.sleep(.25)
-            return {'outcome':'nothingToReset'}
+            assert method == 'account/rateLimitResetCredit/consume'
+            if _OVERLAP['role'] == 'first':
+                # Hold the first consume in flight (its pending attempt committed)
+                # until the other account has passed admission and is consuming too.
+                _OVERLAP['first_in_consume'].set()
+                if not _OVERLAP['second_in_consume'].wait(OVERLAP_WAIT_SECONDS):
+                    raise AssertionError('second account was not admitted during first consume')
+            else:
+                with sqlite3.connect(resets._db_path(fixture)) as conn:
+                    _OVERLAP['pending_during_overlap'].value = conn.execute(
+                        'SELECT COUNT(*) FROM state WHERE attempt IS NOT NULL').fetchone()[0]
+                _OVERLAP['second_in_consume'].set()
+                # Finalise only after the first account has finalised.
+                if not _OVERLAP['first_done'].wait(OVERLAP_WAIT_SECONDS):
+                    raise AssertionError('first account did not finalise')
+            return {'outcome': 'nothingToReset'}
     monkeypatch.setattr(resets, 'AppServer', MultiServer)
     ctx = multiprocessing.get_context('fork')
-    output, gate = ctx.Queue(), ctx.Event()
-    workers = [ctx.Process(target=_account_process, args=(home, account, output, gate))
-               for home, account in ((fixture, 'org-fixture'), (other, 'org-other'))]
+    output = ctx.Queue()
+    events: dict = {name: ctx.Event() for name in ('first_in_consume', 'second_in_consume', 'first_done')}
+    events['pending_during_overlap'] = ctx.Value('i', -1)
+    workers = [ctx.Process(target=_account_process, args=(home, account, output, role, events))
+               for home, account, role in ((fixture, 'org-fixture', 'first'),
+                                           (other, 'org-other', 'second'))]
     for worker in workers: worker.start()
-    gate.set()
-    for worker in workers: worker.join(timeout=5)
+    for worker in workers: worker.join(timeout=3 * OVERLAP_WAIT_SECONDS)
     assert all(worker.exitcode == 0 for worker in workers)
-    assert [output.get(timeout=1) for _ in workers] == ['nothingToReset'] * 2
+    results = {r['account']: r for r in (output.get(timeout=1) for _ in workers)}
+    # Both accounts' attempts were pending at once: the first account's in-flight
+    # consume blocked neither the other account's observation nor its admission.
+    assert events['pending_during_overlap'].value == 2
+    assert results == {account: {'account': account, 'blocked': False, 'redeemable': True,
+                                 'outcome': 'nothingToReset'}
+                       for account in ('org-fixture', 'org-other')}
+    with sqlite3.connect(resets._db_path(fixture)) as conn:
+        assert conn.execute('SELECT attempt, result FROM state').fetchall() == [
+            (None, 'nothingToReset')] * 2
 
 
 def test_credential_resolver_requires_supported_read_only_mode(monkeypatch):

@@ -122,9 +122,10 @@ def run():
         assert len(skills_calls(page)) == before + 1
         page.clock.fast_forward(90000)
         page.evaluate("""() => {
-            const event={...demoSkillEvents.find(e=>e.kind==='skill_load'),
-                id:'reopen-fresh-probe',skill:'reopen-fresh-probe',ts:Date.now()/1000-5};
-            demoSkillEvents.push(event);
+            const base={...demoSkillEvents.find(e=>e.kind==='skill_load'),skill:'reopen-fresh-probe',ts:Date.now()/1000-5};
+            demoSkillEvents.push({...base,id:'reopen-fresh-probe'},
+                {...base,id:'reopen-fresh-probe-reference',is_reference:true,file_path:'references/probe.md'},
+                {...base,id:'reopen-fresh-probe-failure',success:false,estimated_tokens:null});
         }""")
         page.get_by_role('tab', name='Requests', exact=True).click()
         before = len(skills_calls(page))
@@ -138,7 +139,14 @@ def run():
         page.evaluate('window.holdSkillsRequests[0]();window.holdSkillsRequests=null')
         page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
         expect(legend).to_be_visible()
-        page.evaluate("demoSkillEvents.splice(demoSkillEvents.findIndex(e=>e.id==='reopen-fresh-probe'),1)")
+        # Singular legend and selected-skill wording from the newer read.
+        expect(legend).to_contain_text('1 load · ')
+        legend.click()
+        expect(surface).to_contain_text('Inspecting reopen-fresh-probe')
+        expect(surface).to_contain_text('1 load · 0 repeat · 1 reference · 1 failure')
+        surface.get_by_role('button', name='Clear skill selection', exact=True).click()
+        expect(legend).to_have_attribute('aria-pressed', 'false')
+        page.evaluate("demoSkillEvents.splice(0,demoSkillEvents.length,...demoSkillEvents.filter(e=>e.skill!=='reopen-fresh-probe'))")
         page.clock.fast_forward(7200000)
         before = len(skills_calls(page))
         page.get_by_role('button', name='Refresh', exact=True).first.click()
@@ -154,6 +162,11 @@ def run():
         period = page.get_by_role('group', name='Time window', exact=True)
         period.get_by_role('button', name='Custom', exact=True).click()
         start, end = page.evaluate("[localHalfHour(now-7200),localHalfHour(now+7200)]")
+        # The bounds sit inside the closed Custom range disclosure.
+        custom_range = page.locator('details.au-custom-range')
+        expect(custom_range).not_to_have_attribute('open', '')
+        custom_range.locator('summary').click()
+        expect(custom_range).to_have_attribute('open', '')
         page.get_by_label('Window start').fill(start)
         before = len(skills_calls(page))
         page.get_by_label('Window end').fill(end)
@@ -177,7 +190,7 @@ def run():
         page.get_by_role('tab', name='Requests', exact=True).click()
         page.get_by_role('tab', name='Skills usage', exact=True).click()
         before = len(skills_calls(page))
-        page.get_by_label('Saved tests').select_option('synthetic-skills-marker')
+        page.get_by_role('combobox', name='Saved tests', exact=True).select_option('synthetic-skills-marker')
         marked = await_report(page, before)
         assert marked['test'] == 'synthetic-skills-marker' and marked['end'] is not None, marked
         page.clock.fast_forward(7200000)
