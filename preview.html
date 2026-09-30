@@ -1981,9 +1981,17 @@ function restoreReader(root,snapshot){
   if(node){root.scrollTop+=node.getBoundingClientRect().top-root.getBoundingClientRect().top-item.offset;return}}
  root.scrollTop=snapshot.top;
 }
-function Reader({children,className='',label,id,resetKey,...props}){
- const [state]=useState(()=>({root:null,snapshot:null}));
+function Reader({children,className='',label,id,resetKey,holdHeight=false,settled=null,...props}){
+ const [state]=useState(()=>({root:null,snapshot:null,content:null,height:null,heightKey:null}));
  if(!state.attach)state.attach=node=>{state.root=node};
+ if(!state.attachContent)state.attachContent=node=>{state.content=node};
+ // A same-page lower switch (e.g. Overview group) keeps the last settled
+ // first-page content height while its own read is pending, so neither the
+ // reader nor the single page scroller clamps and jumps. `settled` is the
+ // settled first-page payload (null while pending, appended or frozen), so a
+ // Load-more/View-all height is never held. A new page/filter resets it.
+ const held=holdHeight&&state.heightKey===resetKey&&state.height>0?state.height:null;
+ useEffect(()=>{if(settled!=null&&state.content){state.height=state.content.offsetHeight;state.heightKey=resetKey}},[settled,resetKey]);
  useEffect(()=>{
   const root=state.root;if(!root)return;
   const remember=()=>{if(!root.closest('.au-mobile'))state.snapshot=readerSnapshot(root)};
@@ -1995,7 +2003,7 @@ function Reader({children,className='',label,id,resetKey,...props}){
   return()=>{observer.disconnect();resize.disconnect();root.removeEventListener('scroll',remember);root.removeEventListener('au-scroll-transferred',transferred)};
  },[]);
  useEffect(()=>{if(state.root){state.root.scrollTop=0;state.snapshot=readerSnapshot(state.root)}},[resetKey]);
- return h('div',{...props,id,ref:state.attach,className:'au-reader '+className,tabIndex:0,'aria-label':label},h('div',{className:'au-reader-content'},children));
+ return h('div',{...props,id,ref:state.attach,className:'au-reader '+className,tabIndex:0,'aria-label':label},h('div',{className:'au-reader-content',ref:state.attachContent,style:held?{minHeight:held+'px'}:undefined},children));
 }
 // Fixed split requires pane content height (pane height - 16px insets) >=
 // the width band's upper floor at that height (683/661/652px, or the compact
@@ -3340,7 +3348,9 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
     }catch(_){/* no cache without a verified revision; full read still works */}
     if(!current())return;
     const identityValid=!!(revision&&beforeInventory);
-    publish({identityValid});
+    // The checked identity lets the pane keep a same-scope shared header only
+    // while it matches (see the header bridge in the ledger page).
+    publish({identityValid,identity:identityValid?{revision,inventory:beforeInventory}:null});
     if((lastInventory&&beforeInventory&&beforeInventory!==lastInventory)||
        (revision&&lastRevision&&revision!==lastRevision)||
        (!loaded&&!identityValid))
@@ -3855,15 +3865,43 @@ function UsagePageScope({selected}){
     (error.status===404||error.status===405||/404|405/.test(String(error.message)))?'Reload support is not active yet. One backend restart is required.':String(error.message||'Analytics reload failed; previous code remains active.'));
   }finally{reloadControl.busy=false;if(reloadControl.alive)setReloadBusy(false)}
  }
- const [ledgerCache]=useState(()=>({scope:'',data:null,headerScope:'',header:null}));
+ const [ledgerCache]=useState(()=>({scope:'',data:null,headerScope:'',header:null,headerIdentity:null,headerReceived:null}));
  const [detailEntries]=useState(()=>new Map());
  const [identityLabels]=useState(()=>new Map());
  const currentData=ledger.data;
  // A committed selection starts a new flight even when returning to a view
  // visited earlier. Only same-view background refresh may retain its body.
  if(ledgerCache.scope!==projectionScope){ledgerCache.scope=projectionScope;ledgerCache.data=null}
- if(ledger.invalidated){ledgerCache.data=null;ledgerCache.header=null;ledgerCache.headerScope=''}
- if(currentData){ledgerCache.data=currentData;ledgerCache.headerScope=readScope;ledgerCache.header=currentData}
+ if(ledger.invalidated){ledgerCache.data=null;ledgerCache.header=null;ledgerCache.headerScope='';ledgerCache.headerIdentity=null;ledgerCache.headerReceived=null}
+ const identityMatches=(a,b)=>!!(a&&b&&a.revision===b.revision&&a.inventory===b.inventory);
+ // Is the held header strictly newer than an incoming same-scope response?
+ // Ledger order first (selected `seq`; all-profile `profile_sequences` over
+ // the same profiles, newer only when none is behind and one is ahead); equal
+ // or incomparable order falls back to the renderer's `received` time.
+ const headerNewer=(held,heldReceived,incoming,incomingReceived)=>{
+  if(!held||!incoming)return false;
+  if(Number.isSafeInteger(held.seq)&&Number.isSafeInteger(incoming.seq)&&held.seq!==incoming.seq)return held.seq>incoming.seq;
+  const a=held.profile_sequences,b=incoming.profile_sequences;
+  if(a&&b&&typeof a==='object'&&typeof b==='object'){
+   const keys=Object.keys(a);
+   if(keys.length===Object.keys(b).length&&keys.every(k=>Number.isSafeInteger(a[k])&&Number.isSafeInteger(b[k]))){
+    if(keys.some(k=>a[k]!==b[k]))return keys.every(k=>a[k]>=b[k]);
+   }
+  }
+  return Number.isFinite(heldReceived)&&Number.isFinite(incomingReceived)&&heldReceived>incomingReceived;
+ };
+ if(currentData){
+  ledgerCache.data=currentData;
+  // An older labelled cached revisit never replaces a newer same-scope
+  // header. Only cached publications are ordered: a fresh read from the live
+  // owner always replaces it, since a ledger restore/rollback lowers `seq`
+  // without changing the analytics revision or inventory.
+  const newer=ledgerCache.headerScope===readScope&&ledgerCache.header&&ledger.cached&&
+   headerNewer(ledgerCache.header,ledgerCache.headerReceived,currentData,ledger.received)&&
+   identityMatches(ledgerCache.headerIdentity,ledger.identity);
+  if(!newer){ledgerCache.headerScope=readScope;ledgerCache.header=currentData;
+   ledgerCache.headerIdentity=ledger.identityValid?ledger.identity||null:null;ledgerCache.headerReceived=ledger.received??null}
+ }
  const data=currentData||(ledgerCache.scope===projectionScope?ledgerCache.data:null);
  const field=recordField(projectionView,breakdownGroup);
  const [recordState,setRecordState]=useState(null),recordLock=useRef(false),recordScope=useRef(''),recordKeyRef=useRef('');
@@ -3917,7 +3955,21 @@ function UsagePageScope({selected}){
  }
  // Only shared header fields may bridge a committed tab/group selection. Never
  // render a previous breakdown or detail payload beneath the new tab label.
- const headerData=currentRecord?.frozen||data||(ledger.identityValid&&ledgerCache.headerScope===readScope?ledgerCache.header:null);
+ // The upper hero (summary, provider rows, chart, coverage) is the same for
+ // every view/group of one read scope, so a lower switch keeps the newest
+ // validated same-scope header painted while only the lower section is
+ // pending. Only a header whose own read was identity-validated may bridge:
+ // before the new owner's identity check on that alone, afterwards only
+ // while the checked revision and inventory still match it (a lower switch
+ // starts a fresh coordinator with no previous revision, so this match, not
+ // its revision-change guard, keeps an older analytics revision out). A
+ // same-owner revision/inventory change publishes `invalidated` (cleared above).
+ const bridgeOk=ledgerCache.headerScope===readScope&&!!ledgerCache.header&&!!ledgerCache.headerIdentity&&
+  (ledger.identity===undefined||identityMatches(ledgerCache.headerIdentity,ledger.identity));
+ const bridge=bridgeOk?ledgerCache.header:null;
+ const bridgeNewer=!!(bridge&&data&&bridge!==data&&currentData===data&&ledger.cached&&
+  headerNewer(bridge,ledgerCache.headerReceived,data,ledger.received));
+ const headerData=currentRecord?.frozen||(bridgeNewer?bridge:data)||bridge;
  const providers=quotaCurrent&&Array.isArray(quota.data.providers)?quota.data.providers:[];
  for(const row of [...(data?.requests||[]),...(data?.session_groups||[]),...(data?.subagent_groups||[])]){
   for(const field of ['session_id','subagent_id','key'])if(row[field])identityLabels.set(row[field],readable(row,field));
@@ -3976,7 +4028,7 @@ function UsagePageScope({selected}){
   setRequestFilters(next);if(tab!=='Overview')setTab('Requests');
  }
  const header=h(PageHeader,{profiles:inventory.data?.profiles||discoveredProfiles?.profiles||quota.data?.profiles||[],profile:selected||inventory.data?.profiles?.find(p=>p.is_server)?.name||quota.data?.profile||'',setProfile:selectProfile,chipProviders:providers.filter(p=>!hiddenIds.includes(p.id)),chipProvider,setChipProvider:selectChipProvider,isFetching:ledger.manual||manualQuotaBusy,refetch:refresh,refreshBusy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy,refreshMenu:aggregate?null:h(RefreshMenu,{refresh,reload:reloadAnalytics,busy:reloadBusy||connection.busy||ledger.manual||manualQuotaBusy}),hiddenCount:hiddenIds.length,showHidden,setShowHidden,meta:aggregate?'All profiles · read-only · change checks':quota.data?`fetched ${fmtLocal(quota.data.generated_at)} · probed in ${quota.data.probe_seconds}s`:null})
- const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),isQuota?null:h(UnpricedBadge,{data:currentData}),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
+ const pageHeader=h('div',{},h('div',{className:'au-page-header'},h('div',{className:'au-original-header'},header),isQuota?null:h(UnpricedBadge,{data:headerData}),h(ConnectionBadge,{connection:aggregate?{...connection,reconnect:refresh}:connection,disabled:reloadBusy||aggregate&&ledger.manual,freshness:isQuota?null:{received:currentData?.window?ledger.received:null,cached:!!currentData&&ledger.cached,fetching:ledger.fetching,error:ledger.error}})),inventory.error?notice('Profile discovery unavailable. A user-managed backend restart may be required; existing individual choices are retained.'):null,reloadNotice?.scope===selected?h('div',{className:'au-muted',role:'status','data-testid':'analytics-reload-result','aria-live':'polite'},reloadNotice.text):null);
  const mainItems=[{id:QUOTA_HOME,label:QUOTA_PAGE},{id:'',label:'All providers'},...names.map(id=>({id,label:labels[id]||id}))];
  const mainId=id=>'au-main-'+encodeURIComponent(id||'all');
  const subId=name=>'au-subpage-'+name.toLowerCase().replace(/[^a-z]+/g,'-');
@@ -4037,7 +4089,7 @@ function UsagePageScope({selected}){
   h(Coverage,{data:headerData}),
   h(Summary,{data:headerData,label,mode:displayMode,agent,allProviders:!provider,quotaProviders:!aggregate&&quotaCurrent?quota.data.providers:null,onSelectRange:selectChartRange,onSubagents:()=>editRequestFilters({agent:agent==='subagent'?'':'subagent',subagentId:''})})),
   subNav,
-  h(Reader,{resetKey:scrollScope,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
+  h(Reader,{resetKey:scrollScope,holdHeight:!currentRecord?.frozen&&!displayData&&!!headerData&&!ledger.error,settled:!currentRecord&&displayData?displayData:null,id:'au-subpage-panel',role:'tabpanel',label:tab+' records','aria-labelledby':subId(tab),'data-testid':'provider-subpage','data-subpage':tab},
   tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
   err?notice(err):null,
   ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
@@ -4402,6 +4454,8 @@ demoRest=async function(path,options={}){
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
  if(u.pathname==='/usage')return {profile_scope:'all',read_only:true,providers:[],quota:{available:false,reason:'aggregate_quota_unavailable'}};
  if(u.pathname==='/ledger/status')return {profile_scope:'all',read_only:true,refresh_mode:'polling',status:'unavailable',reason:'Recorder health is profile-specific; select a profile.'};
+ // Mirrors ledger_runtime/api.py analytics_info for the aggregate scope.
+ if(u.pathname==='/ledger/analytics')return {...await baseDemoRest(path,options),profile_scope:'all',read_only:true};
  if(!['/ledger','/ledger/skills'].includes(u.pathname))throw new Error('Unexpected aggregate route '+path);
  const result=await fixtureAggregate(u);
  if(window.holdAggregate)return new Promise(resolve=>window.holdAggregate.push(()=>resolve(result)));

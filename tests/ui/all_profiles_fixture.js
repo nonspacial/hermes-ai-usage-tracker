@@ -235,6 +235,8 @@ demoRest=async function(path,options={}){
  if(options.method&&options.method!=='GET')throw new Error('All profiles is read-only');
  if(u.pathname==='/usage')return {profile_scope:'all',read_only:true,providers:[],quota:{available:false,reason:'aggregate_quota_unavailable'}};
  if(u.pathname==='/ledger/status')return {profile_scope:'all',read_only:true,refresh_mode:'polling',status:'unavailable',reason:'Recorder health is profile-specific; select a profile.'};
+ // Mirrors ledger_runtime/api.py analytics_info for the aggregate scope.
+ if(u.pathname==='/ledger/analytics')return {...await baseDemoRest(path,options),profile_scope:'all',read_only:true};
  if(!['/ledger','/ledger/skills'].includes(u.pathname))throw new Error('Unexpected aggregate route '+path);
  const result=await fixtureAggregate(u);
  if(window.holdAggregate)return new Promise(resolve=>window.holdAggregate.push(()=>resolve(result)));
