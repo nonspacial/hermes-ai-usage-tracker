@@ -293,18 +293,20 @@ _OVERLAP = {}
 OVERLAP_WAIT_SECONDS = 10
 
 
-def _account_process(home, account, output, role, events):
+def _account_process(home, account, output, role, handshake):
     # The two accounts' short SQLite transactions (observe, admission,
     # finalisation) are sequenced by explicit events, so they never contend for
-    # the shared authority's 0.1 s writer-lock budget; only the two consume RPCs,
+    # the shared authority's 0.1 s SQLite busy budget; only the two consume RPCs,
     # which hold no SQLite lock, are in flight at the same time. Contention on
-    # the transactions themselves is a scheduling race, not what this test
-    # proves. No sleep decides the order.
+    # the transactions themselves is a known product limitation this test does
+    # not cover: one account's observe()/admission can fail with 409 while
+    # another account's short transaction holds the lock
+    # (docs/TICKET_CODEX_RESET_FINALISATION_LOCK.md). No sleep decides the order.
     resets._credentials = lambda: ('fixture-token', account, 'binding-' + account)
-    _OVERLAP.update(role=role, **events)
+    _OVERLAP.update(role=role, **handshake)
     result = {'account': account}
     try:
-        if role == 'second' and not events['first_in_consume'].wait(OVERLAP_WAIT_SECONDS):
+        if role == 'second' and not handshake['first_in_consume'].wait(OVERLAP_WAIT_SECONDS):
             raise AssertionError('first consume never started')
         view = resets.observe(home)
         result.update(blocked=view['blocked'], redeemable=view['redeemable'])
@@ -314,7 +316,7 @@ def _account_process(home, account, output, role, events):
         except resets.Unavailable as exc:
             result['outcome'] = 'blocked: %s' % exc
         if role == 'first':
-            events['first_done'].set()
+            handshake['first_done'].set()
     finally:
         output.put(result)
 
@@ -348,9 +350,10 @@ def test_different_accounts_can_consume_concurrently(fixture, monkeypatch, repea
     monkeypatch.setattr(resets, 'AppServer', MultiServer)
     ctx = multiprocessing.get_context('fork')
     output = ctx.Queue()
-    events: dict = {name: ctx.Event() for name in ('first_in_consume', 'second_in_consume', 'first_done')}
-    events['pending_during_overlap'] = ctx.Value('i', -1)
-    workers = [ctx.Process(target=_account_process, args=(home, account, output, role, events))
+    # Three ordering events plus a shared counter for the overlap observation.
+    handshake: dict = {name: ctx.Event() for name in ('first_in_consume', 'second_in_consume', 'first_done')}
+    handshake['pending_during_overlap'] = ctx.Value('i', -1)
+    workers = [ctx.Process(target=_account_process, args=(home, account, output, role, handshake))
                for home, account, role in ((fixture, 'org-fixture', 'first'),
                                            (other, 'org-other', 'second'))]
     for worker in workers: worker.start()
@@ -359,7 +362,7 @@ def test_different_accounts_can_consume_concurrently(fixture, monkeypatch, repea
     results = {r['account']: r for r in (output.get(timeout=1) for _ in workers)}
     # Both accounts' attempts were pending at once: the first account's in-flight
     # consume blocked neither the other account's observation nor its admission.
-    assert events['pending_during_overlap'].value == 2
+    assert handshake['pending_during_overlap'].value == 2
     assert results == {account: {'account': account, 'blocked': False, 'redeemable': True,
                                  'outcome': 'nothingToReset'}
                        for account in ('org-fixture', 'org-other')}

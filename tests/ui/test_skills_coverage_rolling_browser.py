@@ -146,6 +146,7 @@ def run():
         expect(surface).to_contain_text('1 load · 0 repeat · 1 reference · 1 failure')
         surface.get_by_role('button', name='Clear skill selection', exact=True).click()
         expect(legend).to_have_attribute('aria-pressed', 'false')
+        # Replaces the old single-id splice: remove all three injected probe events.
         page.evaluate("demoSkillEvents.splice(0,demoSkillEvents.length,...demoSkillEvents.filter(e=>e.skill!=='reopen-fresh-probe'))")
         page.clock.fast_forward(7200000)
         before = len(skills_calls(page))

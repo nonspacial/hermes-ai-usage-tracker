@@ -26,12 +26,13 @@ def run():
         assert not page.get_by_test_id('skill-timeline').count()
         assert page.evaluate("demoCalls.filter(x=>x.includes('/ledger/skills')).every(x=>x.includes('aggregate_only=true'))")
         # Pie slices are focusable named buttons (desktop/AGENTS.md); select one by
-        # its accessible name rather than a raw SVG path, which the pie and heading overlap.
+        # its accessible name rather than a raw SVG path.
         slice_ = chart.get_by_role('button', name='frontend-ui-iteration: 2 (50.0%)', exact=True)
         expect(slice_).to_have_attribute('aria-pressed', 'false')
-        # The pie starts partly below the nested reader's fold; Playwright's
-        # click auto-scroll does not reveal a partly visible SVG path, so scroll
-        # the named pie into view as a user would, then click the slice itself.
+        # The pie starts partly below the `.au-reader` scroll fold (SVG spans
+        # y 912-1232, the reader clips at 1084); Playwright's click auto-scroll
+        # does not reveal a partly visible SVG path, so scroll the named pie into
+        # view as a user would, then click the slice itself.
         chart.get_by_role('img', name='Skill load frequency').scroll_into_view_if_needed()
         slice_.click()
         expect(slice_).to_have_attribute('aria-pressed', 'true')
