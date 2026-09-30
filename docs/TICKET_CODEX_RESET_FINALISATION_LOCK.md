@@ -1,6 +1,6 @@
 # Ticket: codex reset finalisation can strand a completed redemption as pending
 
-**Status: open, not fixed — needs user decision.** Product-risk record only; no product code has changed.
+**Status: fixed in `COMMIT_PENDING` on branch `fix/codex-reset-finalisation`** (repository candidate; not merged, installed or exercised against a live account). The symptom, triggers and reproduction below describe the pre-fix code at `68515de`; the design summary is under [Resolution](#resolution).
 
 ## Symptom
 
@@ -27,7 +27,7 @@ The database uses `journal_mode=delete`, so even a reader's SHARED lock blocks t
 
 Medium. Fails closed: the pending key keeps blocking further redemption, so there is no double spend. The cost is a misreported outcome and a stuck account with no in-product recovery.
 
-## Fix direction (proposed, not implemented)
+## Fix direction (as proposed before the fix)
 
 1. Give post-spend finalisation its own longer, bounded busy timeout and/or retry loop, separate from observe/admission.
 2. If finalisation still cannot be recorded, return a distinct outcome such as "reset used but could not be recorded" instead of the generic 409 "Another redemption is in progress." message, and make it recoverable later (for example by a finalise-on-next-observe path keyed to the same attempt).
@@ -94,4 +94,18 @@ print({k: r.observe(root)[k] for k in ('blocked', 'redeemable', 'last_outcome')}
 ## Scope
 
 - Not a regression from `0077690`; that commit is test-only. `test_different_accounts_can_consume_concurrently` deliberately sequences transactions and does not cover this.
-- Decision needed from the user before any product change, since it alters redemption outcome semantics and the shared authority's locking.
+- The user approved the product change recorded below.
+
+## Resolution
+
+Implemented in [`ledger_runtime/codex_resets.py`](../ledger_runtime/codex_resets.py); the binding contract lives in [ledger runtime DOX](../ledger_runtime/AGENTS.md).
+
+- **Journal before recording.** As soon as consume returns a definite outcome, it is written once to `codex-reset-authority/outcome-<attempt>` (O_EXCL, 0600, fsynced, bound to the hashed account key). This needs no SQLite lock, so no reader or writer can delay it.
+- **Bounded post-spend finalisation.** After the limits read-back, `_finalise` records the outcome with its own budget: up to 5 s of ≤1 s `BEGIN IMMEDIATE` tries with 50/250 ms backoff (bounded try count). Every try re-verifies that the row still holds the same attempt id. Recording is idempotent per attempt through a new `attempts` table, so a racing reconciler and the finaliser never record twice.
+- **Distinct failure.** If recording still fails, or the read-back fails, `redeem()` raises `Unrecorded` (HTTP 409): "Reset was used but could not be recorded; it will be reconciled on the next check." It never reports "Another redemption is in progress." for a completed spend. The row stays pending.
+- **Reconciliation on the next check.** `observe()`, `set_auto()` and admission reconcile a pending attempt whose journal matches it: they record the outcome, clear the attempt and delete the journal. The episode remains spent, so no second consume can follow, even if the provider still reports the old exhaustion.
+- **Unknown stays unknown.** A pending attempt without a valid journal (crash between RPC and journal, uncertain RPC, pre-upgrade row) is never given an outcome. It stays blocked and reads `last_outcome: 'unrecorded'` once no live redeem can still record it. There is still no in-product clear for it; no new destructive action was added. The desktop badge keeps its existing truthful "Redemption status is uncertain" blocked tooltip.
+- **Busy budget.** Observe, opt-in and admission use a 1 s busy timeout instead of 0.1 s; admission keeps `BEGIN IMMEDIATE` and admits exactly one attempt. The monitor's read-only opt-in query closes its connection at once.
+- **Schema.** Additive only: `CREATE TABLE IF NOT EXISTS attempts` on every open. The `state` and `optin` shapes and old rows are unchanged, with no offline migration.
+
+Verification (implementer-run, synthetic only): the reproduction probe above now prints `redeem: reset`, `[(0, 'reset')]` and `blocked: False` for both lock modes. `tests/test_codex_resets.py` covers reader and writer locks across finalisation, a lock beyond the budget with reconciliation by observe/admission/opt-in and no second consume, crash and unjournalled cases staying `unrecorded`, forged journals, the idempotent race and an old-shape database upgrade.

@@ -149,6 +149,8 @@ On Plus accounts, automatic use can trigger at the five-hour limit, not only the
 
 If redemption returns an uncertain result, further attempts are blocked. Check your Codex account before taking further action; the plugin does not automatically retry an uncertain spend.
 
+If Codex confirmed the result but the plugin could not record it straight away, for example because another profile was using the shared reset record, you see **Reset was used but could not be recorded; it will be reconciled on the next check.** The next balance check records the saved result and clears the block without spending another reset.
+
 ## Export a report
 
 Select the profile, provider, time window and filters you want, then click **Export request CSV**. The export includes matching request rows across pages, not just the rows currently visible.
