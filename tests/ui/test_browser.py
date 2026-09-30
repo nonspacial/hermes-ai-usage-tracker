@@ -1,8 +1,10 @@
 """Offline integration tests of the packaged Desktop component. No account calls."""
 import os, re, sys
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[2];ART=Path(__file__).parent/'artifacts';ART.mkdir(exist_ok=True)
+sys.path.insert(0,str(ROOT))
+import build_preview
 
 def input_card(page):
  return page.get_by_test_id('recorded-summary').locator('.au-metric').filter(has=page.locator('.au-muted',has_text='Uncached input'))
@@ -54,12 +56,13 @@ def assert_selected(group, name, attribute='aria-pressed'):
  selected.evaluate('() => document.activeElement?.blur()')
 
 def packaged_version():
- # plugin.yaml is the release source of truth; every other packaged version stamp must agree with it.
+ # plugin.yaml is the release source of truth; the dashboard manifest and ledger_runtime.VERSION must agree with it.
+ # The recorder health version (ledger_runtime/recorder.py, '2.0.0-test.14') is deliberately excluded: IMPORT_NOTES.md
+ # records it as an inherited heartbeat string left unchanged by the source import.
  import json,yaml
  version=yaml.safe_load((ROOT/'plugin.yaml').read_text())['version']
  assert isinstance(version,str) and version,version
  assert json.loads((ROOT/'dashboard/manifest.json').read_text())['version']==version
- sys.path.insert(0,str(ROOT))
  from ledger_runtime import VERSION
  assert VERSION==version,(VERSION,version)
  return version
@@ -69,7 +72,6 @@ def run():
  version=packaged_version()
  # The preview carries no version banner (removed with the responsive layout); prove instead that it
  # embeds the exact packaged Desktop source and fixture this version ships, so the run tests this build.
- import build_preview
  html=(ROOT/'preview.html').read_text()
  assert build_preview.preview_source() in html,'preview.html is stale against desktop/plugin.js; run build_preview.py'
  assert (ROOT/'tests/ui/all_profiles_fixture.js').read_text() in html,'preview.html is stale against the fixture'
@@ -132,13 +134,17 @@ def run():
    assert page.get_by_role('columnheader',name='Subagent tokens',exact=True).count()==1
    page.screenshot(path=str(ART/('breakdown-'+name.lower()+'.png')),full_page=True)
   # Overview identity links filter in place (desktop/AGENTS.md); Requests then carries the same scope.
-  page.locator('.au-breakdown tbody button.au-drill').first.click();page.wait_for_timeout(80)
+  drill=page.locator('.au-breakdown tbody button.au-drill').first
+  chosen_label=drill.evaluate('e=>e.firstChild.textContent');assert chosen_label
+  drill.click();page.wait_for_timeout(80)
   assert_selected(subnav,'Overview','aria-selected')
   assert_selected(main,'All providers','aria-selected')
   assert page.get_by_test_id('request-navigation').get_by_role('button',name='Remove subagent filter',exact=True).count()==1
   assert page.get_by_role('combobox',name='Agent scope').input_value()=='subagent'
   subnav.get_by_role('tab',name='Requests',exact=True).click();page.wait_for_timeout(80)
-  assert page.get_by_role('button',name='Remove subagent filter',exact=True).count()>=1
+  chip=page.get_by_test_id('request-navigation').get_by_role('button',name='Remove subagent filter',exact=True)
+  assert chip.count()==1
+  assert chip.locator('span').first.inner_text()=='Subagent: '+chosen_label,(chip.inner_text(),chosen_label)
   assert 'Primary' not in page.locator('tbody').inner_text()
   with page.expect_download() as d:page.get_by_role('button',name='Export request CSV',exact=True).click()
   csv=Path(d.value.path()).read_text();assert 'parent_session_id' in csv and 'agent_kind' in csv and 'project_id' in csv
@@ -163,8 +169,11 @@ def run():
   chart=page.get_by_test_id('usage-chart');chart.focus();chart.press('ArrowRight')
   # The selected point is described by the shared tooltip, not a visible pane status (desktop/AGENTS.md).
   popup=page.locator('.au-tooltip[role="tooltip"]:visible')
-  assert popup.count()==1 and chart.get_attribute('aria-describedby')==popup.get_attribute('id')
-  assert popup.inner_text().strip() and chart.get_attribute('data-au-chart-summary') in popup.inner_text()
+  expect(popup).to_have_count(1)
+  expect(popup).to_have_attribute('id',re.compile(r'\S'))
+  expect(chart).to_have_attribute('aria-describedby',popup.get_attribute('id'))
+  expect(chart).to_have_attribute('data-au-chart-summary',re.compile(r'\S'))
+  expect(popup).to_contain_text(chart.get_attribute('data-au-chart-summary'))
   page.get_by_role('button',name='Day',exact=True).click();page.wait_for_timeout(70)
   assert_selected(page.get_by_role('group',name='Breakdown grouping'),'Day')
   for view in ['Cache & costs','Compressions','Models & tasks','Requests','Overview']:

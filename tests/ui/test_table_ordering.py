@@ -17,11 +17,16 @@ LABELS = '''hour => [...orderingData.trend.buckets].sort((a,b)=>b.start-a.start)
         return d.toLocaleString(undefined,{month:'short',day:'numeric',...(time?{hour:'numeric',...(offHour?{minute:'2-digit'}:{})}:{})}); })'''
 
 
-def settle(page, action):
-    """Run action and wait for the /ledger? response it triggers."""
+def settle(page, action, **params):
+    """Run action and wait for the /ledger? response whose URL carries every given parameter.
+
+    Unrelated /ledger? reads (a cache refresh, a follow-up page read) do not satisfy the wait.
+    """
     seq = page.evaluate('orderingSeq')
     action()
-    page.wait_for_function('prev => window.orderingSeq > prev', arg=seq)
+    page.wait_for_function('''([prev, want]) => window.orderingUrls.slice(prev).some(url =>
+        (q => Object.entries(want).every(([k, v]) => q.get(k) === v))(new URLSearchParams(url.split('?')[1])))''',
+                           arg=[seq, params])
 
 
 def check_chart(page, before=None):
@@ -44,9 +49,10 @@ def run():
         page.evaluate('''() => {
             const original = rest;
             window.orderingSeq = 0;
+            window.orderingUrls = [];
             rest = async (...args) => {
                 const result = await original(...args);
-                if (args[0].startsWith('/ledger?')) { window.orderingData = result; window.orderingSeq++; }
+                if (args[0].startsWith('/ledger?')) { window.orderingData = result; window.orderingUrls.push(args[0]); window.orderingSeq++; }
                 return result;
             };
         }''')
@@ -54,7 +60,7 @@ def run():
         pager = page.get_by_test_id('record-pagination')
         load_more = page.get_by_role('button', name='Load more', exact=True)
         view_all = page.get_by_role('button', name='View all records', exact=True)
-        paged = []
+        paged, frozen = [], []
         page.get_by_role('tab', name='All providers', exact=True).click()
         for period, grouping in [('Past 24h', 'Hour'), ('7 days', 'Day')]:
             hour = grouping == 'Hour'
@@ -75,17 +81,19 @@ def run():
                 paged.append(period)
                 expect(pager).to_contain_text(f'Showing {PAGE} of {total} records')
                 # Load more appends the next page from the same window; ordering holds across the join.
-                settle(page, load_more.click)
+                settle(page, load_more.click, list_mode='page', offset=str(PAGE), group='time')
                 shown = min(2 * PAGE, total)
                 expect(pager).to_contain_text(f'Showing {shown} of {total} records')
                 expect(rows).to_have_text(expected[:shown])
                 check_chart(page, before)
                 if shown < total:
                     # View all resolves the window anew; order against its own complete trend.
-                    settle(page, view_all.click)
+                    settle(page, view_all.click, list_mode='all', offset='0', group='time')
                     complete = page.evaluate(LABELS, hour)
                     expect(pager).to_contain_text(f'Showing {len(complete)} of {len(complete)} records')
                     expect(pager).to_contain_text('Frozen')
+                    expect(load_more).to_have_count(0)
+                    expect(view_all).to_have_count(0)
                     expect(rows).to_have_text(complete)
                     check_chart(page)
                     # Exit returns to the live ten-row page (cached or re-read); still newest first.
@@ -93,19 +101,22 @@ def run():
                     expect(pager).to_contain_text(f'Showing {PAGE} of ')
                     expect(rows).to_have_count(PAGE)
                     assert rows.all_text_contents() in (expected[:PAGE], complete[:PAGE]), rows.all_text_contents()
+                    frozen.append(period)
                 before = check_chart(page)
             # Switching tables must not leave the chart's bucket array reversed: the DTO the time
             # table rendered from keeps its chronological buckets, and the next read's chart is chronological.
             page.evaluate('window.orderingHeld = orderingData')
-            settle(page, page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Model', exact=True).click)
+            settle(page, page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Model', exact=True).click,
+                   list_mode='page', offset='0', group='model')
             assert page.evaluate('orderingHeld.trend.buckets.map(b => b.start)') == before
             check_chart(page)
         assert paged, 'fixture must provide at least one time list longer than one page'
+        assert frozen, 'fixture must provide at least one time list longer than two pages (View all / Frozen / Exit)'
         assert not errors, errors
         assert not network, network
         browser.close()
         print('PASS Hour/Day tables newest first on the 10-row page and across Load more/View all ('
-              + ', '.join(paged) + ' paged); chart buckets remain chronological; no errors or external requests')
+              + ', '.join(paged) + ' paged; View all/Frozen/Exit on ' + ', '.join(frozen) + '); chart buckets remain chronological; no errors or external requests')
 
 
 if __name__ == '__main__':
