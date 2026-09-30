@@ -745,15 +745,15 @@ def test_sweep_is_bounded_and_ignores_errors(fixture, monkeypatch):
 class _LostTransaction:
     """Connection proxy for _housekeep: SQLite auto-rolls back the whole
     transaction (as on SQLITE_FULL/IOERR/NOMEM/BUSY) when ``fail_on`` runs."""
-    def __init__(self, conn, fail_on, lose=True):
-        self.conn, self.fail_on, self.lose = conn, fail_on, lose
+    def __init__(self, conn, fail_on, lose=True, error='fixture disk I/O error'):
+        self.conn, self.fail_on, self.lose, self.error = conn, fail_on, lose, error
     def __getattr__(self, name):
         return getattr(self.conn, name)
     def execute(self, sql, *args):
         if sql.startswith(self.fail_on):
             if self.lose:
                 self.conn.execute('ROLLBACK')
-            raise sqlite3.OperationalError('fixture disk I/O error')
+            raise sqlite3.OperationalError(self.error)
         return self.conn.execute(sql, *args)
 
 
@@ -803,6 +803,25 @@ def test_lost_transaction_in_housekeeping_refuses_admission(fixture, monkeypatch
     assert resets.redeem(fixture, expected_binding=view['binding'],
                          expected_episode=view['episode'], expected_count=2)['outcome'] == 'reset'
     assert _state_rows(fixture) == [(None, 'reset')] and len(_consumes()) == 1
+
+
+@pytest.mark.parametrize('error, message', [
+    ('fixture disk I/O error', 'Codex reset state could not be written; nothing was spent.'),
+    ('database is locked', 'Another redemption is in progress.'),
+])
+def test_admission_fault_message_is_distinct_from_contention(fixture, monkeypatch, error, message):
+    view = resets.observe(fixture)
+    _seed_prunable(fixture, monkeypatch)
+    before = _authority(fixture)
+    real = resets._housekeep
+    monkeypatch.setattr(resets, '_housekeep',
+                        lambda conn, *a: real(_LostTransaction(conn, _FAIL_AT['prune'], error=error), *a))
+    with pytest.raises(resets.Unavailable) as raised:
+        resets.redeem(fixture, expected_binding=view['binding'],
+                      expected_episode=view['episode'], expected_count=2)
+    assert str(raised.value) == message
+    assert not isinstance(raised.value, resets.Unrecorded)
+    assert _authority(fixture) == before and _consumes() == []  # nothing written or spent
 
 
 @pytest.mark.parametrize('at', ['prune', 'sweep'])

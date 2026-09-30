@@ -574,6 +574,15 @@ def _row(conn, binding, home, account, settled=None):
     return (optin[0] if optin else 0, episode, attempt, result)
 
 
+def _contention(exc: sqlite3.OperationalError) -> bool:
+    """True when the error is SQLite lock contention (BUSY/LOCKED), not a fault."""
+    code = getattr(exc, 'sqlite_errorcode', None)
+    if isinstance(code, int) and (code & 0xff) in (5, 6):  # SQLITE_BUSY, SQLITE_LOCKED
+        return True
+    message = str(exc).lower()
+    return 'database is locked' in message or 'busy' in message
+
+
 def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
@@ -685,7 +694,11 @@ def redeem(home: Path, *, expected_binding: str, expected_episode: str | None,
                     conn.execute('INSERT INTO attempts(attempt,binding,started) VALUES (?,?,?)',
                                  (attempt, key, time.time()))
         except sqlite3.OperationalError as exc:
-            raise Unavailable('Another redemption is in progress.') from exc
+            if _contention(exc):
+                raise Unavailable('Another redemption is in progress.') from exc
+            # A genuine SQLite fault (e.g. a lost transaction re-raised by
+            # _housekeep): the admission rolled back before any consume.
+            raise Unavailable('Codex reset state could not be written; nothing was spent.') from exc
         _settle(home, settled)
         if refusal:
             raise Unavailable(refusal)
