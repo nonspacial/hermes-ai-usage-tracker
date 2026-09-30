@@ -15,7 +15,7 @@ def footer(page):
 def check_tooltip(page, badge, state, prefix, tone):
     badge.hover()
     popup = page.locator('.au-tooltip[role="tooltip"]:visible').last
-    expect(popup).to_contain_text('Running agents are not restarted.')
+    expect(popup).to_contain_text('Running agents are not restarted')
     expect(footer(page)).to_contain_text(prefix)
     expect(badge).to_have_attribute('data-state', state)
     expect(badge).to_have_attribute('aria-describedby', popup.get_attribute('id'))
@@ -51,7 +51,7 @@ def run():
         badge = page.get_by_test_id('connection-status')
         expect(badge).to_have_attribute('data-state', 'online')
         popup = check_tooltip(page, badge, 'online', 'Usage idle', None)
-        assert 'Click to reconnect and refresh.' in popup.inner_text()
+        assert 'Click to reconnect and refresh' in popup.inner_text()
         page.get_by_role('tab', name='All providers', exact=True).click()
         expect(page.get_by_test_id('recorded-summary')).to_be_visible()
         expect(page.locator('.au-window-label')).to_have_count(0)

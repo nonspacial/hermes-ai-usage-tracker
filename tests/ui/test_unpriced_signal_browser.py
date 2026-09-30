@@ -84,7 +84,7 @@ def run():
         # Count = the group's unpriced requests in the window (events outside it are not counted).
         shown = re.fullmatch(' ⚠\uFE0E([\\d,]+)', marker.inner_text())
         assert shown and 0 < int(shown[1].replace(',', '')) <= mixed, marker.inner_text()
-        assert marker.get_attribute('aria-label') == shown[1] + ' unpriced requests'
+        assert marker.get_attribute('aria-label') == shown[1] + (' unpriced request' if shown[1] == '1' else ' unpriced requests')
         assert '*' not in row.inner_text()
         # Fully priced rows: nothing after the amount.
         for other in table.locator('tbody tr').all():
@@ -94,8 +94,8 @@ def run():
         # Reason on hover through the shared tooltip.
         marker.hover()
         tip = page.locator('body > .au-tooltip:visible')
-        expect(tip).to_contain_text(shown[1] + ' requests unpriced')
-        expect(tip).to_contain_text('model not in the provider or OpenRouter catalogue')
+        expect(tip).to_contain_text(shown[1] + (' request' if shown[1] == '1' else ' requests') + ' unpriced')
+        expect(tip).to_contain_text('not in any catalogue')
         expect(tip).to_contain_text('no price catalogue for this provider yet')
         # Pane badge beside the freshness badge, with the top reasons on hover.
         badge = page.get_by_test_id('unpriced-badge')
@@ -156,7 +156,7 @@ def pricing_basis_context(page, errors):
             assert phrase in title, (model, phrase, title)
         # 'no ... reported' only when the value was truly absent.
         if model != 'basis-absent':
-            assert 'no usage.inference_geo was reported' not in title and 'no usage.speed reported' not in title, (model, title)
+            assert 'No usage.inference_geo was reported' not in title and 'no usage.speed was reported' not in title, (model, title)
         seen.add(model)
     assert seen == set(expected)
     tip = page.locator('body > .au-tooltip:visible')

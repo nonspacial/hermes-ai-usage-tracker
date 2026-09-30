@@ -41,7 +41,7 @@ def run():
         expect(page.get_by_test_id('retrospective-overview-note')).to_contain_text('not historical charges')
         page.get_by_role('tab',name='Cache & costs',exact=True).click()
         expect(page.get_by_test_id('retrospective-cost-note')).to_contain_text('not historical charges')
-        expect(page.get_by_test_id('published-rates').locator('tbody tr [title*="Retrospective current-published-rate estimate"]')).not_to_have_count(0)
+        expect(page.get_by_test_id('published-rates').locator('tbody tr [title*="Retrospective estimate at current published rates"]')).not_to_have_count(0)
         page.get_by_role('tab',name='Requests',exact=True).click()
         expect(page.get_by_test_id('request-list').locator('tbody tr span[title*="Not a historical charge"]')).not_to_have_count(0)
         page.get_by_role('button',name='Export request CSV',exact=True).click()

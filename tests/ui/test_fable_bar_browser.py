@@ -5,6 +5,7 @@ no account, quota endpoint or ledger is read. Screenshots go to
 ``$TMPDIR/fable-bar`` as fixture evidence, not product images.
 """
 import os
+import re
 from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
@@ -100,8 +101,11 @@ def test_fable_bar():
                     expect(tip).to_be_hidden()
                     bars.nth(index).locator('.au-row-quota-track').hover(force=True)
                     expect(tip).to_be_visible()
-                    expect(tip).to_have_text(text)
-                    assert bars.nth(index).get_attribute('data-au-tooltip') == text
+                    # Line 1: remaining share in the success tone; line 2: local reset time.
+                    lines = tip.locator('.au-tip-line').all_inner_texts()
+                    assert lines[0] == text and re.fullmatch(r'Resets in \d+[dhm][ \dhm]* · .+', lines[1]), lines
+                    assert tip.locator('.au-tip-line').first.locator('.au-tip-ok').inner_text() == text
+                    assert bars.nth(index).get_attribute('data-au-tooltip') == '\n'.join(lines)
                     during = page.evaluate(ROWS)[provider]['windows'][index]
                     was = before[provider]['windows'][index]
                     assert (during['width'], during['height'], during['track']) == (was['width'], was['height'], was['track']), (during, was)
@@ -110,7 +114,7 @@ def test_fable_bar():
             page.mouse.move(1916, 1076)
             expect(tip).to_be_hidden()
             restored = page.evaluate(ROWS)
-            assert [w['title'] for w in restored['anthropic']['windows']] == expected['anthropic'], restored
+            assert [w['title'].split('\n')[0] for w in restored['anthropic']['windows']] == expected['anthropic'], restored
             # No extra quota request for layout or hover.
             assert not [c for c in page.evaluate('window.demoCalls') if 'usage' in c and 'ledger' not in c]
 
@@ -164,7 +168,8 @@ STYLE = '''(sel) => [...document.querySelectorAll(sel)].map(e => {
     muted:colour('var(--ui-text-quaternary)'),accent:colour(providerAccent('anthropic')),
     text:e.textContent,title:e.getAttribute('title')||e.getAttribute('data-au-tooltip')};
   probe.remove();return out;})'''
-STALE_NOTE = 'Model-scoped weekly limit could not be refreshed (timed out); showing the value observed at '
+STALE_NOTE = 'Fable week could not be refreshed\nReason: timed out\nLast good value: '
+STALE_SR = 'Fable week could not be refreshed. Reason: timed out. Last good value: '
 
 
 def check_stale_and_unavailable(browser):
@@ -190,7 +195,7 @@ def check_stale_and_unavailable(browser):
     assert [b['stale'] for b in bars] == [None, None, 'true'], bars
     assert bars[2]['fill'] == bars[2]['muted'] != bars[2]['accent'], bars
     assert bars[0]['fill'] == bars[0]['accent'] and bars[1]['fill'] == bars[1]['accent'], bars
-    assert bars[2]['title'] == f'85% left · stale. {STALE_NOTE}{observed}', bars[2]['title']
+    assert bars[2]['title'] == f'85% left · stale\n{STALE_NOTE}{observed}', bars[2]['title']
     meters = page.locator('.au-provider-row[data-provider="anthropic"] .au-row-quota-track[role="meter"]')
     assert [meters.nth(i).get_attribute('aria-label') for i in range(3)] == [
         'Five hour allowance remaining', 'Weekly allowance remaining', 'Fable allowance remaining (stale)']
@@ -198,7 +203,10 @@ def check_stale_and_unavailable(browser):
     row_fable = page.locator('.au-provider-row[data-provider="anthropic"] .au-row-quota-window[data-stale="true"]')
     row_fable.locator('.au-row-quota-track').hover(force=True)
     expect(tip).to_be_visible()
-    expect(tip).to_have_text(f'85% left · stale. {STALE_NOTE}{observed}')
+    expect(tip).to_have_text(f'85% left · stale\n{STALE_NOTE}{observed}')
+    # Stale state and reason in the warning tone, observed local time in the accent.
+    assert tip.locator('.au-tip-warn').all_inner_texts() == ['85% left · stale', 'Fable week could not be refreshed']
+    assert tip.locator('.au-tip-key').all_inner_texts() == [observed]
     page.screenshot(path=str(SCRATCH / 'stale-fable-row-hover.png'))
     page.mouse.move(1916, 1076)
     expect(tip).to_be_hidden()
@@ -222,14 +230,14 @@ def check_stale_and_unavailable(browser):
         # exposed to the accessibility tree, clipped to 1px, title tooltip kept.
         hidden = stale_row.locator('.au-sr-only')
         expect(hidden).to_have_count(1)
-        expect(hidden).to_have_text(STALE_NOTE + observed + '.')
+        expect(hidden).to_have_text(STALE_SR + observed + '.')
         geometry = hidden.evaluate('''e => {const s=getComputedStyle(e),r=e.getBoundingClientRect();
           return {position:s.position,clip:s.clip,overflow:s.overflow,width:r.width,height:r.height,
                   hidden:e.closest('[aria-hidden="true"]')!==null}}''')
         assert geometry['position'] == 'absolute' and geometry['overflow'] == 'hidden', geometry
         assert geometry['clip'] == 'rect(0px, 0px, 0px, 0px)' and geometry['width'] <= 1 and geometry['height'] <= 1, geometry
         assert not geometry['hidden'], geometry
-        assert STALE_NOTE + observed in stale_row.aria_snapshot(), stale_row.aria_snapshot()
+        assert STALE_SR + observed in stale_row.aria_snapshot(), stale_row.aria_snapshot()
         assert stale_row.get_attribute('title') == STALE_NOTE + observed
         stale_row.hover()
         expect(tip).to_be_visible()

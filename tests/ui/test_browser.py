@@ -173,7 +173,8 @@ def run():
   expect(popup).to_have_attribute('id',re.compile(r'\S'))
   expect(chart).to_have_attribute('aria-describedby',popup.get_attribute('id'))
   expect(chart).to_have_attribute('data-au-chart-summary',re.compile(r'\S'))
-  expect(popup).to_contain_text(chart.get_attribute('data-au-chart-summary'))
+  # The summary attribute is tooltip markup; the popup shows its plain text (desktop/AGENTS.md).
+  expect(popup).to_contain_text(page.evaluate('tipPlain',chart.get_attribute('data-au-chart-summary')))
   page.get_by_role('button',name='Day',exact=True).click();page.wait_for_timeout(70)
   assert_selected(page.get_by_role('group',name='Breakdown grouping'),'Day')
   for view in ['Cache & costs','Compressions','Models & tasks','Requests','Overview']:

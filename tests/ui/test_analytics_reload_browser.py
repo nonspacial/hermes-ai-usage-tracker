@@ -59,7 +59,8 @@ def run():
         page.clock.fast_forward(8001)
         expect(badge).to_have_text('Limited')
         expect(badge).to_have_attribute('aria-busy', 'false')
-        assert 'acknowledgement' in badge.get_attribute('title')
+        # A focused badge moves its title to data-au-tooltip while the shared popup shows.
+        assert 'acknowledgement' in (badge.get_attribute('title') or badge.get_attribute('data-au-tooltip') or '')
         page.evaluate('failSocket=false')
         page.clock.fast_forward(20001)
         expect(badge).to_have_text('Online')

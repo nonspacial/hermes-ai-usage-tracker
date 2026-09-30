@@ -31,8 +31,8 @@ def test_chart_interactions():
             plot = chart.locator('.au-plot-hit')
             expect(plot).to_be_visible()
             tooltip = plot.locator('title').text_content() or ''
-            assert 'Left/Right arrow keys' in tooltip
-            assert '15 minutes' in tooltip and 'half-hour boundaries' in tooltip
+            assert 'use ←/→ to step through buckets' in tooltip
+            assert 'Drag 15 minutes or more to zoom' in tooltip and 'Snaps to :00/:30, 30 minutes minimum' in tooltip
 
             def calls():
                 return page.evaluate('window.demoCalls.filter(p=>p.startsWith("/ledger?"))')
@@ -82,9 +82,11 @@ def test_chart_interactions():
             footer = page.get_by_test_id('chart-point-summary')
             bubble = page.locator('.au-tooltip[role="tooltip"]:visible')
             expect(footer).to_be_visible()
-            assert 'Click to interact with Left/Right arrow keys' in bubble.inner_text()
-            assert 'Click and drag at least 15 minutes' in bubble.inner_text()
-            assert footer.inner_text() == chart.get_attribute('data-au-chart-summary')
+            assert 'Click the chart, then use ←/→ to step through buckets' in bubble.inner_text()
+            assert 'Drag 15 minutes or more to zoom' in bubble.inner_text()
+            # The footer renders the structured summary one fact per line.
+            plain = lambda owner: page.evaluate('tipPlain', owner.get_attribute('data-au-chart-summary'))
+            assert footer.text_content() == plain(chart)
             assert chart.locator('.au-chart-tip').inner_text() == ''
             assert footer.inner_text() not in chart.inner_text(), 'Point details must not occupy the pane'
             assert bubble.evaluate('e=>e.lastElementChild.dataset.testid') == 'chart-point-summary'
@@ -98,12 +100,12 @@ def test_chart_interactions():
             tip = footer.inner_text()
             chart.press('ArrowRight')
             expect(footer).not_to_have_text(tip)
-            assert footer.inner_text() == chart.get_attribute('data-au-chart-summary')
+            assert footer.text_content() == plain(chart)
             # Pointer inspection can change the selected point without hiding the instructions.
             page.mouse.move(*position(.8))
             expect(footer).not_to_have_text(tip)
-            assert footer.inner_text() == plot.get_attribute('data-au-chart-summary')
-            assert 'Click and drag at least 15 minutes' in bubble.inner_text()
+            assert footer.text_content() == plain(plot)
+            assert 'Drag 15 minutes or more to zoom' in bubble.inner_text()
             assert footer.evaluate('e=>getComputedStyle(e).color') == line_stroke()
             assert len(calls()) == before, 'Single click and keyboard inspection must not fetch'
             # Normal hand jitter remains a click, not a zoom.
@@ -228,7 +230,7 @@ def test_chart_interactions():
                 assert float(query['start'][0])%1800==float(query['end'][0])%1800==0
                 assert page.evaluate('window.chartData.trend.seconds')==60
                 assert page.get_by_role('group', name='Breakdown grouping').get_by_role('button', name='Minute', exact=True).count()==1
-                assert 'drag zoom is unavailable' in (plot.locator('title').text_content() or '')
+                assert 'Drag zoom is unavailable' in (plot.locator('title').text_content() or '')
                 before=len(calls())
                 page.mouse.move(*position(.1));page.mouse.down();page.mouse.move(*position(.9),steps=3);page.mouse.up()
                 assert len(calls())==before, 'At 30 minutes drag zoom is disabled'

@@ -47,13 +47,14 @@ EXPECTED = {
     'claude-g-haiku': 'Global',
     'claude-h-plain': 'Standard',   # a rate without Anthropic geo metadata keeps the previous label
 }
+# Exact tooltip lines (one fact per line).
 TOOLTIP = {
-    'claude-a-global': ['Global routing.', 'Endpoint recorded as api.anthropic.com.', 'Standard speed reported by usage.speed.'],
-    'claude-b-us': ['US-only inference: published 1.1× data-residency rate'],
-    'claude-c-assumed': ['Global routing assumed', 'Endpoint not recorded; api.anthropic.com assumed.', 'Standard speed assumed'],
-    'claude-d-fast': ['Fast speed inferred from the request; the response did not report usage.speed.'],
-    'claude-e-fast': ['Fast speed reported by usage.speed.'],
-    'claude-g-haiku': ['Priced up to 200,000 prompt tokens.'],
+    'claude-a-global': ['Direct Anthropic API list rate · Global routing', 'Recorded endpoint: api.anthropic.com', 'Standard speed reported by usage.speed'],
+    'claude-b-us': ['US-only inference', 'Published 1.1× data-residency rate', 'usage.inference_geo reported us'],
+    'claude-c-assumed': ['Global routing assumed', 'Endpoint not recorded', 'api.anthropic.com assumed', 'Standard speed assumed'],
+    'claude-d-fast': ['Fast speed inferred from the request', 'The response did not report usage.speed'],
+    'claude-e-fast': ['Fast speed reported by usage.speed'],
+    'claude-g-haiku': ['Priced up to 200,000 prompt tokens'],
 }
 
 
@@ -89,9 +90,10 @@ def run():
                 assert span.count() == 0, 'non-Anthropic-geo rate gained a tooltip'
                 continue
             title = span.first.get_attribute('title') or span.first.get_attribute('data-au-tooltip') or ''
-            assert title.startswith('Direct Anthropic API list rate.'), (model, title)
+            lines = title.split('\n')
+            assert lines[0].startswith('Direct Anthropic API list rate'), (model, title)
             for fragment in TOOLTIP.get(model, []):
-                assert fragment in title, (model, fragment, title)
+                assert fragment in lines, (model, fragment, title)
         us, glob = [rates.locator('tbody tr', has_text=m).locator('td').nth(3).inner_text() for m in ('claude-b-us', 'claude-a-global')]
         assert us != glob
         # Shared themed tooltip surface still owns the title on hover.
@@ -100,6 +102,8 @@ def run():
         page.wait_for_timeout(150)
         bubble = page.locator('[role="tooltip"]').filter(has_text='Fast speed inferred')
         assert bubble.count() >= 1, 'shared tooltip did not show the rate note'
+        # The assumption head is a warning-tone line of its own.
+        assert 'Fast speed inferred from the request' in bubble.first.locator('.au-tip-warn').all_text_contents()
         assert not errors, errors
         assert all(u.startswith(('about:', 'data:', 'blob:')) for u in network), network
         browser.close()

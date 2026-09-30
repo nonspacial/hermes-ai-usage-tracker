@@ -145,24 +145,24 @@ def run():
             chart.focus()
             page.wait_for_function('''() => {const chart=document.querySelector('.au-chart'),tip=document.querySelector('body > .au-tooltip');
               return document.activeElement===chart && tip?.style.display==='block' &&
-                tip.textContent.includes('Left/Right') && chart.getAttribute('aria-describedby')===tip.id}''')
+                tip.textContent.includes('←/→') && chart.getAttribute('aria-describedby')===tip.id}''')
             plot = page.locator('.au-plot-hit').first
             if plot.count():
                 title = plot.locator('title')
-                assert 'Left/Right' in (title.text_content() or '')
+                assert '←/→' in (title.text_content() or '')
                 plot.hover(force=True)
-                expect(tip).to_contain_text('Left/Right')
+                expect(tip).to_contain_text('←/→')
                 plot.evaluate("e=>e.querySelector('title').textContent='Updated chart gesture explanation'")
                 expect(tip).to_have_text('Updated chart gesture explanation')
                 assert plot.get_attribute('aria-label') == 'Updated chart gesture explanation'
                 page.mouse.move(0, 0)
                 assert title.text_content() == 'Updated chart gesture explanation'
-                plot.evaluate("e=>e.querySelector('title').textContent='Click to interact with Left/Right arrow keys. Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.'")
+                plot.evaluate("e=>e.querySelector('title').textContent='Click the chart, then use ←/→ to step through buckets'")
                 chart.blur()
                 plot.hover(force=True)
                 page.screenshot(path='/home/nope/.hermes/profiles/infra/cache/scratch/token-tooltip-chart-wide.png')
                 page.mouse.move(0, 0)
-                assert 'Left/Right' in (title.text_content() or '')
+                assert '←/→' in (title.text_content() or '')
             inventory = audit_visible_titles()
             assert inventory['native'] >= 10 and inventory['svg'] >= 1 and not inventory['failures'], inventory
             subpages = page.get_by_role('navigation', name='Provider subpages')
@@ -182,7 +182,8 @@ def run():
             slice_box = skills.locator('svg path').first.bounding_box()
             assert slice_box and 0 <= slice_box['y'] < 1100, slice_box
             skills.locator('svg path').first.hover(position={'x':slice_box['width']*.7,'y':slice_box['height']*.5})
-            expect(tip).to_contain_text(slice_text)
+            expect(tip).to_have_text(slice_text)
+            assert tip.locator('.au-tip-line').all_text_contents() == slice_text.split('\n')
             page.mouse.move(0, 0)
             inventory = audit_visible_titles()
             assert inventory['svg'] >= 1 and not inventory['failures'], inventory
@@ -195,8 +196,9 @@ def run():
                 other = slices.nth(1)
                 other.click()
                 expect(other).to_have_attribute('aria-pressed', 'true')
+                slice_name = (slice.get_attribute('aria-label') or '').split(': ')[0]
                 slice.focus()
-                expect(tip).to_contain_text(slice.get_attribute('aria-label') or '')
+                expect(tip.locator('.au-tip-line').first).to_have_text(slice_name)
                 slice.press(key)
                 expect(slice).to_have_attribute('aria-pressed', 'true')
                 legend = skills.locator('.au-skill-legend button').first

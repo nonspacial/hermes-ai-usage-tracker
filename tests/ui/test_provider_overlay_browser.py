@@ -130,13 +130,13 @@ def test_overlay():
             }''')
             page.mouse.move(*unknown)
             expect(page.locator('.au-tooltip:visible .au-tooltip-provider').first).to_be_visible()
-            assert any('beta · — · 1 requests · partial price coverage' in line
+            assert any('beta · — · 1 request · partial price coverage' in line
                        for line in page.locator('.au-tooltip:visible .au-tooltip-provider').all_text_contents())
             page.get_by_role('button',name='Tokens',exact=True).first.click()
             page.mouse.move(*unknown)
             expect(page.locator('.au-tooltip:visible .au-tooltip-provider').first).to_be_visible()
             labels=page.locator('.au-tooltip:visible .au-tooltip-provider').all_text_contents()
-            assert any('beta · — tokens · 1 requests · includes missing usage' in line for line in labels),labels
+            assert any('beta · — tokens · 1 request · includes missing usage' in line for line in labels),labels
             assert any('alpha · 0 tokens · 0 requests' in line for line in labels),labels
             # One half-hour-grid drag is one shared report read, never one per line.
             hit=panel.locator('.au-plot-hit');hit.scroll_into_view_if_needed()

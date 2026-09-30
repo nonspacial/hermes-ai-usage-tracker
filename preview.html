@@ -871,6 +871,63 @@ function compactWindowLabel(label){
 function measuredWindows(quota){
  return quota?.available?(quota.windows||[]).filter(w=>Number.isFinite(w?.remaining_percent)):[];
 }
+// Structured tooltip copy. A tooltip is a small markup string: '\n' starts a
+// new line and {ok:…} {warn:…} {key:…} {muted:…} colour one run of text with
+// the success, warning, accent or tertiary theme token. `\` escapes `\ { }`.
+// Anything from data (provider/model names, backend messages, errors) goes
+// through tipEsc, which escapes the markup characters and folds newlines, so
+// data can neither add lines nor colour, and the popup only ever creates text
+// nodes. Elements carry the plain text in `title` (native fallback and the
+// accessible description, newlines kept) and the markup in `data-au-tip`;
+// the popup uses the markup only while its plain form equals the title.
+const TIP_TONES=['ok','warn','key','muted'];
+function tipEsc(value){return String(value??'').replace(/\s*[\r\n]+\s*/g,' ').replace(/[\\{}]/g,'\\$&')}
+function tipTone(tone,value){return '{'+tone+':'+tipEsc(value)+'}'}
+function tipLines(...lines){return lines.flat().filter(line=>line!=null&&line!==false&&line!=='').join('\n')}
+function parseTip(markup){
+ const text=String(markup??''),lines=[[]];let run='',tone=null;
+ const flush=()=>{if(run)lines[lines.length-1].push({tone,text:run});run=''};
+ for(let i=0;i<text.length;i++){
+  const c=text[i];
+  if(c==='\\'&&i+1<text.length){run+=text[++i];continue}
+  if(c==='\n'){flush();lines.push([]);continue}
+  if(c==='{'&&tone===null){
+   const open=TIP_TONES.find(name=>text.startsWith(name+':',i+1));
+   if(open){flush();tone=open;i+=open.length+1;continue}
+  }
+  if(c==='}'&&tone!==null){flush();tone=null;continue}
+  run+=c;
+ }
+ flush();return lines.filter(line=>line.length);
+}
+function tipPlain(markup){return parseTip(markup).map(line=>line.map(part=>part.text).join('')).join('\n')}
+// One sentence per line, for screen-reader-only copies of a tooltip.
+function tipSentences(markup){return tipPlain(markup).split('\n').map(line=>/[.!?]$/.test(line)?line:line+'.').join(' ')}
+function tipProps(markup){
+ if(!markup)return {};
+ const plain=tipPlain(markup);
+ return plain===markup?{title:plain}:{title:plain,'data-au-tip':markup};
+}
+// React copy of the popup's rendering, for the inline Auto use tooltip.
+function tipNodes(markup){
+ const out=[];
+ parseTip(markup).forEach((line,i)=>{
+  if(i)out.push('\n');
+  out.push(h('span',{key:i,className:'au-tip-line'},...line.map((part,j)=>part.tone?h('span',{key:j,className:'au-tip-'+part.tone},part.text):part.text)));
+ });
+ return out;
+}
+function renderTipLines(target,markup){
+ parseTip(markup).forEach((line,i)=>{
+  if(i)target.appendChild(document.createTextNode('\n'));
+  const row=document.createElement('span');row.className='au-tip-line';
+  for(const part of line){
+   if(!part.tone){row.appendChild(document.createTextNode(part.text));continue}
+   const span=document.createElement('span');span.className='au-tip-'+part.tone;span.textContent=part.text;row.appendChild(span);
+  }
+  target.appendChild(row);
+ });
+}
 // Anthropic model-scoped weekly limits come from a best-effort second read
 // (backend `limits_status`). A window the backend carried from its last good
 // read arrives with `stale:true` and `observed_at`; it renders muted with this
@@ -882,7 +939,10 @@ function limitsReasonText(reason){
  return LIMITS_REASONS[code]||(/^http_\d{3}$/.test(code)?'HTTP '+code.slice(5):code||'unknown reason');
 }
 function staleWindowNote(window,status){
- return `Model-scoped weekly limit could not be refreshed (${limitsReasonText(status?.reason)}); showing the value observed at ${fmtLocal(window?.observed_at)||'an unknown time'}`;
+ const observed=fmtLocal(window?.observed_at);
+ return tipLines(tipTone('warn',(window?.label||'Model-scoped weekly limit')+' could not be refreshed'),
+  'Reason: '+tipEsc(limitsReasonText(status?.reason)),
+  'Last good value: '+(observed?tipTone('key',observed):tipTone('warn','unknown time')));
 }
 // Unavailable with nothing carried: one line in the card's existing details.
 // State `none` (the API answered with no scoped entry and this profile never
@@ -947,7 +1007,7 @@ function StaleQuotaBar({ window, limitsStatus }) {
   return jsxs('div', {
     className: 'flex flex-col gap-1',
     'data-stale': 'true',
-    title: note,
+    ...tipProps(note),
     children: [
       jsxs('div', {
         className: 'flex flex-wrap items-baseline gap-2 text-xs',
@@ -969,24 +1029,33 @@ function StaleQuotaBar({ window, limitsStatus }) {
           style: { width: `${Math.max(1, Math.min(100, remaining))}%`, background: 'var(--ui-text-quaternary)' }
         })
       }),
-      jsx('span', { className: 'au-sr-only', children: note + '.' })
+      jsx('span', { className: 'au-sr-only', children: tipSentences(note) })
     ]
   })
 }
 
 // All reset controls live in the card header. The same component is used on
 // Subscriptions and the Codex provider page; query identity includes profile.
-const RESET_WARNING = 'Auto use is opt-in and at your own risk. It can use a banked reset at the five-hour limit on Plus accounts, not only at the weekly limit. A reset refreshes eligible five-hour and weekly allowances; an early use can waste the weekly reset.'
+const RESET_WARNING = tipLines('Off by default','Use at your own risk',
+ 'On Plus accounts it can spend a banked reset at the five-hour limit, not only at the weekly limit',
+ 'A reset refreshes eligible five-hour and weekly allowances',
+ tipTone('warn','Using one early can waste the weekly reset'))
 // The popup shares Auto use's theme-aware surface and is fixed so reader
 // scrollports and chart SVGs cannot clip long explanations.
-const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}.au-tooltip-chart-summary{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary);color:var(--ui-accent)}.au-tooltip-freshness{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary)}.au-tooltip-freshness-age[data-tone="healthy"]{color:var(--ui-text-success,#64bba8)}.au-tooltip-freshness-age[data-tone="caution"]{color:var(--ui-text-warning,#d2b776)}'
+const tooltipCss = '.au-tooltip{z-index:21;width:max-content;max-width:min(310px,calc(100vw - 16px));padding:8px 10px;border:1px solid var(--ui-stroke-secondary);border-radius:5px;background:var(--au-surface-bg,var(--ui-bg-chrome,var(--dt-background)));color:var(--ui-text-secondary);white-space:normal;line-height:1.5;overflow-wrap:anywhere;box-shadow:0 8px 25px color-mix(in srgb,var(--ui-text-primary) 18%,transparent);pointer-events:none;font-size:.6875rem;text-align:left}.au-tooltip-chart-summary{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary);color:var(--ui-accent)}.au-tooltip-freshness{display:block;margin-top:6px;padding-top:6px;border-top:1px solid var(--ui-stroke-secondary)}.au-tooltip-freshness-age[data-tone="healthy"]{color:var(--ui-text-success,#64bba8)}.au-tooltip-freshness-age[data-tone="caution"]{color:var(--ui-text-warning,#d2b776)}'+
+ // Structured copy (parseTip): lines and four text tones, no box changes.
+ '.au-tooltip .au-tip-line{display:block}.au-tooltip .au-tip-ok{color:var(--ui-text-success,#64bba8)}.au-tooltip .au-tip-warn{color:var(--ui-text-warning,#d2b776)}.au-tooltip .au-tip-key{color:var(--ui-accent)}.au-tooltip .au-tip-muted{color:var(--ui-text-tertiary)}'
 function installTooltips(root){
  if(!root)return;
  const style=document.createElement('style');style.textContent=tooltipCss;document.head.appendChild(style);
  const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
  tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
- let active=null,svgTitle=null,original=null,previousDescription=null,previousLabel=null;
- const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-success','--ui-text-warning','--ui-accent','--ui-cyan','--ui-green','--ui-blue','--ui-orange','--ui-yellow','--ui-red','--ui-purple','--ui-warm'];
+ let active=null,svgTitle=null,original=null,markup=null,previousDescription=null,previousLabel=null;
+ // Structured copy is used only while it still describes the plain text;
+ // otherwise the plain title is shown line by line, never parsed as markup.
+ const markupFor=(node,text)=>{const value=node.getAttribute('data-au-tip');
+  return value&&tipPlain(value)===text?value:text.split('\n').map(tipEsc).join('\n')};
+ const themeTokens=['--au-surface-bg','--ui-bg-chrome','--dt-background','--ui-stroke-secondary','--ui-text-secondary','--ui-text-primary','--ui-text-tertiary','--ui-text-success','--ui-text-warning','--ui-accent','--ui-cyan','--ui-green','--ui-blue','--ui-orange','--ui-yellow','--ui-red','--ui-purple','--ui-warm'];
  function syncTheme(){
   if(!active)return;
   const source=getComputedStyle(active);
@@ -1005,7 +1074,7 @@ function installTooltips(root){
    else active.setAttribute('aria-describedby',previousDescription);
    if(svgTitle){if(previousLabel===null)active.removeAttribute('aria-label');else active.setAttribute('aria-label',previousLabel)}
   }
-  active=null;svgTitle=null;tip.style.display='none';tip.textContent='';
+  active=null;svgTitle=null;markup=null;tip.style.display='none';tip.textContent='';
  }
  function locate(target){
   for(let node=target;node&&root.contains(node);node=node.parentElement){
@@ -1025,17 +1094,19 @@ function installTooltips(root){
   tip.style.top=Math.max(8,Math.min(box.bottom+6+height<=innerHeight-8?box.bottom+6:box.top-height-6,innerHeight-height-8))+'px';
  }
  function renderTip(){
-  tip.replaceChildren(document.createTextNode(original));
+  tip.replaceChildren();renderTipLines(tip,markup);
   const chartSummary=active?.getAttribute('data-au-chart-summary');
   if(chartSummary){
    const row=document.createElement('span');row.className='au-tooltip-chart-summary';row.setAttribute('data-testid','chart-point-summary');
-   row.textContent=chartSummary;tip.appendChild(row);
+   renderTipLines(row,chartSummary);tip.appendChild(row);
    const providers=active.getAttribute('data-au-chart-providers');
    if(providers){
     for(const entry of JSON.parse(providers)){
      const line=document.createElement('span');line.className='au-tooltip-provider';
      const marker=document.createElement('i');marker.className='au-tooltip-provider-dot';
-     marker.style.background=providerAccent(entry.provider);line.append(marker,document.createTextNode(entry.label+' · '+entry.value));tip.appendChild(line);
+     marker.style.background=providerAccent(entry.provider);
+     const text=document.createElement('span');renderTipLines(text,tipEsc(entry.label)+' · '+entry.value);
+     line.append(marker,text);tip.appendChild(line);
     }
    }
   }
@@ -1057,7 +1128,7 @@ function installTooltips(root){
    hide();return;
   }
   if(found.node===active)return;
-  hide();active=found.node;original=found.text;svgTitle=found.svg;
+  hide();active=found.node;original=found.text;svgTitle=found.svg;markup=markupFor(active,original);
   previousDescription=active.getAttribute('aria-describedby');previousLabel=active.getAttribute('aria-label');
   active.setAttribute('data-au-tooltip',original);
   active.setAttribute('aria-describedby',[previousDescription,tip.id].filter(Boolean).join(' '));
@@ -1077,20 +1148,21 @@ function installTooltips(root){
   for(const record of records){
    if(record.target===active&&record.attributeName==='title'){
     const current=active.getAttribute('title');
-    if(current){original=current;active.dataset.auTooltip=current;renderTip();active.removeAttribute('title');position()}
+    if(current){original=current;markup=markupFor(active,current);active.dataset.auTooltip=current;renderTip();active.removeAttribute('title');position()}
    }
+   if(record.target===active&&record.attributeName==='data-au-tip'){markup=markupFor(active,original);renderTip();position()}
    if(record.target===active&&(['data-au-chart-summary','data-au-chart-providers'].includes(record.attributeName)||record.attributeName?.startsWith('data-au-freshness'))){
     renderTip();position();
    }
    if(svgTitle&&(record.target===svgTitle||svgTitle.contains(record.target))&&svgTitle.textContent){
-    original=svgTitle.textContent;active.dataset.auTooltip=original;
+    original=svgTitle.textContent;markup=markupFor(active,original);active.dataset.auTooltip=original;
     if(previousLabel===null)active.setAttribute('aria-label',original);
     renderTip();svgTitle.textContent='';position();
    }
   }
   if(active)position();
  });
- changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','style','class','data-au-chart-summary','data-au-chart-providers','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
+ changes.observe(root,{subtree:true,attributes:true,attributeFilter:['title','data-au-tip','style','class','data-au-chart-summary','data-au-chart-providers','data-au-freshness','data-au-freshness-age','data-au-freshness-tone'],childList:true,characterData:true});
  for(let node=root.parentElement;node;node=node.parentElement)changes.observe(node,{attributes:true,attributeFilter:['style','class']});
  window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
  return()=>{hide();root.removeEventListener('mouseover',enter);root.removeEventListener('mouseout',leave);
@@ -1126,11 +1198,13 @@ function CodexResetControls({profile}) {
     }
   }
   const tone = count === null || count === 0 ? 'zero' : eligible ? 'ready' : 'waiting'
-  const reason = blocked ? 'Redemption status is uncertain. No second attempt is allowed; review your Codex account before trying again.'
-    : query.error ? 'Account-bound balance unavailable: '+String(query.error.message||query.error)
-    : count === null ? 'Balance or account identity is unknown; redemption is disabled.'
-    : count === 0 ? 'No banked resets available.'
-    : !eligible ? 'No provider-confirmed five-hour or weekly exhaustion; rounded 0% is not enough.' : 'An eligible limit was confirmed by Codex.'
+  const banked = count === 1 ? '1 banked reset' : count+' banked resets'
+  const reason = blocked ? tipLines(tipTone('warn','Redemption status is uncertain'),'No second attempt is allowed','Check your Codex account before trying again')
+    : query.error ? tipLines(tipTone('warn','Account balance unavailable'),tipEsc(query.error.message||query.error))
+    : count === null ? tipLines(tipTone('warn','Balance or account is unknown'),'Redemption is off')
+    : count === 0 ? 'No banked resets available'
+    : !eligible ? tipLines(tipTone('key',banked)+', not usable yet','Codex has not confirmed that a five-hour or weekly limit ran out',tipTone('muted','A rounded 0% does not count'))
+    : tipLines(tipTone('ok','Ready: '+banked),'Codex confirmed an eligible limit','Click to confirm using one')
   async function auto(e) {
     if(!state?.binding || busy || operation.current)return
     const enabled=e.currentTarget.checked
@@ -1164,10 +1238,10 @@ function CodexResetControls({profile}) {
       'Auto use ',jsx('input',{type:'checkbox','aria-label':'Auto use banked Codex reset',
         'aria-describedby':'au-reset-auto-warning',checked:!!state?.auto,
         disabled:!state?.binding||!!query.error||busy||blocked,onChange:auto})]}),
-      jsx('span',{id:'au-reset-auto-warning',className:'au-tooltip au-reset-tooltip',role:'tooltip',children:RESET_WARNING})]}),
+      jsx('span',{id:'au-reset-auto-warning',className:'au-tooltip au-reset-tooltip',role:'tooltip',children:tipNodes(RESET_WARNING)})]}),
     jsx('button',{type:'button',className:'au-reset-badge',
       'data-tone':tone,'aria-label':'Resets: '+(count===null?'unknown':count),
-      title:reason,ref:node=>{badgeRef.current=node},onClick:()=>{
+      ...tipProps(reason),ref:node=>{badgeRef.current=node},onClick:()=>{
         if(!eligible||busy||operation.current)return
         confirmed.current={profile,binding:state.binding,episode:state.episode,count:state.count}
         setConfirm(true)
@@ -1874,7 +1948,13 @@ ${tooltipCss}
 .au-ledger.au-mobile .au-reader .au-table,.au-ledger.au-mobile .au-reader .au-timeline-scroll{overflow:visible;max-height:none}
 `
 const bucketNames = {input_tokens:'Uncached input',output_tokens:'Output',cache_read_tokens:'Cache reads',cache_write_tokens:'Cache writes'}
-const count = n => n == null ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
+const count = n => n == null || !Number.isFinite(Number(n)) ? '—' : Number(n).toLocaleString(undefined,{maximumFractionDigits:0})
+// Counts agree with their displayed unit: `1 request`, `2 requests`. The
+// suffix follows the rounded text, so 0.5/1.4 never read `1 requests`.
+const units = (n,word) => count(n) === '1' ? word : word+'s'
+const plural = (n,word,text) => (text ?? count(n))+' '+units(n,word)
+// Exact known tokens with their unit; '— tokens' when a field is missing.
+const tokenCount = s => { const text=viewTokens(s,'total_tokens',count); return plural(text==='—'?null:s?.known?.total_tokens,'token',text) }
 // Only token quantities use compact notation. Counts, rates and money retain
 // their separate formatters; exact detail values still use count().
 const short = n => n == null ? '—' : Math.abs(Number(n))<1000
@@ -1884,7 +1964,7 @@ const money = n => n == null ? '—' : '$'+Number(n).toLocaleString(undefined,{m
 const when = t => t ? new Date(t*1000).toLocaleString() : '—'
 const compactWhen = t => t ? new Date(t*1000).toLocaleTimeString() : '—'
 function notice(t){return h('div',{className:'au-notice'},t)}
-function metric(label,value,note,title){return h('div',{className:'au-metric',title:title||''},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted',title:typeof note==='string'?note:title||''},note))}
+function metric(label,value,note,title){return h('div',{className:'au-metric',...tipProps(title)},h('div',{className:'au-muted'},label),h('div',{className:'au-number'},value),h('div',{className:'au-muted',...tipProps(typeof note==='string'?note:title)},note))}
 // A bounded reader keeps a keyed visible entry, not a pixel count. Prepending
 // records (or changing their heights) must not move the entry being read.
 function readerSnapshot(root){
@@ -2033,7 +2113,7 @@ function ResponsiveTable({headers,rows,footer,rowKeys,accordions}){
  i===0&&entry?h('button',{type:'button',className:'au-record-disclosure','aria-label':(expanded[key]?'Collapse ':'Expand ')+(entry.disclosureLabel||String(typeof entry.identity==='string'?entry.identity:key)+' details'),'aria-expanded':!!expanded[key],onClick:()=>setExpanded(old=>({...old,[key]:!old[key]}))},
   h('span',{'aria-hidden':true},expanded[key]?'▾':'▸'),entry.onFilter?null:h('span',{className:'au-record-identity'},entry.identity),
   entry.started?h('span',{className:'au-muted'},when(entry.started)):null,
-  ...(entry.summary||[]).map((item,j)=>h('span',{key:j,className:'au-record-summary',title:item.title},
+  ...(entry.summary||[]).map((item,j)=>h('span',{key:j,className:'au-record-summary',...tipProps(item.title)},
    h('span',{className:'au-record-summary-label'},item.label),h('strong',{},item.value))),
   entry.value!=null?h('strong',{},entry.value):null):null,
  h('span',{className:'au-field-label','aria-hidden':true},headers[i]),h('div',{className:'au-field-value'},value)));
@@ -2085,7 +2165,7 @@ function JsonRecord({record,entryKey,entries}){
  const icon=h('svg',{viewBox:'0 0 24 24',width:16,height:16,fill:'none',stroke:'currentColor',strokeWidth:1.7,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true,focusable:false},
   copyState==='copied'?h('path',{d:'M5 12l4 4L19 6'}):[h('rect',{key:'a',x:8,y:8,width:12,height:12,rx:2}),h('path',{key:'b',d:'M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3'})]);
  return h('details',{className:'au-json-details',open:!!entry,onToggle:toggle,'data-testid':'usage-details','data-record-id':record.id},
-  h('summary',{title:'Snapshot stays fixed while open. Close and reopen for newer values.'},'Usage / routing'),
+  h('summary',tipProps(tipLines('This snapshot does not update while open','Close and reopen it for newer values')),'Usage / routing'),
   h('div',{className:'au-json-panel'},
    h('div',{className:'au-json-toolbar'},h('span',{className:'au-json-copy-status',role:'status','aria-live':'polite'},copyState==='copied'?'Copied':copyState==='failed'?'Copy unavailable — select text to copy':''),
     h('button',{type:'button',className:'au-json-copy',onClick:copy,'data-testid':'copy-json','aria-label':'Copy JSON to clipboard',title:copyState==='copied'?'Copied':'Copy full JSON'},icon)),
@@ -2101,7 +2181,7 @@ function tokensDetail(r,details){
 
 // Use the normalized exclusive-input bucket, not subtraction of partial aggregates.
 // An all-unknown bucket is not zero; retain the missing-field indicators.
-const SESSION_WRITE_BASIS='Calculated per session: max(0, current cache reads − previous cache reads).';
+const SESSION_WRITE_BASIS=tipLines('Calculated per session','This request\'s cache reads minus the previous request\'s','Never below 0');
 function sessionWrites(summary,format=short){
  if(!summary?.attempts)return format(0);
  const w=summary.session_cache_writes;
@@ -2236,7 +2316,10 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   const previous=boundaryTimes.filter(t=>t<=start-minZoom).at(-1);
   return previous==null?null:[previous,start];
  };
- const chartHelp='Click to interact with Left/Right arrow keys. '+(canZoom?'Click and drag at least 15 minutes from the start to preview a 30-minute or longer window on half-hour boundaries.':'This window is 30 minutes or shorter; drag zoom is unavailable.')+' Peak observed excludes missing/unmatched child lifecycle events; it is not a true maximum.';
+ const chartHelp=tipLines('Click the chart, then use ←/→ to step through buckets',
+  canZoom?['Drag 15 minutes or more to zoom','Snaps to :00/:30, 30 minutes minimum']:[tipTone('muted','Drag zoom is unavailable'),tipTone('muted','This window is 30 minutes or shorter')],
+  tipTone('muted','Peak subagents counts matched start/stop pairs only'));
+ const chartHelpText=tipPlain(chartHelp);
  function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
  const {line,area}=allProviders?{line:'',area:''}:traces(vals);
@@ -2244,13 +2327,17 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  // exceeds one day (e.g. 7-day hourly or 30-day 6-hour buckets).
  const stamp=t=>(data?.trend?.seconds||86400)<86400?bucketStamp(t,{date:plotEnd-plotStart>86400,time:'minute'}):bucketStamp(t),zone=spanZoneName(points.map(p=>p.start)),active=hover==null?null:points[Math.min(hover,points.length-1)];
  const activeZone=active?localZoneName(new Date(active.start*1000)):'';
- const pointSummary=active?new Date(active.start*1000).toLocaleString()+(activeZone?' '+activeZone:'')+' · '+(cost?selectedCost(active):viewTokens(active,'total_tokens',count)+' tokens')+' · '+count(active.attempts)+' requests'+(active.unpriced_requests&&cost?' · partial price coverage · '+count(active.unpriced_requests)+' requests unpriced':active.missing_usage?' · includes missing usage':'')+' · '+peakLabel(active.peak_observed,data?.coverage):null;
+ // Selected-point footer: time, amounts, any coverage warning, then peak.
+ const pointSummary=active?tipLines(tipEsc(new Date(active.start*1000).toLocaleString()+(activeZone?' '+activeZone:'')),
+  tipEsc((cost?selectedCost(active):tokenCount(active))+' · '+plural(active.attempts,'request')),
+  active.unpriced_requests&&cost?tipTone('warn','Partial price coverage · '+plural(active.unpriced_requests,'request')+' unpriced'):active.missing_usage?tipTone('warn','Includes missing usage'):null,
+  tipEsc(peakLabel(active.peak_observed,data?.coverage))):null;
  const providerSummary=allProviders&&active?JSON.stringify(series.map(s=>{
   const row=active.provider_buckets.find(item=>item.provider===s.provider);
   return {provider:s.provider,label:providerLabel(s.provider,seriesIds),
-   value:(cost?selectedCost(row):viewTokens(row,'total_tokens',count))+(cost?'':' tokens')+' · '+count(row?.attempts||0)+' requests'+
-    (cost&&row?.unpriced_requests?' · partial price coverage · '+count(row.unpriced_requests)+' requests unpriced':row?.missing_usage?' · includes missing usage':'')+
-    (data?.coverage?.status==='partial'?' · partial profile coverage':'')};
+   value:tipEsc((cost?selectedCost(row):tokenCount(row))+' · '+plural(row?.attempts||0,'request'))+
+    (cost&&row?.unpriced_requests?' · '+tipTone('warn','partial price coverage · '+plural(row.unpriced_requests,'request')+' unpriced'):row?.missing_usage?' · '+tipTone('warn','includes missing usage'):'')+
+    (data?.coverage?.status==='partial'?' · '+tipTone('warn','partial profile coverage'):'')};
  })):null;
  // SVG screen transforms include preserveAspectRatio letterboxing in short panes.
  const plotX=e=>{const svg=e.currentTarget.ownerSVGElement,p=svg.createSVGPoint();p.x=e.clientX;p.y=e.clientY;return Math.max(L,Math.min(W-R,p.matrixTransform(svg.getScreenCTM().inverse()).x))};
@@ -2263,7 +2350,7 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
   const range=d.moved?zoomRange(d.start,d.end):null;
   if(range&&onSelectRange)onSelectRange(...range);
  };
- return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
+ return h('div',{ref:node=>{chartRef.current=node},className:'au-chart','data-testid':'usage-chart','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,tabIndex:0,role:'group','aria-label':'Usage chart. Arrow keys inspect time buckets.',title:chartHelpText,'data-au-tip':chartHelp,onKeyDown:e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHover(Math.max(0,Math.min(points.length-1,(hover??0)+(e.key==='ArrowRight'?1:-1))))}}},
  h('div',{className:'au-chart-title'},bucketTitle(unit)+(/ buckets$/.test(bucketTitle(unit))?' · ':' ')+(cost?'cost':'processed tokens'),h('span',{className:'au-muted'},(zone?zone+' · ':'')+'by request start')),
  h('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':(cost?'Cost':'Token')+' history, '+points.length+' '+bucketLabels(unit).size+' buckets'+(zone?', times in '+zone:'')},
  ...[0,.25,.5,.75,1].map((f,i)=>h('g',{key:i},h('line',{x1:L,y1:yy(top*f),x2:W-R,y2:yy(top*f),className:'au-gridline'}),h('text',{x:L-10,y:yy(top*f)+4,textAnchor:'end',className:'au-axis'},cost?dollars(top*f):short(top*f)))),
@@ -2274,10 +2361,10 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  ...(allProviders?active?series.filter(s=>s.values[hover]!=null).map(s=>h('circle',{key:s.provider,cx:xx(hover),cy:yy(s.values[hover]),r:4,className:'au-point au-provider-point','data-provider':s.provider,style:{fill:providerAccent(s.provider)}})):[]:
   [active&&vals[hover]!=null?h('circle',{cx:xx(hover),cy:yy(vals[hover]),r:4,className:'au-point'}):null]),
  selection?h('rect',{key:'selection',className:'au-plot-selection',x:Math.min(...selection),y:T,width:Math.abs(selection[1]-selection[0]),height:hg}):null,
- h('rect',{key:'hit',className:'au-plot-hit','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,x:L,y:T,width:w,height:hg,
+ h('rect',{key:'hit',className:'au-plot-hit','data-au-chart-summary':pointSummary,'data-au-chart-providers':providerSummary,'data-au-tip':chartHelp,x:L,y:T,width:w,height:hg,
   onPointerDown:e=>{if(e.button!==0||!e.isPrimary||!points.length)return;e.preventDefault();e.currentTarget.closest('.au-chart').focus({preventScroll:true});if(!canZoom)return;const x=plotX(e),start=nearestBoundary(x);drag.current={id:e.pointerId,start,end:start,pointerTime:plotStart+(x-L)/w*(plotEnd-plotStart),clientX:e.clientX,moved:false};e.currentTarget.setPointerCapture(e.pointerId)},
   onPointerMove:move,onPointerUp:release,onPointerCancel:cancel,onLostPointerCapture:cancel,onPointerLeave:()=>{if(!drag.current)setHover(null)}},
-  h('title',{},chartHelp))),
+  h('title',{},chartHelpText))),
  h('div',{className:'au-chart-tip au-muted'},data?.summary?.attempts?'':'No recorded activity in this window.'),
  )
 }
@@ -2295,15 +2382,23 @@ function bucketLabels(unit){
 function bucketTitle(unit){return bucketLabels(unit).title}
 function bucketGroupName(trend){return trend?.seconds===60?'Minute':bucketLabels(trend?.unit).group}
 function missingFieldNote(summary,key){
- const n=summary?.missing_fields?.[key]||0;if(!n)return 'Reported tokens';
- const labels={awaiting_usage:'awaiting usage (owner process observed live)',unresolved_execution:'unresolved execution; usage unknown',abandoned_execution:'abandoned execution; field not reported',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
+ const n=summary?.missing_fields?.[key]||0;if(!n)return tipTone('ok','Every request reported this value');
+ const labels={awaiting_usage:'awaiting usage, owner process still live',unresolved_execution:'unresolved, usage unknown',abandoned_execution:'abandoned, field not reported',unverified_accounting:'unverified cache accounting',ended_without_usage:'ended without reported usage',unreported_field:'field not reported'};
  const reasons=summary?.missing_reasons?.[key];
- const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>count(reasons[name])+' '+label):[];
- return (parts.length?parts.join(' · '):count(n)+' requests without this value')+' · subtotal';
+ const parts=reasons?Object.entries(labels).filter(([name])=>reasons[name]>0).map(([name,label])=>tipTone('warn',count(reasons[name]))+' '+label):[];
+ return tipLines(tipTone('warn','Known subtotal'),parts.length?parts:tipTone('warn',plural(n,'request'))+' without this value');
 }
 function peakValue(value,coverage){return value?.value==null?'—':count(value.value)+(value.unmatched||coverage?.status==='partial'?' · partial':'')}
-function peakLabel(value,coverage){return 'Peak observed subagents: '+peakValue(value,coverage)}
-function peakTitle(value,coverage){return 'Distinct child identities in overlapping matched start/stop intervals, clipped to this window. '+(value?.value==null?'No matched lifecycle evidence; value unavailable. ':'')+'Unmatched/open or ambiguous lifetimes are excluded'+(value?.unmatched?' ('+count(value.unmatched)+' unmatched events)':'')+'. Missing hooks mean this is not a true maximum; provider/model and group attribution uses recorded child requests, not lifecycle metadata.'+(coverage?.status==='partial'?' Partial profile coverage.':'')+(coverage?.status==='unavailable'?' No readable profiles.':'')+(coverage?' All-profile snapshots are not simultaneous.':'')}
+function peakLabel(value,coverage){return 'Peak subagents: '+peakValue(value,coverage)}
+function peakTitle(value,coverage){return tipLines(
+ 'Peak subagents: '+(value?.value==null?tipTone('warn','unavailable'):tipTone('key',count(value.value))),
+ 'Most distinct child agents running at once in this window',
+ value?.value==null?tipTone('warn','No matched start/stop pairs, so no value'):null,
+ 'Counts matched start/stop pairs only'+(value?.unmatched?' · '+tipTone('warn',plural(value.unmatched,'unmatched event'))+' left out':''),
+ coverage?.status==='partial'?tipTone('warn','Partial profile coverage'):coverage?.status==='unavailable'?tipTone('warn','No readable profiles'):null,
+ tipTone('muted','Missing hooks can make this an undercount'),
+ tipTone('muted','Provider, model and group values come from recorded child requests'),
+ coverage?tipTone('muted','Each profile is read separately, not at one moment'):null)}
 // Compact per-provider allowance bars under each All-providers summary row:
 // label above bar only, from the already-loaded /usage catalogue. Hovering a
 // bar shows its remaining percentage through the shared title tooltip.
@@ -2317,7 +2412,8 @@ function ProviderRowQuota({windows,provider,limitsStatus}){
  return h('div',{className:'au-row-quota','data-testid':'provider-row-quota',...(stacked?{'data-layout':'stacked'}:{})},...windows.map((w,index)=>{
   const text=label(w),left=Math.max(0,Math.min(100,w.remaining_percent)),stale=w.stale===true;
   return h('div',{key:index,className:'au-row-quota-window','data-window':w.label,...(stale?{'data-stale':'true'}:{}),
-    title:pct(left)+' left'+(stale?' · stale. '+staleWindowNote(w,limitsStatus):'')},
+    ...tipProps(stale?tipLines(tipTone('warn',pct(left)+' left · stale'),staleWindowNote(w,limitsStatus))
+     :tipLines(tipTone(left<=25?'warn':'ok',pct(left)+' left'),resetLabel(w.reset_at)?tipEsc('Resets '+resetLabel(w.reset_at).slice(7)):null))},
    h('span',{className:'au-row-quota-label'},text,stale?h('span',{className:'au-row-quota-stale'},' stale'):null),
    h('div',{className:'au-row-quota-track',role:'meter','aria-label':text+' allowance remaining'+(stale?' (stale)':''),'aria-valuemin':0,'aria-valuemax':100,'aria-valuenow':Math.round(left)},
     h('div',{className:'au-row-quota-fill',style:{width:Math.max(1,left)+'%'}})));
@@ -2328,28 +2424,28 @@ function Summary({data,label,mode,agent,onSubagents,onSelectRange,allProviders,q
  if(!s)return h('section',{'data-testid':'recorded-summary',role:'status'},data?'Recorded usage unavailable for this selection.':'Loading recorded usage…');
  const t=key=>data?viewTokens(s,key):'—';
  const note=key=>{const awaiting=s.missing_reasons?.[key]?.awaiting_usage||0;
-  return h('span',{title:missingFieldNote(s,key)},awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
+  return h('span',tipProps(missingFieldNote(s,key)),awaiting?count(awaiting)+' awaiting usage · subtotal':missing[key]?'Known subtotal':'Reported tokens')};
  const groups=data?.provider_groups||[];
  const providerIds=groups.map(row=>row.provider);
  const quotaById=new Map((allProviders&&Array.isArray(quotaProviders)?quotaProviders:[]).filter(p=>p&&typeof p.id==='string').map(p=>[p.id,p.quota]));
  const providerRows=groups.map(g=>h('div',{key:g.provider,className:'au-provider-row','data-provider':g.provider,style:{'--au-provider-accent':providerAccent(g.provider)}},
-   h('span',{title:providerLabel(g.provider,providerIds)+' · '+count(g.sessions)+' sessions'},h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
+   h('span',tipProps(tipLines(tipTone('key',providerLabel(g.provider,providerIds)),plural(g.sessions,'session'))),h('i',{className:'au-dot'}),providerLabel(g.provider,providerIds),h('small',{},' '+count(g.sessions)+' sessions')),
    h('strong',{},mode==='Cost'?selectedCost(g):viewTokens(g,'total_tokens')),
    h('div',{className:'au-muted'},(k.total_tokens?((g.known.total_tokens/k.total_tokens)*100).toFixed(1):'0.0')+'% of known tokens · ',h('strong',{className:'au-provider-cost'},selectedCost(g)),h(UnpricedMark,{summary:g})),
-   h('small',{className:'au-muted',title:peakTitle(g.peak_observed,data?.coverage)},peakLabel(g.peak_observed,data?.coverage)),
+   h('small',{className:'au-muted',...tipProps(peakTitle(g.peak_observed,data?.coverage))},peakLabel(g.peak_observed,data?.coverage)),
    h(ProviderRowQuota,{windows:measuredWindows(quotaById.get(g.provider)),provider:g.provider,limitsStatus:quotaById.get(g.provider)?.limits_status})));
  return h('section',{className:'au-usage-summary','data-testid':'recorded-summary','aria-label':label+' usage totals'},
  h('div',{className:'au-metrics au-totals au-section-summary','data-testid':'usage-totals'},
- metric('Processed tokens',t('total_tokens'),note('total_tokens'),count(k.total_tokens)),
- metric('Cached input',t('cache_read_tokens'),s?.cache_hit_rate!=null?(100*s.cache_hit_rate).toFixed(2)+'% weighted cache hit':note('cache_read_tokens'),'Tokens served from cache; cache reads'),
- metric('Uncached input',t('input_tokens'),note('input_tokens'),'Input processed without cache reads or writes'),
- metric('Output',t('output_tokens'),note('output_tokens'),'Includes reasoning when reported'),
+ metric('Processed tokens',t('total_tokens'),note('total_tokens'),tipTone('key',count(k.total_tokens))+' known '+units(k.total_tokens,'token')),
+ metric('Cached input',t('cache_read_tokens'),s?.cache_hit_rate!=null?(100*s.cache_hit_rate).toFixed(2)+'% weighted cache hit':note('cache_read_tokens'),'Input tokens read from the cache'),
+ metric('Uncached input',t('input_tokens'),note('input_tokens'),'Input tokens with no cache read or write'),
+ metric('Output',t('output_tokens'),note('output_tokens'),'Includes reasoning tokens when the provider reports them'),
  metric('Cache writes',sessionWrites(s),sessionWriteNote(s),SESSION_WRITE_BASIS),
- metric('Cache savings',savingsValue(s),(s?.savings_missing?.cache_savings_usd?count(s.savings_missing.cache_savings_usd)+' incomplete savings estimates · subtotal':'Net of cache-write premium'),'Estimated read discount minus extra cache-write cost at the same rates. Incomplete estimates can reflect unavailable token fields, not just missing prices.'),
- h('button',{className:'au-subagent-card','data-testid':'subagent-summary','aria-pressed':agent==='subagent',onClick:onSubagents,title:'Filter to subagent requests. These tokens are already included in the total.'},
+ metric('Cache savings',savingsValue(s),(s?.savings_missing?.cache_savings_usd?count(s.savings_missing.cache_savings_usd)+' incomplete savings estimates · subtotal':'Net of cache-write premium'),tipLines('Read discount minus the extra cost of cache writes','Both at the same rates',tipTone('muted','An incomplete estimate can mean a missing token field, not only a missing price'))),
+ h('button',{className:'au-subagent-card','data-testid':'subagent-summary','aria-pressed':agent==='subagent',onClick:onSubagents,...tipProps(tipLines('Show subagent requests only',tipTone('muted','These tokens are already in the total')))},
  h('span',{className:'au-muted'},'Subagent tokens'),h('span',{className:'au-number'},viewTokens(data?.subagent_summary,'total_tokens')),
- h('span',{className:'au-muted',title:count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
- h('span',{className:'au-muted',title:peakTitle(data?.subagent_summary?.peak_observed,data?.coverage)+' · '+(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% of known tokens · '+selectedCost(data?.subagent_summary)},'Peak '+peakValue(data?.subagent_summary?.peak_observed,data?.coverage)+' · '+(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% · '+selectedCost(data?.subagent_summary)))),
+ h('span',{className:'au-muted',...tipProps(tipLines(tipTone('key',count(data?.subagent_summary?.agents||0))+' '+units(data?.subagent_summary?.agents||0,'agent'),tipTone('key',count(data?.subagent_summary?.attempts||0))+' '+units(data?.subagent_summary?.attempts||0,'request')))},count(data?.subagent_summary?.agents||0)+' agents · '+count(data?.subagent_summary?.attempts||0)+' requests'),
+ h('span',{className:'au-muted',...tipProps(tipLines(tipTone('key',(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'%')+' of known tokens · '+tipTone('key',selectedCost(data?.subagent_summary)),peakTitle(data?.subagent_summary?.peak_observed,data?.coverage)))},'Peak '+peakValue(data?.subagent_summary?.peak_observed,data?.coverage)+' · '+(k.total_tokens?100*(data?.subagent_summary?.known?.total_tokens||0)/k.total_tokens:0).toFixed(1)+'% · '+selectedCost(data?.subagent_summary)))),
  mode!=='Limits'?h('div',{className:'au-hero','data-testid':'usage-hero'},h('div',{className:'au-hero-total'},
  h('div',{className:'au-big'},mode==='Cost'?selectedCost(s):t('total_tokens')),
  h('div',{className:'au-muted'},count(s?.sessions||0)+' sessions · '+(mode==='Cost'?'API-equivalent estimate':'processed tokens')),
@@ -2385,9 +2481,9 @@ function Breakdown({data,header,mode,onDrill,group,setGroup}){
  }
  const detail=group==='project'||group==='session'||group==='subagent';
  return h('section',{className:'au-breakdown','aria-label':'Usage breakdown'},h('div',{className:'au-toolbar','data-testid':'breakdown-controls',style:{justifyContent:'flex-end'}},h('div',{className:'au-segment au-breakdown-options',role:'group','aria-label':'Breakdown grouping'},...Object.entries(grouping).map(([g,label])=>h('button',{key:g,'aria-pressed':g===group,onClick:()=>setGroup(g)},label)))),
- rows.length?table([group==='time'?timeName+(rowsZone?' ('+rowsZone+')':''):grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak observed']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
+ rows.length?table([group==='time'?timeName+(rowsZone?' ('+rowsZone+')':''):grouping[group],'Cost · API estimate','Share','Processed tokens','Sessions',...(group==='subagent'?[]:['Peak subagents']),...(detail?['Subagents','Subagent tokens']:[])],rows.map(g=>{
   const value=mode==='Cost'?Number(g.known_cost_usd):g.known.total_tokens;
-  return [name(g),h('span',{},selectedCost(g),h(UnpricedMark,{summary:g})),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',{title:peakTitle(g.peak_observed,data?.coverage)},peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
+  return [name(g),h('span',{},selectedCost(g),h(UnpricedMark,{summary:g})),total?(100*value/total).toFixed(1)+'%':'—',viewTokens(g,'total_tokens'),count(g.sessions),...(group==='subagent'?[]:[h('span',tipProps(peakTitle(g.peak_observed,data?.coverage)),peakValue(g.peak_observed,data?.coverage))]),...(detail?[count(g.subagents||0),short(g.subagent_tokens||0)]:[])];
  }),null,rows.map(g=>JSON.stringify([group,g.key,g.provider,g.model,g.start])),rows.map(g=>({
   identity:name(g,false),disclosureLabel:grouping[group]+' '+(group==='model'?g.model+' · '+(uiNames[g.provider]||g.provider):group==='time'?new Date(g.start*1000).toLocaleString():readable(g,'key'))+' details',filterKind:group,onFilter:nextDrillFilters(EMPTY_REQUEST_FILTERS,group,g)?()=>onDrill(group,g):null,summary:[
    {label:'Cost · API estimate',value:selectedCost(g)+unpricedSuffix(g),title:unpricedNote(g)},
@@ -2442,7 +2538,7 @@ function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,i
  return h('nav',{className:'au-request-navigation','aria-label':'Usage filter navigation','data-testid':'request-navigation'},
   chips.length?h('div',{className:'au-active-scopes',role:'group','aria-label':'Active request filters'},...chips):null,
   h('div',{className:'au-return-actions'},
-   h('button',{type:'button',className:'au-return-button','data-testid':'request-show-all',onClick:onShowAll,title:'Clear identity and time-bucket filters. Keep the current provider and selected time window.'},overview?'Clear selection':'Show all requests'),
+   h('button',{type:'button',className:'au-return-button','data-testid':'request-show-all',onClick:onShowAll,...tipProps(tipLines('Clears identity and time-bucket filters','Keeps the provider and time window'))},overview?'Clear selection':'Show all requests'),
    previous?h('button',{type:'button',className:'au-return-button','data-testid':'request-back',onClick:onBack,title:previous.tab==='Overview'?'Return to the previous breakdown':'Return to the previous request list','aria-label':'Back to previous view'},
     h('svg',{className:'au-back-icon',viewBox:'0 0 16 16',width:14,height:14,fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true,focusable:'false'},h('path',{d:'M7 4 3 8l4 4M3 8h10'})),
     h('span',{className:'au-return-label'},'Back')):null));
@@ -2450,9 +2546,9 @@ function RequestNavigation({filters,history,projects,onBack,onShowAll,onRemove,i
 
 function RequestView({data,onDrill,details}){
  const rows=(data.requests||[]).map(r=>{const u=r.usage||{};return [h('span',{title:when(r.started)},compactWhen(r.started)),r.provider,r.response_model||r.model,
-  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',{title:SESSION_WRITE_BASIS},count(r.calculated_cache_writes?.tokens)),h('span',{title:r.supplemental_valuation?'Retrospective API-equivalent estimate using rates observed '+when(r.supplemental_valuation.observed_at)+'; original saved cost is in Details. Not a historical charge.':'Saved request cost estimate'},money(r.cost?.total_usd),r.supplemental_valuation?' †':''),tokensDetail(r,details)]})
+  r.session_id?h('button',{className:'au-drill',onClick:()=>onDrill('session',{key:r.session_id}),title:r.session_id},(r.original_ids?readable(r,'session_id'):r.session_id.slice(-18))):h('span',{},'Unattributed'+provenance(r)),h('span',{title:'Parent: '+(originalId(r,'parent_session_id')||'not reported')},r.agent_kind==='subagent'?'Subagent'+(r.agent_role?' · '+r.agent_role:''):r.agent_kind==='primary'?'Primary':'Unattributed'),h('span',{title:r.project_path||''},(r.project_label||'—')+provenance(r)),originalId(r,'task'),r.execution_state==='unresolved'?'unresolved (execution unknown)':r.execution_state==='owner_live'?'open (owner observed live)':r.status,count(u.input_tokens),count(u.output_tokens),count(u.cache_read_tokens),h('span',tipProps(SESSION_WRITE_BASIS),count(r.calculated_cache_writes?.tokens)),h('span',tipProps(r.supplemental_valuation?tipLines(tipTone('warn','Retrospective estimate'),'API-equivalent cost at rates seen '+tipTone('key',when(r.supplemental_valuation.observed_at)),'The original saved cost is in Details',tipTone('muted','Not a historical charge')):'Cost estimate saved with the request'),money(r.cost?.total_usd),r.supplemental_valuation?' †':''),tokensDetail(r,details)]})
  return h('div',{'data-testid':'request-list'},
-  table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
+  table(['Started','Provider','Model','Session','Agent','Project','Task','State','Uncached input','Output','Read',h('span',tipProps(SESSION_WRITE_BASIS),'Writes · calc.'),'Est. USD','Details'],rows,null,(data.requests||[]).map(r=>r.id),
    (data.requests||[]).map(r=>({identity:r.session_id?readable(r,'session_id'):'Unattributed session'+provenance(r),disclosureLabel:'request '+r.id+' details',started:r.started,value:r.usage?.total_tokens==null?'Tokens unavailable':count(r.usage.total_tokens)+' tokens'}))),
  !rows.length?h('p',{className:'au-muted'},'No matching requests.'):null)
 }
@@ -2469,9 +2565,9 @@ function CompressionView({data,mode,setMode,details}){
  })
  return h('section',{'data-testid':'compression-events','aria-label':'Compression events'},
  h('div',{className:'au-toolbar'},h('select',{value:mode,onChange:e=>setMode(e.target.value),'aria-label':'Compression type'},...['all','compression','micro_compaction'].map(v=>h('option',{key:v,value:v},v.replaceAll('_',' ')))),
- h('button',{onClick:()=>downloadFile('compression-events.json',JSON.stringify(data.compressions,null,2),'application/json'),title:data.list_next_offset!=null?'Exports only the records loaded in this pane. Use View all records first for a complete selection.':'Exports the currently displayed compression selection.'},data.list_next_offset!=null?'Export loaded compression JSON':'Export compression JSON')),
+ h('button',{onClick:()=>downloadFile('compression-events.json',JSON.stringify(data.compressions,null,2),'application/json'),...tipProps(data.list_next_offset!=null?tipLines(tipTone('warn','Exports only the loaded records'),'Use View all records first to export the whole selection'):'Exports the compression records shown')},data.list_next_offset!=null?'Export loaded compression JSON':'Export compression JSON')),
  h('div',{'data-testid':'compression-table'},table(['Started','Kind','Trigger','Outcome','Before (estimated)','Threshold','After (estimated)','Next call (estimated)','Next call input (reported)','Aux tokens (known)','Aux $ (known)','Details'],rows,null,visible.map(c=>c.id),
-  visible.map(c=>({identity:readable(c,c.session_id?'session_id':'session_after'),disclosureLabel:'compression '+c.id+' details',started:c.started,value:h('span',{title:'Start: configured compression threshold (not measured starting usage). End: reported next-call input, which may include new content; not an exact post-compression size.'},'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
+  visible.map(c=>({identity:readable(c,c.session_id?'session_id':'session_after'),disclosureLabel:'compression '+c.id+' details',started:c.started,value:h('span',tipProps(tipLines('Start: the configured compression threshold, not measured starting usage','End: input reported by the next call',tipTone('muted','End can include new content, so it is not the exact size after compression'))),'Start: '+count(c.threshold_tokens)+' · End: '+count(c.next_request_prompt_tokens)+' tokens')})))),
  !rows.length?h('p',{className:'au-muted'},'No compression events in this window.'):null,
  data.list_count==null&&data.compression_truncated?notice('First 1,000 compression records shown. Narrow the time window for a complete compression export.'):null)
 }
@@ -2483,14 +2579,14 @@ function CacheWindowFilters({period,onPeriod,startValue,endValue,onStart,onEnd,w
   h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Cache time window'},...Object.entries(choices).map(([value,label])=>h('button',{key:value,type:'button','aria-pressed':period===value,onClick:()=>onPeriod(value)},label))),
   h('select',{className:'au-period-select','aria-label':'Cache time window',value:period,onChange:e=>onPeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([value,label])=>h('option',{key:value,value},label))),
   period==='custom'?h('input',{type:'datetime-local',step:1800,value:startValue,'aria-label':'Cache window start',onChange:e=>onStart(e.target.value)}):null,
-  period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',title:'Leave empty to view until now; the window keeps growing.',onChange:e=>onEnd(e.target.value)}):null,
+  period==='custom'?h('input',{type:'datetime-local',step:1800,value:endValue,'aria-label':'Cache window end',...tipProps(tipLines('Leave empty to view up to now','The window keeps growing')),onChange:e=>onEnd(e.target.value)}):null,
   h('span',{className:'au-muted au-window-label'},window?new Date(window.start*1000).toLocaleString()+' — '+new Date(window.end*1000).toLocaleString():''));
 }
 // Unpriced usage is loud, never a bare '*'. The count and reason ride on the
 // shared tooltip (title); fully priced groups (including a known $0.00) show
 // nothing. Older DTOs without `unpriced` fall back to unpriced_requests.
 const UNPRICED_REASONS={no_catalogue:'no price catalogue for this provider yet',
- model_missing:'model not in the provider or OpenRouter catalogue',
+ model_missing:'not in any catalogue',
  ambiguous:'model id matches more than one list price',
  usage_missing:'usage not reported yet, or a token field is missing',
  endpoint_unpriced:'tier or endpoint without a published rate (Priority, Batch, US-only…)'};
@@ -2498,13 +2594,14 @@ function unpricedCount(s){const n=s?.unpriced?.requests??s?.unpriced_requests;re
 function unpricedNote(s,lead){
  const n=unpricedCount(s);if(!n)return undefined;
  const reasons=Object.entries(s?.unpriced?.reasons||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
- return (lead||'Known cost subtotal.')+' '+count(n)+' request'+(n===1?'':'s')+' unpriced'+
-  (s?.unpriced?.tokens?' ('+count(s.unpriced.tokens)+' tokens)':'')+(reasons.length?': '+reasons.map(([k,v])=>count(v)+' '+(UNPRICED_REASONS[k]||k)).join('; '):'')+'.';
+ return tipLines(tipTone('warn',plural(n,'request')+' unpriced')+(s?.unpriced?.tokens?' · '+plural(s.unpriced.tokens,'token'):''),
+  lead||'Cost shown is the priced subtotal',
+  reasons.map(([k,v])=>tipTone('warn',count(v))+' '+tipEsc(UNPRICED_REASONS[k]||k)));
 }
 function unpricedSuffix(s){const n=unpricedCount(s);return n?' ⚠\uFE0E'+count(n):''}
 function UnpricedMark({summary:s,lead}){
  const n=unpricedCount(s);if(!n)return null;
- return h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:unpricedNote(s,lead),'aria-label':count(n)+' unpriced requests'},unpricedSuffix(s));
+ return h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',...tipProps(unpricedNote(s,lead)),'aria-label':plural(n,'unpriced request')},unpricedSuffix(s));
 }
 const compactTokens=n=>Number(n).toLocaleString('en',{notation:'compact',maximumFractionDigits:1});
 function UnpricedBadge({data}){
@@ -2513,10 +2610,11 @@ function UnpricedBadge({data}){
  const rows=[...(data.model_groups||[]).map(g=>[(uiNames[g.provider]||g.provider)+' · '+g.model,g]),
   ...(data.model_groups?[]:(data.provider_groups||[]).map(g=>[uiNames[g.provider]||g.provider,g]))]
   .filter(([,g])=>g?.unpriced?.tokens>0).sort((a,b)=>b[1].unpriced.tokens-a[1].unpriced.tokens).slice(0,3);
- const title='Costs in this window exclude '+count(total.tokens)+' tokens from '+count(total.requests)+' unpriced requests.'+
-  (rows.length?' '+rows.map(([label,g])=>label+': '+compactTokens(g.unpriced.tokens)+' tokens — '+
-   Object.entries(g.unpriced.reasons||{}).filter(([,v])=>v>0).map(([k])=>UNPRICED_REASONS[k]||k).join(', ')).join('; ')+'.':'');
- return h('span',{className:'au-unpriced-badge','data-testid':'unpriced-badge',tabIndex:0,role:'status',title},compactTokens(total.tokens)+' tokens unpriced');
+ const title=tipLines(tipTone('warn',plural(total.tokens,'token'))+' from '+tipTone('warn',plural(total.requests,'request'))+' have no price',
+  'Costs in this window leave them out',
+  rows.map(([label,g])=>tipTone('key',label)+' · '+plural(g.unpriced.tokens,'token',compactTokens(g.unpriced.tokens))+' · '+
+   tipEsc(Object.entries(g.unpriced.reasons||{}).filter(([,v])=>v>0).map(([k])=>UNPRICED_REASONS[k]||k).join(', '))));
+ return h('span',{className:'au-unpriced-badge','data-testid':'unpriced-badge',tabIndex:0,role:'status',...tipProps(title)},compactTokens(total.tokens)+' tokens unpriced');
 }
 function cacheCostValue(s){
  if(!s?.attempts)return money(0);
@@ -2559,45 +2657,52 @@ function rateContext(rate){
  return [rate.inference_geo==='us'?'US-only 1.1×':'Global',
   rate.service_tier==='fast'&&speedInferred(rate)?'fast inferred':null,suffix].filter(Boolean).join(' · ');
 }
+// Each note is one warning head line (what was assumed) and one plain line
+// (why). Reported enum values are recorder text, so they are escaped.
+// Field names such as usage.speed keep their case; plain words are capitalised.
+const upperFirst=text=>/^[a-z]+\s/.test(text)?text.charAt(0).toUpperCase()+text.slice(1):text;
+function assumedNote(head,detail){return tipLines(tipTone('warn',head),tipEsc(upperFirst(detail)))}
+function notCatalogued(hit,fallback){return hit?reportedPhrase(hit)+', which is not in the catalogue':fallback}
 function geoNote(rate){
- if(rate.inference_geo==='us')return 'US-only inference: published 1.1× data-residency rate (usage.inference_geo reported us).';
- if(rate.geo_basis===UNKNOWN_DEFAULT)return 'Global routing assumed: '+reportedPhrase(reportedValue(rate,['usage.inference_geo']),'usage.inference_geo reported a value')+', not in the catalogue.';
- if(rate.geo_basis==='not_available_as_global')return 'Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.';
- if(rate.geo_basis==='unrecognised_as_global')return 'Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.';
- if(rate.geo_assumption)return 'Global routing assumed: no usage.inference_geo was reported.';
+ if(rate.inference_geo==='us')return tipLines(tipTone('key','US-only inference'),'Published 1.1× data-residency rate','usage.inference_geo reported us');
+ if(rate.geo_basis===UNKNOWN_DEFAULT)return assumedNote('Global routing assumed',notCatalogued(reportedValue(rate,['usage.inference_geo']),'usage.inference_geo reported a value that is not in the catalogue'));
+ if(rate.geo_basis==='not_available_as_global')return assumedNote('Global routing assumed','usage.inference_geo reported not_available on a model with a US rate');
+ if(rate.geo_basis==='unrecognised_as_global')return assumedNote('Global routing assumed retrospectively','The pre-fix recorder kept only an unrecognised sentinel');
+ if(rate.geo_assumption)return assumedNote('Global routing assumed','No usage.inference_geo was reported');
  return null;
 }
 function speedNote(rate){
  const fast=rate.service_tier==='fast';
- if(unknownSpeed(rate))return (fast?'Fast speed assumed from the request: ':'Standard speed assumed: ')+reportedPhrase(reportedValue(rate,['usage.speed']),'usage.speed reported a value')+', not in the catalogue.';
- if(!speedInferred(rate))return anthropicRate(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed.':null;
- if(fast)return 'Fast speed inferred from the request; the response did not report usage.speed.';
- return String(rate.speed_basis||'').startsWith('unknown requested tier')?'Standard speed assumed: no usage.speed reported.':
-  'Standard speed assumed: no fast request and no usage.speed reported.';
+ if(unknownSpeed(rate))return assumedNote(fast?'Fast speed assumed from the request':'Standard speed assumed',notCatalogued(reportedValue(rate,['usage.speed']),'usage.speed reported a value that is not in the catalogue'));
+ if(!speedInferred(rate))return anthropicRate(rate)?(fast?'Fast':'Standard')+' speed reported by usage.speed':null;
+ if(fast)return assumedNote('Fast speed inferred from the request','The response did not report usage.speed');
+ return String(rate.speed_basis||'').startsWith('unknown requested tier')?assumedNote('Standard speed assumed','No usage.speed was reported'):
+  assumedNote('Standard speed assumed','No fast request and no usage.speed was reported');
 }
 function tierNote(rate){
  if(rate.tier_basis!==UNKNOWN_DEFAULT)return null;
- return 'Standard tier assumed: '+reportedPhrase(reportedValue(rate,['usage.service_tier','response service_tier','requested service_tier']),'the reported service tier')+', not in the catalogue.';
+ return assumedNote('Standard tier assumed',notCatalogued(reportedValue(rate,['usage.service_tier','response service_tier','requested service_tier']),'The reported service tier is not in the catalogue'));
 }
 function rateContextNote(rate){
  if(!rate)return undefined;
  if(rate.pricing_basis==='list_price_fallback'){
   const id=rate.fallback_model||rate.model;
-  return [String(rate.basis||'OpenRouter list price').replace(/\.?$/,'.'),
-   'Matched OpenRouter id '+id+(rate.fallback_match==='exact'?' (exact).':rate.fallback_match?' (vendor-prefixed).':'.'),
-   tierNote(rate),speedNote(rate),geoNote(rate)].filter(Boolean).join(' ');
+  return tipLines(tipTone('warn','List price fallback'),String(rate.basis||'OpenRouter list price').split(/;\s+/).map(part=>tipEsc(upperFirst(part.replace(/\.$/,'')))),
+   'Matched OpenRouter id '+tipTone('key',id)+(rate.fallback_match==='exact'?' (exact)':rate.fallback_match?' (vendor-prefixed)':''),
+   tierNote(rate),speedNote(rate),geoNote(rate));
  }
  if(!anthropicRate(rate)){
-  const notes=[tierNote(rate),unknownSpeed(rate)?speedNote(rate):null,rate.geo_basis?geoNote(rate):null].filter(Boolean);
-  return notes.length?notes.join(' '):undefined;
+  const notes=tipLines(tierNote(rate),unknownSpeed(rate)?speedNote(rate):null,rate.geo_basis?geoNote(rate):null);
+  return notes||undefined;
  }
- return ['Direct Anthropic API list rate.',geoNote(rate)||'Global routing.',
-  rate.endpoint_assumption?'Endpoint not recorded; api.anthropic.com assumed.':'Endpoint recorded as api.anthropic.com.',
+ const geo=geoNote(rate);
+ // Defaults share the head line; assumptions keep their warning head/reason pairs.
+ return tipLines('Direct Anthropic API list rate'+(geo?'':' · Global routing'),geo,
+  rate.endpoint_assumption?assumedNote('Endpoint not recorded','api.anthropic.com assumed'):'Recorded endpoint: api.anthropic.com',
   speedNote(rate),tierNote(rate),
-  rate.long_context_flat?'One rate across the full context window.':rate.max_prompt_tokens?'Priced up to '+count(rate.max_prompt_tokens)+' prompt tokens.':null
- ].filter(Boolean).join(' ');
+  rate.long_context_flat?'One rate across the whole context window':rate.max_prompt_tokens?'Priced up to '+tipTone('key',count(rate.max_prompt_tokens))+' prompt '+units(rate.max_prompt_tokens,'token'):null);
 }
-function rateContextCell(rate){const note=rateContextNote(rate),text=rateContext(rate);return note?h('span',{title:note},text):text}
+function rateContextCell(rate){const note=rateContextNote(rate),text=rateContext(rate);return note?h('span',tipProps(note),text):text}
 // All four component rows and the total row are represented once, as cards.
 // Counters/prices still use the same full-window backend aggregates.
 function ComponentCostCards({summary:s}){
@@ -2618,16 +2723,16 @@ function ComponentCostCards({summary:s}){
      ['Incomplete cost estimates',count(priceMissing),'unpriced']];
   return h('article',{key,className:'au-cost-card','data-testid':'cost-card-'+key,'aria-label':label+' cost'},
    h('div',{className:'au-muted'},label),
-   h('div',{className:'au-number','data-testid':'component-amount',title:writes?SESSION_WRITE_BASIS:total?'Full selected-window cost subtotal, not a sum of unit rates.':'API-equivalent cost at the saved request rates.'},writes?sessionWrites(s,count):amount,!writes&&priceMissing?h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',title:total?unpricedNote(s):count(priceMissing)+' requests without a known '+label.toLowerCase()+' cost.'},' ⚠\uFE0E'+count(priceMissing)):''),
+   h('div',{className:'au-number','data-testid':'component-amount',...tipProps(writes?SESSION_WRITE_BASIS:total?tipLines('Known cost for the whole selected window',tipTone('muted','Summed from request costs, not from unit rates')):'API-equivalent cost at the rates saved with each request')},writes?sessionWrites(s,count):amount,!writes&&priceMissing?h('span',{className:'au-unpriced-mark','data-testid':'unpriced-marker',...tipProps(total?unpricedNote(s):tipTone('warn',plural(priceMissing,'request'))+' without a known '+tipEsc(label.toLowerCase())+' cost')},' ⚠\uFE0E'+count(priceMissing)):''),
    h('div',{className:'au-muted'},writes?sessionWriteNote(s):priceMissing?'API-equivalent cost · subtotal':'API-equivalent cost'),
-   h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i,title:field==='missing'?missingFieldNote(s,tokenKey):field==='unpriced'?'A token value or its saved unit rate is unavailable. This is not a count of lost requests.':undefined},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
+   h('dl',{},...lines.flatMap(([name,value,field],i)=>[h('dt',{key:'dt'+i,...tipProps(field==='missing'?missingFieldNote(s,tokenKey):field==='unpriced'?tipLines('Requests missing a token value or its saved unit rate',tipTone('muted','These requests are not lost')):null)},name),h('dd',{key:'dd'+i,'data-field':field},value)])));
  }));
 }
 function SavingsCards({summary:s}){
  const spec=[['cache_read_savings_usd','Cache-read savings','Versus uncached input'],['cache_write_premium_usd','Cache-write premium','Extra cost versus uncached input'],['cache_savings_usd','Net cache savings','Read savings minus write premium']];
  return h('div',{className:'au-metrics au-section-summary','data-testid':'cache-savings-summary'},...spec.map(([key,label,note])=>{
   const missing=s.savings_missing?.[key]||0,covered=Math.max(0,(s.attempts||0)-missing);
-  return h('div',{key,className:'au-metric',title:missing?'Known subtotal only. These savings cards can cover different requests; compare their coverage counts before subtracting them.':note},
+  return h('div',{key,className:'au-metric',...tipProps(missing?tipLines(tipTone('warn','Known subtotal'),'Each savings card can cover different requests','Check request counts before subtracting'):note)},
    h('div',{className:'au-muted'},label),h('div',{className:'au-number'},savingsValue(s,key)),
    h('div',{className:'au-muted'},note),h('div',{className:'au-muted','data-testid':'savings-coverage'},count(covered)+' / '+count(s.attempts||0)+' requests'+(missing?' · subtotal':'')));
  }));
@@ -2639,15 +2744,16 @@ function CacheView({data,profile,provider,refresh,onError}){
  // never a price inferred from the paginated request list.
  const applied=data.applied_rate_groups;
  const rows=(applied||[]).map(g=>{
-  const r=g.rate,source=r?[r.retrospective?'Retrospective current-published-rate estimate; not a historical charge': 'Saved rate at request',r.source,r.source_url,r.observed_at?when(r.observed_at):r.pricing_version].filter(Boolean).join(' · '):'No rate: pending or unpriced request';
-  return [uiNames[g.provider]||g.provider,h('span',{title:source},g.model),g.service_tier||'unspecified',rateContextCell(r),count(g.attempts),
+  const r=g.rate,source=r?tipLines(r.retrospective?[tipTone('warn','Retrospective estimate at current published rates'),tipTone('muted','Not a historical charge')]:'Rate saved with the request',
+   tipEsc(r.source),tipEsc(r.source_url),r.observed_at?tipTone('key',when(r.observed_at)):tipEsc(r.pricing_version)):tipLines(tipTone('warn','No rate'),'The request is pending or unpriced');
+  return [uiNames[g.provider]||g.provider,h('span',tipProps(source),g.model),g.service_tier||'unspecified',rateContextCell(r),count(g.attempts),
    money(r?.input_tokens),money(r?.output_tokens),money(r?.cache_read_tokens),money(r?.cache_write_tokens),viewTokens(g,'total_tokens',count),cacheAmount(g)];
  });
  return h('section',{'data-testid':'cache-costs','aria-label':'Cache costs'},
   s.supplemental_requests?h('p',{className:'au-muted','data-testid':'retrospective-cost-note'},count(s.supplemental_requests)+' request(s) include retrospective API-equivalent estimates at currently observed provider rates, not historical charges. Original costs remain in request Details.'):null,
   h(ComponentCostCards,{summary:s}),
   h(SavingsCards,{summary:s}),
-  h('section',{'data-testid':'published-rates','aria-label':'Applied rates and usage for the selected window',title:'Applied saved rates and labelled retrospective rates in USD per 1M tokens; usage and costs cover the full selected window'},
+  h('section',{'data-testid':'published-rates','aria-label':'Applied rates and usage for the selected window',...tipProps(tipLines('Rates in USD per 1M tokens','Saved rates, plus labelled retrospective rates','Usage and costs cover the whole selected window'))},
    applied==null?h('p',{className:'au-muted',role:'status'},'Restart the Hermes backend to load window-specific rates.'):
     table(['Provider','Exact model','Tier','Context','Requests','Uncached $ / 1M','Output $ / 1M','Read $ / 1M','Write $ / 1M','Processed tokens','Est. USD'],rows,
      ['Total','','','',''+count(s.attempts),'','','','',viewTokens(s,'total_tokens',count),cacheAmount(s)],
@@ -2656,7 +2762,7 @@ function CacheView({data,profile,provider,refresh,onError}){
    applied?.length===0?h('p',{className:'au-muted'},'No recorded requests in this window.'):null),
   !isAllProfiles(profile)&&h('div',{className:'au-toolbar','data-testid':'price-refresh-controls',style:{justifyContent:'flex-end',marginTop:16}},
    catalogs.some(p=>p.status==='unavailable'||p.stale)?h('small',{className:'au-muted',role:'status'},'Some prices unavailable or stale'):null,
-   h('button',{onClick:update,disabled:pricingBusy,title:'Queue a public provider catalog refresh (at most once per minute per source). Existing saved costs remain fixed; previously unpriced requests can gain read-only retrospective estimates.'},pricingBusy?'Refreshing…':'Refresh provider prices')))
+   h('button',{onClick:update,disabled:pricingBusy,...tipProps(tipLines('Queues a refresh of public provider price lists','At most once a minute per source','Saved costs stay as they are','Unpriced requests can gain read-only retrospective estimates'))},pricingBusy?'Refreshing…':'Refresh provider prices')))
 }
 
 
@@ -3445,7 +3551,7 @@ function RefreshMenu({refresh,reload,busy}){
   h('summary',{'aria-label':'Refresh actions',title:'Refresh data or reload analytics code'},'▾'),
   h('div',{className:'au-refresh-options'},
    h('button',{type:'button',disabled:busy,onClick:choose(refresh)},'Refresh data'),
-   h('button',{type:'button',disabled:busy,onClick:choose(reload),title:'Reload analytics readers in this backend process. Does not reload recorder hooks or restart agents.'},'Reload analytics backend')));
+   h('button',{type:'button',disabled:busy,onClick:choose(reload),...tipProps(tipLines('Reloads the analytics readers in this backend process',tipTone('muted','Does not reload recorder hooks or restart agents')))},'Reload analytics backend')));
 }
 function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
  const [control]=useState(()=>({alive:true,scope:profile,epoch:0,serial:0,busy:false,latest:{},onHint:null}));
@@ -3471,11 +3577,11 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
  useEffect(()=>{
   let live=true,timer,mode='native-events';
   const update=(state,detail)=>{if(live)setTransport({scope:profile,enabled,state,detail})};
-  if(isAllProfiles(profile)){update('limited','All profiles uses read-only change checks; recorder health is profile-specific.');return()=>{live=false}}
+  if(isAllProfiles(profile)){update('limited','All profiles uses read-only change checks. Recorder health is per profile.');return()=>{live=false}}
   if(!enabled){update('not_needed','Live analytics subscription is idle on Subscriptions.');return()=>{live=false}}
-  if(!socket){update('limited','Live update subscription unavailable; REST polling remains active.');return()=>{live=false}}
+  if(!socket){update('limited','Live update subscription unavailable. REST polling continues.');return()=>{live=false}}
   update('connecting','Waiting for the live update subscription to acknowledge.');
-  const deadline=ms=>{clearTimeout(timer);timer=setTimeout(()=>update('limited','No recent subscription acknowledgement; REST polling remains active.'),ms)};
+  const deadline=ms=>{clearTimeout(timer);timer=setTimeout(()=>update('limited','No recent subscription acknowledgement. REST polling continues.'),ms)};
   deadline(8000);
   let stop;
   try{stop=socket('/ledger/events?profile='+encodeURIComponent(profile),frame=>{
@@ -3486,7 +3592,7 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
     control.onHint?.();
    }
    if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]},{cancelRefetch:false});
-  })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed; REST polling remains active.')}
+  })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed. REST polling continues.')}
   return()=>{live=false;clearTimeout(timer);if(typeof stop==='function')stop()};
  },[profile,enabled,connectionEpoch]);
  async function reconnect(){
@@ -3508,17 +3614,17 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
  else if(!pending&&checked?.ok&&!checked.stale){
   const data=checked.data;state=data.state||'unverified';detail=[data.message,...(data.warnings||[]).slice(0,3)].filter(Boolean).join(' · ');
   if(state==='online'){
-   if(changeLimited&&enabled){state='limited';detail+=' Change checks unavailable; visible-page 60-second fallback is active.'}
-   else if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified; awaiting subscription acknowledgement.'}
+   if(changeLimited&&enabled){state='limited';detail+=' Change checks unavailable. Reading every 60 seconds while visible.'}
+   else if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified. Waiting for the live update subscription.'}
    else if(link.state==='limited'){state='limited';detail+=' '+link.detail}
   }
   label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
  }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
  if(enabled&&readError&&checked?.ok&&!checked.stale){
   if(state==='online'){state='limited';label='Limited'}
-  detail+=' Usage refresh failed; showing the last good snapshot if available. Retrying automatically.';
+  detail+=' Usage refresh failed. Showing the last good snapshot, if any. Retrying automatically.';
  }
- if(isAllProfiles(profile)){state='limited';label=pending?'Refreshing':readError||changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed; showing the last good response if available. Retrying automatically.':changeLimited?'Read-only · change checks unavailable; visible-page 60-second fallback.':'Read-only · change checks every 30 seconds; rolling windows expire on a visible-page minute. No aggregate events.'}
+ if(isAllProfiles(profile)){state='limited';label=pending?'Refreshing':readError||changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed. Showing the last good response, if any. Retrying automatically.':changeLimited?'Read-only. Change checks unavailable. Reading every 60 seconds while visible.':'Read-only. Checks for changes every 30 seconds. Rolling windows move on each visible minute. No aggregate events.'}
  return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting'};
 }
 function ConnectionBadge({connection,disabled,freshness}){
@@ -3537,31 +3643,37 @@ function ConnectionBadge({connection,disabled,freshness}){
   return()=>{if(timer!==null)clearInterval(timer);document.removeEventListener('visibilitychange',visibility)};
  },[freshness?.received]);
  const action=readOnly?'Refresh read-only data.':'Click to reconnect and refresh. Running agents are not restarted.';
- const title=detail+' '+action;
+ // One recorder fact per line: state, each detail sentence, then the action.
+ const tone=state==='online'?'ok':state==='checking'||label==='Watching'||label==='Refreshing'?'key':'warn';
+ const detailLines=String(detail||'').split(/(?<=[.!?])\s+|\s+·\s+/).filter(Boolean).map(line=>
+  // Heuristic: backend detail is free text, so a keyword regex picks warning lines.
+  /fail|stale|unavailable|not recording|No live|No recent|No readable/i.test(line)?tipTone('warn',line.replace(/\.$/,'')):tipEsc(line.replace(/\.$/,'')));
+ const title=tipLines(tipTone(tone,label),detailLines,readOnly?'Click to refresh read-only data':['Click to reconnect and refresh',tipTone('muted','Running agents are not restarted')]);
  // The age belongs to the committed selection only; never borrow a header or
  // cached snapshot from a different tab, provider or profile for this badge.
  const status=!freshness?'Usage idle':freshness.fetching?'Updating…':freshness.error?'Update failed':freshness.received?'Updated':'Checking…';
  const source=freshness?.cached?' · cached':'';
- const age=freshness?.received?Math.max(0,Math.floor((ageNow-freshness.received)/1000))+'s':null;
- return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,title,'data-au-freshness':status+source+(age?(source?' · ':' '):''),'data-au-freshness-age':age,'data-au-freshness-tone':state==='online'?'healthy':'caution','aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
+ const age=freshness?.received?Math.max(0,Math.floor((ageNow-freshness.received)/1000))+'s ago':null;
+ return h('button',{type:'button',className:'au-connection','data-testid':'connection-status','data-state':state,onClick:reconnect,disabled:busy||disabled,...tipProps(title),'data-au-freshness':status+source+(age?(source?' · ':' '):''),'data-au-freshness-age':age,'data-au-freshness-tone':state==='online'?'healthy':'caution','aria-label':'Usage recorder: '+label+'. '+action,'aria-busy':busy},
   h('span',{className:'au-connection-dot','aria-hidden':true}),h('span',{'aria-live':'polite'},label));
 }
 
 // Palette stays within the host theme; labels and counts never rely on colour.
 const skillColours=['var(--ui-accent,#a799ef)','var(--ui-text-success,#64bba8)','var(--ui-text-warning,#d2b776)','var(--ui-text-error,#d58c96)','var(--ui-text-secondary,#b8b6cf)'];
-function UsagePie({items,label,onChoose,selected,unit='loads'}){
+function UsagePie({items,label,onChoose,selected,unit='load'}){
  const total=items.reduce((n,v)=>n+v.value,0);let angle=-Math.PI/2;
  return h('div',{className:'au-skill-chart'},
   total>0?h('svg',{viewBox:'0 0 200 200',className:'au-skill-pie',role:'img','aria-label':label},...items.map((item,i)=>{
    const start=angle;angle+=item.value/total*2*Math.PI;
-   const description=item.label+': '+count(item.value)+' ('+(item.value/total*100).toFixed(1)+'%)';
-   const props={key:item.id,fill:skillColours[i%skillColours.length],stroke:'var(--au-surface-bg)',strokeWidth:2,...(onChoose?{role:'button',tabindex:0,'aria-label':description,'aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),onKeyDown:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onChoose(item.id)}},style:{cursor:'pointer'}}:{})};
-   const title=h('title',{},description);
+   const share=(item.value/total*100).toFixed(1)+'%',description=item.label+': '+count(item.value)+' ('+share+')';
+   const slice=tipLines(tipEsc(item.label),tipTone('key',count(item.value))+' '+tipEsc(units(item.value,unit))+' · '+share);
+   const props={key:item.id,'data-au-tip':slice,fill:skillColours[i%skillColours.length],stroke:'var(--au-surface-bg)',strokeWidth:2,...(onChoose?{role:'button',tabindex:0,'aria-label':description,'aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),onKeyDown:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onChoose(item.id)}},style:{cursor:'pointer'}}:{})};
+   const title=h('title',{},tipPlain(slice));
    return item.value===total?h('circle',{...props,cx:100,cy:100,r:96},title):h('path',{...props,d:`M100 100 L${100+96*Math.cos(start)} ${100+96*Math.sin(start)} A96 96 0 ${angle-start>Math.PI?1:0} 1 ${100+96*Math.cos(angle)} ${100+96*Math.sin(angle)} Z`},title);
   })):h('p',{className:'au-muted'},'No recorded values in this selection.'),
   h('div',{className:'au-skill-legend'},...items.map((item,i)=>h(onChoose?'button':'div',{
-   key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+count(item.value)+' '+unit+' · inspect'}:{})
-  },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},count(item.value)+' '+unit+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
+   key:item.id,'data-scroll-key':'legend:'+item.id,className:'au-skill-legend-row',...(onChoose?{type:'button','aria-pressed':selected===item.id,onClick:()=>onChoose(item.id),'aria-label':item.label+' · '+plural(item.value,unit)+' · inspect'}:{})
+  },h('span',{className:'au-skill-swatch',style:{background:skillColours[i%skillColours.length]},'aria-hidden':true}),h('span',{},item.label),h('strong',{},plural(item.value,unit)+' · '+(total?item.value/total*100:0).toFixed(1)+'%')))));
 }
 let skillsReadOwnerId=0;
 function SkillsUsageView({params,scope,view,setView,model,setModel,skill,setSkill,refreshKey,windowSeconds}){
@@ -3607,11 +3719,11 @@ function SkillsUsageView({params,scope,view,setView,model,setModel,skill,setSkil
    view==='Frequency'?h('div',{'data-testid':'skill-frequency',className:'au-box'},h('h3',{},'Most frequently loaded skills'),
     h(UsagePie,{label:'Skill load frequency',items:sized.map(s=>({id:s.name,label:readable(s,'name'),value:s.loads})),selected:skill,onChoose:chooseSkill}),
     rows.some(s=>!s.loads)?h('div',{className:'au-toolbar'},h('span',{className:'au-muted'},'Reference-only or failed loads:'),...rows.filter(s=>!s.loads).map(s=>h('button',{key:s.name,'aria-pressed':skill===s.name,onClick:()=>chooseSkill(s.name)},readable(s,'name')))):null,
-    skill&&selected?h('p',{className:'au-muted'},count(selected.loads)+' loads · '+count(selected.repeat_loads)+' repeat · '+count(selected.references)+' references · '+count(selected.failures)+' failures'):null):null,
+    skill&&selected?h('p',{className:'au-muted'},plural(selected.loads,'load')+' · '+count(selected.repeat_loads)+' repeat · '+plural(selected.references,'reference')+' · '+plural(selected.failures,'failure')):null):null,
    view==='Context footprint'?h('div',{'data-testid':'skill-context',className:'au-box'},h('h3',{},'Returned skill content · period estimate'),
     h('div',{className:'au-metrics'},metric('Estimated total',total==null?coverage==='unavailable'?'Unavailable':'Not recorded':'~'+count(total)+' tokens'+(partialProfiles?' · partial':'')),metric('Average per load',total==null||!totalLoads?'—':'~'+count(Math.round(total/totalLoads))+' tokens'+(partialProfiles?' · partial':'')),metric('Known-size loads',profileTotal(known.reduce((n,s)=>n+s.loads,0))+' / '+profileTotal(totalLoads))),
     !complete?h('p',{className:'au-muted'},'Some returned sizes were not recorded; a complete total and share are unavailable.'):null,
-    complete?h(UsagePie,{label:'Estimated returned skill content by skill',unit:'estimated tokens',items:known.filter(s=>s.estimated_tokens>0).map(s=>({id:s.name,label:readable(s,'name'),value:s.estimated_tokens})),selected:skill,onChoose:chooseSkill}):
+    complete?h(UsagePie,{label:'Estimated returned skill content by skill',unit:'estimated token',items:known.filter(s=>s.estimated_tokens>0).map(s=>({id:s.name,label:readable(s,'name'),value:s.estimated_tokens})),selected:skill,onChoose:chooseSkill}):
       table(['Skill','Known returned estimate','Main loads','Size missing'],rows.map(s=>[readable(s,'name'),s.estimated_tokens==null?'Not recorded':'~'+count(s.estimated_tokens),count(s.loads),count(s.unknown_sizes)]),null,rows.map(s=>s.name)),
     skill&&selected?h('p',{className:'au-muted'},selected.estimated_tokens==null?'Returned size not recorded':'~'+count(selected.estimated_tokens)+' tokens · '+(selected.loads?'~'+count(Math.round(selected.estimated_tokens/selected.loads))+' per load · ':'')+(total?'~'+(selected.estimated_tokens/total*100).toFixed(1)+'% of estimated total':'Share unavailable')):null):null,
    view==='Catalogue overhead'?h('div',{'data-testid':'skill-catalogue',className:'au-box'},h('h3',{},'Catalogue descriptions versus loads'),
@@ -3884,7 +3996,7 @@ function UsagePageScope({selected}){
    if(tab==='Cache & costs')body=h(CacheView,{data:displayData,profile:selected,provider,refresh:ledger.hint,onError:setErr})
    if(tab==='Compressions')body=h(CompressionView,{data:displayData,mode:compMode,setMode:setCompMode,details:detailContext})
 
-   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',{title:SESSION_WRITE_BASIS},'Writes · calc.'),'Known est. USD'],displayData.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',readable(g,'task'),g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
+   if(tab==='Models & tasks')body=table(['Provider','Model','Agent','Task','Requests','Known total','Uncached input','Output','Read',h('span',tipProps(SESSION_WRITE_BASIS),'Writes · calc.'),'Known est. USD'],displayData.groups.map(g=>[g.provider,g.model,g.agent_kind||'Unattributed',readable(g,'task'),g.attempts,short(g.known.total_tokens),knownTokens(g,'input_tokens'),short(g.known.output_tokens),short(g.known.cache_read_tokens),sessionWrites(g),money(g.known_cost_usd)]),null,
     displayData.groups.map(g=>JSON.stringify([g.provider,g.model,g.agent_kind,g.task])),
     displayData.groups.map(g=>({identity:[g.provider,g.model,g.agent_kind,readable(g,'task')].filter(Boolean).join(' · '),value:viewTokens(g,'total_tokens',count)+' known tokens'})))
  }
@@ -3902,10 +4014,10 @@ function UsagePageScope({selected}){
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
    period==='custom'?h('details',{className:'au-custom-range'},h('summary',{},'Custom range'),h('div',{className:'au-custom-panel',role:'group','aria-label':'Custom time bounds'},
     h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}),
-    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',title:'Leave empty to view until now; the window keeps growing.',onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
+    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',...tipProps(tipLines('Leave empty to view up to now','The window keeps growing')),onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
     !customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart, or leave end empty for until now (start at least 30 minutes ago). No data is requested until valid.'):null)):null)),
   h('div',{className:'au-toolbar au-filters'},
-  filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',title:'Custom edits and chart zoom remain inside the saved marker. Remove this filter to view outside it.',onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
+  filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',...tipProps(tipLines('Custom edits and chart zoom stay inside the saved marker','Remove it to view times outside the marker')),onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
   h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(headerData?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
   h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
@@ -3933,10 +4045,10 @@ function UsagePageScope({selected}){
   body||h('p',{className:'au-muted',role:'status','data-testid':'ledger-view-pending'},data?.summary===null?'Recorded usage unavailable for this selection.':'Loading '+tab+(tab==='Overview'?' · '+breakdownGroup:'')+'…'),
   field&&displayData?.summary?h('div',{className:'au-toolbar','data-testid':'record-pagination'},
    h('span',{className:'au-muted'},'Showing '+shownRows.length+' of '+displayData.list_count+' records'),
-   currentRecord?.frozen?h('button',{onClick:()=>setRecordState(null),title:'Return to live ten-record pages.'},'Exit frozen view'):null,
+   currentRecord?.frozen?h('button',{onClick:()=>setRecordState(null),title:'Return to live ten-record pages'},'Exit frozen view'):null,
    !currentRecord?.frozen&&(displayData.list_next_offset!=null||currentRecord?.busy||currentRecord?.error)?h('button',{onClick:()=>extendRecords(),disabled:currentRecord?.busy||displayData.list_next_offset==null},currentRecord?.busy?'Loading…':'Load more'):null,
-   !currentRecord?.frozen&&(displayData.list_next_offset!=null||currentRecord?.busy||currentRecord?.error)?h('button',{onClick:()=>extendRecords(true),disabled:currentRecord?.busy,title:'Capture every record in this selection from one read. Large reports can take time.'},'View all records'):null,
-   currentRecord?.frozen?h('span',{className:'au-muted',title:displayData.list_provenance||'One selected-profile copied snapshot.'},'Frozen · '+(aggregate?'per-profile snapshots':'selected-profile snapshot')):null,
+   !currentRecord?.frozen&&(displayData.list_next_offset!=null||currentRecord?.busy||currentRecord?.error)?h('button',{onClick:()=>extendRecords(true),disabled:currentRecord?.busy,...tipProps(tipLines('Loads every record in this selection in one read',tipTone('muted','Large selections can take a while')))},'View all records'):null,
+   currentRecord?.frozen?h('span',{className:'au-muted',title:displayData.list_provenance||'One selected-profile copied snapshot'},'Frozen · '+(aggregate?'per-profile snapshots':'selected-profile snapshot')):null,
    currentRecord?.error?h('span',{role:'alert'},currentRecord.error):null):null)))
 }
 
@@ -4310,34 +4422,34 @@ window.demoPricingBasisRows=function(){
   fallback_model:'anthropic/claude-opus-9.5',fallback_match:'vendor_prefixed'};
  const rows=[
   ['basis-tier',{...anth,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
-   'Global · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.','Standard speed reported by usage.speed.']],
+   'Global · assumed tier',['Standard tier assumed\nusage.service_tier reported "priority_plus", which is not in the catalogue','Standard speed reported by usage.speed']],
   ['basis-geo',{...anth,geo_assumption:true,geo_basis:'unknown_value_as_default',unknown_values:{'usage.inference_geo':'eu'}},
-   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported "eu", not in the catalogue.']],
+   'Global · assumed geo',['Global routing assumed\nusage.inference_geo reported "eu", which is not in the catalogue']],
   ['basis-speed',{...anth,tier_assumption:true,speed_inferred:true,speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
-   'Global · assumed standard speed',['Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+   'Global · assumed standard speed',['Standard speed assumed\nusage.speed reported "turbo", which is not in the catalogue']],
   ['basis-na',{...anth,geo_assumption:true,geo_basis:'not_available_as_global'},
-   'Global · assumed geo',['Global routing assumed: usage.inference_geo reported not_available on a model with a US rate.']],
+   'Global · assumed geo',['Global routing assumed\nusage.inference_geo reported not_available on a model with a US rate']],
   ['basis-unrec',{...anth,geo_assumption:true,geo_basis:'unrecognised_as_global',retrospective:true},
-   'Global · assumed geo',['Global routing assumed retrospectively: the pre-fix recorder kept only an unrecognised sentinel.']],
+   'Global · assumed geo',['Global routing assumed retrospectively\nThe pre-fix recorder kept only an unrecognised sentinel']],
   ['basis-absent',{...anth,geo_assumption:true,tier_assumption:true,speed_inferred:true,speed_basis:'assumed standard speed (no fast request)'},
-   'Global · assumed geo/standard speed',['Global routing assumed: no usage.inference_geo was reported.','Standard speed assumed: no fast request and no usage.speed reported.']],
-  ['basis-list',{...list},'List price',[LIST_BASIS+'.','Matched OpenRouter id anthropic/claude-opus-9.5 (vendor-prefixed).']],
+   'Global · assumed geo/standard speed',['Global routing assumed\nNo usage.inference_geo was reported','Standard speed assumed\nNo fast request and no usage.speed was reported']],
+  ['basis-list',{...list},'List price',['List price fallback\nOpenRouter list price for this model id\nServing provider has no catalogue here, actual charge may differ','Matched OpenRouter id anthropic/claude-opus-9.5 (vendor-prefixed)']],
   ['basis-list-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-speed',speed_inferred:true,
    speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
-   'List price · assumed speed',['Matched OpenRouter id basis-list-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+   'List price · assumed speed',['Matched OpenRouter id basis-list-speed (exact)','Standard speed assumed\nusage.speed reported "turbo", which is not in the catalogue']],
   ['basis-routed-tier',{input_tokens:'1',output_tokens:'2',service_tier:'standard',source:'SYNTHETIC routed',pricing_basis:'provider_catalog_estimate',
    tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'requested service_tier':'turbo'}},
-   'Standard · assumed tier',['Standard tier assumed: the request asked for service_tier "turbo", not in the catalogue.']],
+   'Standard · assumed tier',['Standard tier assumed\nThe request asked for service_tier "turbo", which is not in the catalogue']],
   // Banded / minimum-prompt rates keep their band text and still show the assumption.
   ['basis-band-tier',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
    context_band:'short',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
-   '≤272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+   '≤272,000 · assumed tier',['Standard tier assumed\nusage.service_tier reported "priority_plus", which is not in the catalogue']],
   ['basis-long-tier',{input_tokens:'5',output_tokens:'22.5',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
    context_band:'long',threshold_tokens:272000,tier_assumption:true,tier_basis:'unknown_value_as_default',unknown_values:{'usage.service_tier':'priority_plus'}},
-   '>272,000 · assumed tier',['Standard tier assumed: usage.service_tier reported "priority_plus", not in the catalogue.']],
+   '>272,000 · assumed tier',['Standard tier assumed\nusage.service_tier reported "priority_plus", which is not in the catalogue']],
   ['basis-list-min-speed',{...list,fallback_match:'exact',fallback_model:'basis-list-min-speed',min_prompt_tokens:200000,speed_inferred:true,
    speed_basis:'unknown usage.speed value; documented standard speed assumed',unknown_values:{'usage.speed':'turbo'}},
-   '≥200,000 · assumed speed',['Matched OpenRouter id basis-list-min-speed (exact).','Standard speed assumed: usage.speed reported "turbo", not in the catalogue.']],
+   '≥200,000 · assumed speed',['Matched OpenRouter id basis-list-min-speed (exact)','Standard speed assumed\nusage.speed reported "turbo", which is not in the catalogue']],
   ['basis-band-plain',{input_tokens:'2.5',output_tokens:'15',service_tier:'standard',source:'SYNTHETIC OpenAI public pricing',pricing_basis:'provider_catalog_estimate',
    context_band:'short',threshold_tokens:128000,tier_assumption:false},'≤128,000',[]],
  ];

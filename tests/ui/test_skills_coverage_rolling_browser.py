@@ -133,7 +133,7 @@ def run():
         newer = skills_calls(page)[-1]
         assert len(skills_calls(page)) == before + 1 and newer['start'] > held['start'] + 80, (held, newer)
         page.evaluate('window.holdSkillsRequests[1]()')
-        legend = surface.get_by_role('button', name='reopen-fresh-probe · 1 loads · inspect', exact=True)
+        legend = surface.get_by_role('button', name='reopen-fresh-probe · 1 load · inspect', exact=True)
         expect(legend).to_be_visible()
         page.evaluate('window.holdSkillsRequests[0]();window.holdSkillsRequests=null')
         page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
