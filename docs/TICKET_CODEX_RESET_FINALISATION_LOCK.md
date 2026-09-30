@@ -1,6 +1,6 @@
 # Ticket: codex reset finalisation can strand a completed redemption as pending
 
-**Status: fixed in `COMMIT_PENDING` on branch `fix/codex-reset-finalisation`** (repository candidate; not merged, installed or exercised against a live account). The symptom, triggers and reproduction below describe the pre-fix code at `68515de`; the design summary is under [Resolution](#resolution).
+**Status: fixed in `da39ef2` on branch `fix/codex-reset-finalisation`** (repository candidate; not merged, installed or exercised against a live account). The symptom, triggers and reproduction below describe the pre-fix code at `68515de`; the design summary is under [Resolution](#resolution).
 
 ## Symptom
 
