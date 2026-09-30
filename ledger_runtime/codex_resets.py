@@ -34,9 +34,55 @@ TOTAL_SECONDS = 38
 CLEANUP_GRACE_SECONDS = 2
 CLEANUP_KILL_SECONDS = 2
 WINDOWS = {300: 'five-hour', 10080: 'weekly'}
+OUTCOMES = ('reset', 'alreadyRedeemed', 'nothingToReset', 'noCredit')
+# SQLite busy budget for observe/opt-in/admission: long enough to ride out another
+# profile's short transaction (or a reader's SHARED lock under journal_mode=delete).
+BUSY_SECONDS = 1.0
+# One post-spend write per attempt (record the known outcome and clear the attempt
+# in a single transaction) gets its own bounded budget of short tries; every try
+# re-verifies the attempt id before writing.
+FINALISE_SECONDS = 5.0
+FINALISE_TRY_SECONDS = 1.0
+FINALISE_BACKOFF = (0.05, 0.25)
+FINALISE_MAX_TRIES = 20
+# A live redeem records its outcome within the app-server deadline plus one
+# finalisation budget; an older attempt without an outcome is reported unrecorded.
+# Wall-clock steps only change that pending/unrecorded label: blocking depends on
+# the stored attempt alone, never on elapsed time.
+INFLIGHT_SECONDS = TOTAL_SECONDS + FINALISE_SECONDS + 30
+# Journal states from _write_outcome.
+NOT_WRITTEN, WRITTEN, DURABLE = 0, 1, 2
+# Settled `attempts` rows kept per account (the current attempt is always kept).
+ATTEMPTS_KEEP = 200
+# At most this many ``outcome-*`` entries are examined per orphan-journal sweep.
+SWEEP_LIMIT = 64
 
 
 class Unavailable(Exception):
+    pass
+
+
+class Unrecorded(Unavailable):
+    """Codex returned a definite consume outcome, but recording it did not finish.
+
+    ``journal`` is the _write_outcome state. DURABLE: the next check clears the
+    attempt. WRITTEN: the journal is readable but its durability is unconfirmed,
+    so the next check may clear it (not after a crash). NOT_WRITTEN: the
+    account stays blocked as ``unrecorded``.
+    """
+    def __init__(self, outcome: str, journal: int):
+        what = ('Reset was used but' if outcome in ('reset', 'alreadyRedeemed')
+                else 'Codex returned %s but it' % outcome)
+        tail = ('it will be reconciled on the next check.' if journal == DURABLE
+                else 'it may be reconciled on the next check. If it stays blocked, check your '
+                     'Codex account before taking further action.' if journal == WRITTEN
+                else 'redemption stays blocked. Check your Codex account before taking further action.')
+        super().__init__(what + ' could not be recorded; ' + tail)
+        self.outcome, self.journal = outcome, journal
+        self.reconcilable = journal == DURABLE
+
+
+class _AttemptChanged(Unavailable):
     pass
 
 
@@ -282,7 +328,7 @@ def _profile_key(home: Path) -> str:
 
 
 @contextmanager
-def _state(home: Path):
+def _state(home: Path, busy: float | None = None):
     path = _db_path(home)
     try:
         fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
@@ -307,11 +353,15 @@ def _state(home: Path):
     finally:
         os.close(fd)
     # Private directory and SQLite transaction coordinate cooperating processes.
-    conn = sqlite3.connect(path, timeout=0.1, isolation_level=None)
+    conn = sqlite3.connect(path, timeout=BUSY_SECONDS if busy is None else busy, isolation_level=None)
     try:
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('CREATE TABLE IF NOT EXISTS state (binding TEXT PRIMARY KEY, episode TEXT, attempt TEXT, result TEXT)')
         conn.execute('CREATE TABLE IF NOT EXISTS optin (binding TEXT NOT NULL, profile TEXT NOT NULL, auto INTEGER NOT NULL, PRIMARY KEY(binding,profile))')
+        # Additive attempt journal (older authorities gain it on first open; the
+        # state/optin shapes are unchanged). Keyed by attempt id, so a value can
+        # never be applied to a different attempt.
+        conn.execute('CREATE TABLE IF NOT EXISTS attempts (attempt TEXT PRIMARY KEY, binding TEXT NOT NULL, started REAL NOT NULL, outcome TEXT)')
         yield conn
         conn.execute('COMMIT')
     except BaseException:
@@ -326,13 +376,256 @@ def _account_key(account: str) -> str:
     return hashlib.sha256(('codex-reset-account\0' + account).encode()).hexdigest()
 
 
-def _row(conn, binding, home, account):
+def _canonical_attempt(attempt) -> bool:
+    try:
+        return str(uuid.UUID(attempt)) == attempt
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _outcome_path(home: Path, attempt: str) -> Path | None:
+    if not _canonical_attempt(attempt):
+        return None
+    return _db_path(home).parent / ('outcome-' + attempt)
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_outcome(home: Path, key: str, attempt: str, outcome: str) -> int:
+    """Journal a definite consume outcome outside SQLite's lock.
+
+    Written once per attempt (O_EXCL) in the owner-private authority folder, so
+    no SQLite reader or writer can delay it. A short or torn write reads as
+    unknown. Returns NOT_WRITTEN, WRITTEN (complete, durability unconfirmed: a
+    later check may still reconcile it, but a crash can lose it) or DURABLE
+    (file and directory fsynced).
+    """
+    try:
+        path = _outcome_path(home, attempt)
+        if path is None:
+            return NOT_WRITTEN
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except (OSError, Unavailable):
+        return NOT_WRITTEN
+    data = (key + '\n' + attempt + '\n' + outcome + '\n').encode()
+    state = NOT_WRITTEN
+    try:
+        try:
+            offset = 0
+            while offset < len(data):
+                written = os.write(fd, data[offset:])
+                if written <= 0:
+                    return NOT_WRITTEN
+                offset += written
+            state = WRITTEN
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        _fsync_dir(path.parent)
+        return DURABLE
+    except OSError:
+        return state
+
+
+def _read_outcome(home: Path, key: str, attempt: str) -> str | None:
+    """The journalled outcome for exactly this account and attempt, else None.
+
+    Like the database, the journal must be an owner-private regular file with a
+    single link; its body must name the same account key and attempt id.
+    """
+    try:
+        path = _outcome_path(home, attempt)
+        if path is None:
+            return None
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except (OSError, Unavailable):
+        return None
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_size > 256):
+            return None
+        lines = os.read(fd, 257).decode('ascii').split('\n')
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(fd)
+    if (len(lines) != 4 or lines[0] != key or lines[1] != attempt
+            or lines[2] not in OUTCOMES or lines[3]):
+        return None
+    return lines[2]
+
+
+def _discard_outcome(home: Path, attempt: str) -> None:
+    # Only after the attempt is cleared in SQLite; a leftover file is inert
+    # because reconciliation requires the state row to still hold its attempt,
+    # and _housekeep sweeps it later.
+    try:
+        path = _outcome_path(home, attempt)
+        if path is not None:
+            path.unlink()
+    except (OSError, Unavailable):
+        pass
+
+
+def _housekeep(conn, home: Path, key: str, settled: list) -> None:
+    """Bounded best-effort cleanup inside the caller's write transaction.
+
+    Sweeps ``outcome-*`` journals whose attempt no account still holds pending.
+    The write lock stops any new attempt being admitted meanwhile, and a
+    journal is only written after its attempt was committed, so every journal
+    of a live attempt is in ``state``. Attempts cleared by this uncommitted
+    transaction (``settled``) are kept: _settle removes them after COMMIT.
+    Then prunes this account's settled ``attempts`` rows beyond the newest
+    ATTEMPTS_KEEP; the current attempt and unsettled rows are never pruned.
+
+    Filesystem errors are ignored. A SQLite error is ignored only while the
+    caller's transaction is still open: SQLite may roll the whole transaction
+    back (FULL/IOERR/NOMEM/BUSY), and continuing would autocommit the caller's
+    later writes without the lock, so that error is re-raised.
+    """
+    try:
+        live = {row[0] for row in conn.execute('SELECT attempt FROM state WHERE attempt IS NOT NULL')}
+    except sqlite3.Error:
+        if not conn.in_transaction:
+            raise
+        live = None
+    if live is not None:
+        live.update(settled)
+        try:
+            with os.scandir(_db_path(home).parent) as entries:
+                candidates = 0
+                for entry in entries:
+                    if not entry.name.startswith('outcome-'):
+                        continue
+                    candidates += 1
+                    if candidates > SWEEP_LIMIT:
+                        break
+                    attempt = entry.name[len('outcome-'):]
+                    if _canonical_attempt(attempt) and attempt not in live:
+                        try:
+                            os.unlink(entry.path)
+                        except OSError:
+                            pass
+        except (OSError, Unavailable):
+            pass
+    try:
+        conn.execute('SAVEPOINT housekeep')
+    except sqlite3.Error:
+        if not conn.in_transaction:
+            raise
+        return
+    try:
+        conn.execute(
+            'DELETE FROM attempts WHERE binding=? AND outcome IS NOT NULL '
+            'AND attempt NOT IN (SELECT attempt FROM state WHERE attempt IS NOT NULL) '
+            'AND attempt NOT IN (SELECT attempt FROM attempts WHERE binding=? AND outcome IS NOT NULL '
+            'ORDER BY started DESC, rowid DESC LIMIT ?)', (key, key, ATTEMPTS_KEEP))
+    except sqlite3.Error:
+        if not conn.in_transaction:
+            raise
+        conn.execute('ROLLBACK TO housekeep')  # any failure here propagates: fail closed
+    conn.execute('RELEASE housekeep')
+
+
+def _record(conn, key: str, attempt: str, outcome: str) -> None:
+    """Record a definite outcome for this attempt only; idempotent per attempt."""
+    done = conn.execute('SELECT outcome FROM attempts WHERE attempt=? AND binding=?',
+                        (attempt, key)).fetchone()
+    if done and done[0] is not None:
+        if done[0] != outcome:
+            raise _AttemptChanged('Shared reset attempt changed unexpectedly.')
+        return  # already recorded by another check's reconciliation
+    updated = conn.execute('UPDATE state SET attempt=NULL, result=? WHERE binding=? AND attempt=?',
+                           (outcome, key, attempt))
+    if updated.rowcount != 1:
+        raise _AttemptChanged('Shared reset attempt changed unexpectedly.')
+    conn.execute('INSERT INTO attempts(attempt,binding,started,outcome) VALUES (?,?,?,?) '
+                 'ON CONFLICT(attempt) DO UPDATE SET outcome=excluded.outcome',
+                 (attempt, key, time.time(), outcome))
+
+
+def _row(conn, binding, home, account, settled=None):
     key = _account_key(account)
     conn.execute('INSERT OR IGNORE INTO state(binding) VALUES (?)', (key,))
-    state = conn.execute('SELECT episode, attempt, result FROM state WHERE binding=?', (key,)).fetchone()
+    episode, attempt, result = conn.execute(
+        'SELECT episode, attempt, result FROM state WHERE binding=?', (key,)).fetchone()
+    if attempt:
+        known = _read_outcome(home, key, attempt)
+        if known is not None:
+            # Reconcile a spend whose definite outcome was journalled but not
+            # recorded here; the episode stays spent, so it cannot repeat.
+            _record(conn, key, attempt, known)
+            if settled is not None:
+                settled.append(attempt)
+            attempt, result = None, known
+        elif result == 'pending':
+            started = conn.execute('SELECT started FROM attempts WHERE attempt=?', (attempt,)).fetchone()
+            if started is None or time.time() - started[0] > INFLIGHT_SECONDS:
+                result = 'unrecorded'  # display only: no live redeem can still record it
     optin = conn.execute('SELECT auto FROM optin WHERE binding=? AND profile=?',
                          (binding, _profile_key(home))).fetchone()
-    return (optin[0] if optin else 0, *state)
+    return (optin[0] if optin else 0, episode, attempt, result)
+
+
+def _contention(exc: sqlite3.OperationalError) -> bool:
+    """True when the error is SQLite lock contention (BUSY/LOCKED), not a fault."""
+    code = getattr(exc, 'sqlite_errorcode', None)
+    if isinstance(code, int) and (code & 0xff) in (5, 6):  # SQLITE_BUSY, SQLITE_LOCKED
+        return True
+    message = str(exc).lower()
+    return 'database is locked' in message or 'busy' in message
+
+
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _finalise(home: Path, key: str, attempt: str, outcome: str, journal) -> None:
+    """Record a definite post-spend outcome with its own bounded busy budget.
+
+    Every try is a fresh BEGIN IMMEDIATE transaction that re-verifies the attempt.
+    Never retries the consume RPC and never reports lock contention as another
+    redemption: an unrecordable outcome raises the distinct Unrecorded error.
+    """
+    deadline = time.monotonic() + FINALISE_SECONDS
+    for tries in range(FINALISE_MAX_TRIES):
+        remaining = deadline - time.monotonic()
+        try:
+            with _state(home, busy=max(0.0, min(FINALISE_TRY_SECONDS, remaining))) as conn:
+                _record(conn, key, attempt, outcome)
+            return
+        except _AttemptChanged:
+            raise
+        except sqlite3.OperationalError:
+            pass
+        except Exception as exc:
+            raise Unrecorded(outcome, journal) from exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        _pause(min(FINALISE_BACKOFF[min(tries, len(FINALISE_BACKOFF) - 1)], remaining))
+    raise Unrecorded(outcome, journal)
+
+
+def _mark_unrecorded(home: Path, key: str, attempt: str) -> None:
+    # Best effort: the attempt stays pending (blocking) either way.
+    try:
+        with _state(home) as conn:
+            conn.execute("UPDATE state SET result='unrecorded' WHERE binding=? AND attempt=?", (key, attempt))
+    except Exception:
+        pass
+
+
+def _settle(home: Path, settled: list) -> None:
+    for attempt in settled:
+        _discard_outcome(home, attempt)
 
 
 def observe(home: Path) -> dict:
@@ -340,10 +633,16 @@ def observe(home: Path) -> dict:
     with AppServer(token, account) as app:
         limits = app.limits()
     view = _view(limits, binding)
+    settled = []
     with _state(home) as conn:
-        auto, episode, attempt, outcome = _row(conn, binding, home, account)
+        auto, episode, attempt, outcome = _row(conn, binding, home, account, settled)
+        _housekeep(conn, home, _account_key(account), settled)
+    _settle(home, settled)
+    # The episode already spent (or attempted) stays unredeemable while the
+    # provider still reports it, so neither the badge nor the monitor retries it.
     view.update(auto=bool(auto), blocked=bool(attempt), last_outcome=outcome,
-                redeemable=view['count'] is not None and view['count'] > 0 and view['exhausted'] and not attempt)
+                redeemable=(view['count'] is not None and view['count'] > 0 and view['exhausted']
+                            and not attempt and view['episode'] != episode))
     return view
 
 
@@ -353,11 +652,13 @@ def set_auto(home: Path, binding: str, enabled: bool) -> dict:
         raise Unavailable('Selected Codex account changed; refresh before opting in.')
     with AppServer(token, account) as app:
         view = _view(app.limits(), current)
+    settled = []
     with _state(home) as conn:
-        _row(conn, current, home, account)
+        _row(conn, current, home, account, settled)
         conn.execute('INSERT INTO optin(binding,profile,auto) VALUES (?,?,?) '
                      'ON CONFLICT(binding,profile) DO UPDATE SET auto=excluded.auto',
                      (current, _profile_key(home), int(enabled)))
+    _settle(home, settled)
     return {**view, 'auto': enabled}
 
 
@@ -366,39 +667,64 @@ def redeem(home: Path, *, expected_binding: str, expected_episode: str | None,
     token, account, binding = _credentials()
     if binding != expected_binding:
         raise Unavailable('Selected Codex account changed; refresh before redeeming.')
+    key = _account_key(account)
     # Only the short admission/finalisation transactions lock SQLite. Network
     # calls never hold the global DB writer lock: other accounts are independent.
-    try:
-        with AppServer(token, account) as app:
-            before = _view(app.limits(), binding)
-            if (before['count'] is None or before['count'] < 1
-                    or before['count'] != expected_count or not before['exhausted']
-                    or before['episode'] != expected_episode):
-                raise Unavailable('Balance or limit changed; refresh before redeeming.')
-            attempt = str(uuid.uuid4())
+    with AppServer(token, account) as app:
+        before = _view(app.limits(), binding)
+        if (before['count'] is None or before['count'] < 1
+                or before['count'] != expected_count or not before['exhausted']
+                or before['episode'] != expected_episode):
+            raise Unavailable('Balance or limit changed; refresh before redeeming.')
+        attempt = str(uuid.uuid4())
+        settled, refusal = [], None
+        try:
             with _state(home) as conn:
-                auto, prior, pending, _ = _row(conn, binding, home, account)
+                # Reconciles a journalled earlier outcome first; that commits even
+                # when this admission is then refused.
+                auto, prior, pending, _ = _row(conn, binding, home, account, settled)
+                _housekeep(conn, home, key, settled)
                 if pending or (automatic and (not auto or is_enabled is None or not is_enabled())):
-                    raise Unavailable('Redemption is blocked or automatic use is disabled.')
-                if prior == expected_episode:
-                    raise Unavailable('Balance or limit changed; refresh before redeeming.')
-                conn.execute('UPDATE state SET attempt=?, episode=?, result=? WHERE binding=?',
-                             (attempt, expected_episode, 'pending', _account_key(account)))
-            # Commit of the shared pending key precedes the irreversible RPC.
-            # A crash or unknown response leaves it blocking every profile.
+                    refusal = 'Redemption is blocked or automatic use is disabled.'
+                elif prior == expected_episode:
+                    refusal = 'Balance or limit changed; refresh before redeeming.'
+                else:
+                    conn.execute('UPDATE state SET attempt=?, episode=?, result=? WHERE binding=?',
+                                 (attempt, expected_episode, 'pending', key))
+                    conn.execute('INSERT INTO attempts(attempt,binding,started) VALUES (?,?,?)',
+                                 (attempt, key, time.time()))
+        except sqlite3.OperationalError as exc:
+            if _contention(exc):
+                raise Unavailable('Another redemption is in progress.') from exc
+            # A genuine SQLite fault (e.g. a lost transaction re-raised by
+            # _housekeep): the admission rolled back before any consume.
+            raise Unavailable('Codex reset state could not be written; nothing was spent.') from exc
+        _settle(home, settled)
+        if refusal:
+            raise Unavailable(refusal)
+        # Commit of the shared pending key precedes the irreversible RPC.
+        # A crash or unknown response leaves it blocking every profile.
+        try:
             result = app.call('account/rateLimitResetCredit/consume', {'idempotencyKey': attempt})
             outcome = result.get('outcome')
-            if outcome not in ('reset', 'alreadyRedeemed', 'nothingToReset', 'noCredit'):
+            if outcome not in OUTCOMES:
                 raise Unavailable('Unknown Codex redemption result.')
+        except BaseException:
+            _mark_unrecorded(home, key, attempt)
+            raise
+        # The definite outcome is journalled before anything else can fail, so a
+        # later check can reconcile it without another consume.
+        journal = _write_outcome(home, key, attempt, outcome)
+        try:
             after = _view(app.limits(), binding)
-            with _state(home) as conn:
-                updated = conn.execute('UPDATE state SET attempt=NULL, result=? WHERE binding=? AND attempt=?',
-                                       (outcome, _account_key(account), attempt))
-                if updated.rowcount != 1:
-                    raise Unavailable('Shared reset attempt changed unexpectedly.')
-            return {'outcome': outcome, 'view': {**after, 'auto': bool(auto), 'blocked': False}}
-    except sqlite3.OperationalError as exc:
-        raise Unavailable('Another redemption is in progress.') from exc
+        except Unavailable as exc:
+            # Limits must be read back before this call clears the attempt; the
+            # next check (a fresh read) reconciles a journalled outcome instead.
+            raise Unrecorded(outcome, journal) from exc
+        _finalise(home, key, attempt, outcome, journal)
+        # Unconditional: a short or unconfirmed write can leave a file too.
+        _discard_outcome(home, attempt)
+        return {'outcome': outcome, 'view': {**after, 'auto': bool(auto), 'blocked': False}}
 
 
 def automatic_tick(home: Path, is_enabled) -> dict | None:
@@ -442,10 +768,16 @@ def start_monitor(profile_rows, run_in_home, is_enabled):
                         db.parent.stat().st_mode & 0o077 or not db.is_file() or db.is_symlink()):
                     continue
                 try:
-                    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
-                        if not conn.execute('SELECT 1 FROM optin WHERE profile=? AND auto=1 LIMIT 1',
-                                            (_profile_key(home),)).fetchone():
-                            continue
+                    # Closed at once: under journal_mode=delete even a reader's
+                    # SHARED lock delays another process's COMMIT.
+                    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=BUSY_SECONDS)
+                    try:
+                        opted = conn.execute('SELECT 1 FROM optin WHERE profile=? AND auto=1 LIMIT 1',
+                                             (_profile_key(home),)).fetchone()
+                    finally:
+                        conn.close()
+                    if not opted:
+                        continue
                     run_in_home(home, lambda: automatic_tick(home, is_enabled))
                 except Exception:
                     # A blocked/uncertain state is visible in the UI; never retry

@@ -199,7 +199,7 @@ demoRest=async function(path,options={}){
  const u=new URL(path,'https://offline.test');
  if(u.pathname.startsWith('/codex/resets')){
   const profile=u.searchParams.get('profile')||options.body?.profile||'infra';
-  window.demoResetCalls.push({path,method:options.method||'GET',profile});
+  window.demoResetCalls.push({path,method:options.method||'GET',profile,timeoutMs:options.timeoutMs});
   const record=window.demoResets[profile];if(!record)throw new Error('Unknown synthetic reset profile');
   if(u.pathname==='/codex/resets/auto'){
    if(options.body.binding!==record.binding)throw new Error('Synthetic account changed');

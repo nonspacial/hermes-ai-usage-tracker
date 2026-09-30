@@ -6,7 +6,7 @@ Own project-specific design contracts, investigation notes and reference evidenc
 
 ## Ownership
 
-Root owns user-facing README and top-level technical references. This directory owns [Overview interaction contract](OVERVIEW_INTERACTION_CONTRACT.md), [lower record paging contract](RECORD_PAGING_CONTRACT.md), [measured performance investigation](PERFORMANCE_INVESTIGATION.md), [incremental backend DTO contract](INCREMENTAL_ANALYTICS_CONTRACT.md), [offline delivery runbook](OFFLINE_DELIVERY.md) (including read-index, JSON1-writer and writer-path rollback notes), the **open** product-risk ticket [codex reset finalisation lock](TICKET_CODEX_RESET_FINALISATION_LOCK.md) (not fixed; awaits user decision), prior planning/evidence files and images. The Overview contract records independent acceptance of the uninstalled repository candidate; it does not establish installed or live behaviour. Existing historical evidence must not be relabelled as current run proof.
+Root owns user-facing README and top-level technical references. This directory owns [Overview interaction contract](OVERVIEW_INTERACTION_CONTRACT.md), [lower record paging contract](RECORD_PAGING_CONTRACT.md), [measured performance investigation](PERFORMANCE_INVESTIGATION.md), [incremental backend DTO contract](INCREMENTAL_ANALYTICS_CONTRACT.md), [offline delivery runbook](OFFLINE_DELIVERY.md) (including read-index, JSON1-writer and writer-path rollback notes), the product-risk ticket [codex reset finalisation lock](TICKET_CODEX_RESET_FINALISATION_LOCK.md) (fixed; repository candidate, not installed), prior planning/evidence files and images. The Overview contract records independent acceptance of the uninstalled repository candidate; it does not establish installed or live behaviour. Existing historical evidence must not be relabelled as current run proof.
 
 ## Local Contracts
 
@@ -15,6 +15,8 @@ Root owns user-facing README and top-level technical references. This directory 
 - When implementation changes, reconcile this directory with actual code and tests, distinguishing implementer-run checks from independent review and installation verification; update root/child indexes only when ownership or indexed documents change.
 
 ## Work Guidance
+
+- Open follow-up: a Codex reset attempt with no journal (crash before journalling, uncertain RPC, pre-upgrade row) stays blocked as `unrecorded` with no in-product clear; decide whether to add a guarded, user-confirmed clear (see [ticket](TICKET_CODEX_RESET_FINALISATION_LOCK.md#manual-recovery-for-an-attempt-with-no-journal)).
 
 - Overview chart/identity details belong in the local contract; measured latency and remaining runtime gaps belong in the investigation note. README remains authoritative for published user-facing behaviour until separately updated and verified.
 
