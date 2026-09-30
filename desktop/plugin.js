@@ -614,6 +614,9 @@ function installTooltips(root){
   window.removeEventListener('scroll',position,true);window.removeEventListener('resize',position);
   changes.disconnect();tip.remove();style.remove()};
 }
+// Reset routes can take ~38 s of app-server RPCs, ~4 s cleanup and ≤5 s
+// finalisation; the host's default 30 s fetch timeout would misreport them.
+const RESET_ROUTE_TIMEOUT_MS = 60000
 function CodexResetControls({profile}) {
   const [confirm,setConfirm] = useState(false)
   const [busy,setBusy] = useState(false), [message,setMessage] = useState('')
@@ -655,7 +658,7 @@ function CodexResetControls({profile}) {
     operation.current=true
     setBusy(true);setMessage('')
     try {
-      const result=await rest('/codex/resets/auto',{method:'POST',body:{profile,binding:state.binding,enabled}})
+      const result=await rest('/codex/resets/auto',{method:'POST',body:{profile,binding:state.binding,enabled},timeoutMs:RESET_ROUTE_TIMEOUT_MS})
       if(result.profile!==profile)throw new Error('Wrong profile response')
       await query.refetch({cancelRefetch:false})
     }catch(err){setMessage(String(err.message||err));await query.refetch({cancelRefetch:false})}
@@ -670,7 +673,7 @@ function CodexResetControls({profile}) {
       // Never use a cached window as redemption authority. The backend reads
       // again under its account-scoped exclusive operation before consumption.
       const result=await rest('/codex/resets/redeem',{method:'POST',body:{profile,
-        binding:state.binding,episode:state.episode,count:state.count}})
+        binding:state.binding,episode:state.episode,count:state.count},timeoutMs:RESET_ROUTE_TIMEOUT_MS})
       if(result.profile!==profile)throw new Error('Wrong profile response')
       setMessage(result.outcome==='reset'||result.outcome==='alreadyRedeemed'
         ? 'Reset applied; Codex limits were read back.' : 'Codex returned '+result.outcome+'; no reset was applied.')

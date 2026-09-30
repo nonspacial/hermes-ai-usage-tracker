@@ -1,6 +1,6 @@
 # Ticket: codex reset finalisation can strand a completed redemption as pending
 
-**Status: fixed in `da39ef2` on branch `fix/codex-reset-finalisation`** (repository candidate; not merged, installed or exercised against a live account). The symptom, triggers and reproduction below describe the pre-fix code at `68515de`; the design summary is under [Resolution](#resolution).
+**Status: fixed in `da39ef2` on branch `fix/codex-reset-finalisation`, with review follow-ups in the next commit** (repository candidate; not merged, installed or exercised against a live account). The symptom, triggers and reproduction below describe the pre-fix code at `68515de`; the design summary is under [Resolution](#resolution).
 
 ## Symptom
 
@@ -83,7 +83,8 @@ class FakeServer:
 r.AppServer = FakeServer
 v = r.observe(root)
 try:
-    r.redeem(root, expected_binding=v['binding'], expected_episode=v['episode'], expected_count=2)
+    print('redeem:', r.redeem(root, expected_binding=v['binding'], expected_episode=v['episode'],
+                              expected_count=2)['outcome'])  # after the fix
 except r.Unavailable as e:
     print('redeem raised Unavailable:', e)      # although the service returned 'reset'
 time.sleep(0.5)
@@ -100,12 +101,27 @@ print({k: r.observe(root)[k] for k in ('blocked', 'redeemable', 'last_outcome')}
 
 Implemented in [`ledger_runtime/codex_resets.py`](../ledger_runtime/codex_resets.py); the binding contract lives in [ledger runtime DOX](../ledger_runtime/AGENTS.md).
 
-- **Journal before recording.** As soon as consume returns a definite outcome, it is written once to `codex-reset-authority/outcome-<attempt>` (O_EXCL, 0600, fsynced, bound to the hashed account key). This needs no SQLite lock, so no reader or writer can delay it.
+- **Journal before recording.** As soon as consume returns a definite outcome, it is written once to `codex-reset-authority/outcome-<attempt>` (O_EXCL, 0600, short writes completed, file and directory fsynced; the body names the hashed account key and the attempt id). This needs no SQLite lock, so no reader or writer can delay it. The write reports one of three states: not written, written but durability unconfirmed (an fsync failed), or durable. A journal is read only if it is a single-link, owner-private regular file whose body matches both the account key and the attempt id in its filename.
 - **Bounded post-spend finalisation.** After the limits read-back, `_finalise` records the outcome with its own budget: up to 5 s of ≤1 s `BEGIN IMMEDIATE` tries with 50/250 ms backoff (bounded try count). Every try re-verifies that the row still holds the same attempt id. Recording is idempotent per attempt through a new `attempts` table, so a racing reconciler and the finaliser never record twice.
-- **Distinct failure.** If recording still fails, or the read-back fails, `redeem()` raises `Unrecorded` (HTTP 409): "Reset was used but could not be recorded; it will be reconciled on the next check." It never reports "Another redemption is in progress." for a completed spend. The row stays pending.
-- **Reconciliation on the next check.** `observe()`, `set_auto()` and admission reconcile a pending attempt whose journal matches it: they record the outcome, clear the attempt and delete the journal. The episode remains spent, so no second consume can follow, even if the provider still reports the old exhaustion.
-- **Unknown stays unknown.** A pending attempt without a valid journal (crash between RPC and journal, uncertain RPC, pre-upgrade row) is never given an outcome. It stays blocked and reads `last_outcome: 'unrecorded'` once no live redeem can still record it. There is still no in-product clear for it; no new destructive action was added. The desktop badge keeps its existing truthful "Redemption status is uncertain" blocked tooltip.
+- **Distinct failure.** If recording still fails, or the read-back fails, `redeem()` raises `Unrecorded` (HTTP 409). Its message follows the journal state: durable → "Reset was used but could not be recorded; it will be reconciled on the next check."; written but unconfirmed → "… it may be reconciled on the next check. If it stays blocked, check your Codex account before taking further action."; not written → "… redemption stays blocked. Check your Codex account before taking further action." It never reports "Another redemption is in progress." for a completed spend. The row stays pending.
+- **Reconciliation on the next check.** `observe()`, `set_auto()` and admission reconcile a pending attempt whose journal matches it: they record the outcome, clear the attempt and delete the journal. The episode remains spent, so no second consume can follow, even if the provider still reports the old exhaustion; while it does, `observe()` reports `redeemable: false` (the badge is not Ready and the monitor starts no redeem) until a new episode appears.
+- **Cleanup.** A successful finalisation always deletes the attempt's journal file (also a torn one). Observe and admission sweep, within their write transaction and bounded to 64 directory entries, `outcome-*` journals whose attempt no account holds pending; errors are ignored. They also prune that account's settled `attempts` rows beyond the newest 200; the current attempt is always kept.
+- **Unknown stays unknown.** A pending attempt without a valid journal (crash between RPC and journal, uncertain RPC, pre-upgrade row) is never given an outcome. It stays blocked and reads `last_outcome: 'unrecorded'` once no live redeem can still record it. There is still no in-product clear for it; no new destructive action was added. The desktop badge keeps its existing truthful "Redemption status is uncertain" blocked tooltip. Wall-clock steps only move the pending/unrecorded label (`INFLIGHT_SECONDS`), never the block.
 - **Busy budget.** Observe, opt-in and admission use a 1 s busy timeout instead of 0.1 s; admission keeps `BEGIN IMMEDIATE` and admits exactly one attempt. The monitor's read-only opt-in query closes its connection at once.
 - **Schema.** Additive only: `CREATE TABLE IF NOT EXISTS attempts` on every open. The `state` and `optin` shapes and old rows are unchanged, with no offline migration.
 
-Verification (implementer-run, synthetic only): the reproduction probe above now prints `redeem: reset`, `[(0, 'reset')]` and `blocked: False` for both lock modes. `tests/test_codex_resets.py` covers reader and writer locks across finalisation, a lock beyond the budget with reconciliation by observe/admission/opt-in and no second consume, crash and unjournalled cases staying `unrecorded`, forged journals, the idempotent race and an old-shape database upgrade.
+- **Desktop timeout.** The redeem and Auto use requests pass `timeoutMs: 60000`: the route can take ~38 s of RPCs, ~4 s of cleanup and ≤5 s of finalisation, beyond the host's 30 s default.
+
+### Manual recovery for an attempt with no journal
+
+A crash between the consume RPC and the journal, an uncertain RPC or a pre-upgrade pending row leaves the account blocked as `unrecorded` indefinitely, by design: the plugin cannot know whether a reset was spent. Check the Codex account directly (banked reset count and whether the five-hour/weekly limit was reset around the attempt time). There is deliberately no in-product clear; a clearing action is an open follow-up in [docs DOX](AGENTS.md), not part of this fix.
+
+Verification (implementer-run, synthetic only): the reproduction probe above now prints, for both lock modes:
+
+```text
+redeem: reset
+[(0, 'reset')]
+{'blocked': False, 'redeemable': False, 'last_outcome': 'reset'}
+```
+
+`redeemable` is `False` because the probe's fake provider still reports the spent episode. `tests/test_codex_resets.py` covers reader and writer locks across finalisation, a lock beyond the budget with reconciliation by observe/admission/opt-in and no second consume, crash and unjournalled cases staying `unrecorded`, forged, hard-linked and attempt-mismatched journals, unconfirmed journal durability, short writes, journal cleanup and sweep, attempts pruning, the spent episode staying unredeemable, the idempotent race and an old-shape database upgrade.

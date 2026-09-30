@@ -488,6 +488,22 @@ def test_lock_beyond_budget_is_unrecorded_then_reconciled_without_second_consume
     assert later['last_outcome'] == 'reset' and later['blocked'] is False
 
 
+def test_spent_episode_is_not_redeemable_while_provider_still_reports_it(fixture, monkeypatch):
+    view, error, _ = _strand(fixture, monkeypatch)
+    assert error.reconcilable
+    FakeServer.state = snapshot(count=1, reset=FIXTURE_RESET_AT)  # stale provider read
+    after = resets.observe(fixture)
+    assert after['last_outcome'] == 'reset' and after['episode'] == view['episode']
+    assert after['redeemable'] is False and after['blocked'] is False
+    resets.set_auto(fixture, view['binding'], True)
+    assert resets.automatic_tick(fixture, lambda: True) is None  # monitor starts no redeem
+    assert resets.observe(fixture)['redeemable'] is False
+    FakeServer.state = snapshot(count=1, reset=FIXTURE_RESET_AT + 3600)  # a new episode
+    fresh = resets.observe(fixture)
+    assert fresh['episode'] != view['episode'] and fresh['redeemable'] is True and fresh['blocked'] is False
+    assert len(_consumes()) == 1
+
+
 def test_reader_lock_beyond_budget_rolls_back_and_reconciles(fixture, monkeypatch):
     _, error, rows = _strand(fixture, monkeypatch, mode='reader')
     assert error.reconcilable and rows[0][1] == 'pending'  # COMMIT was refused, write rolled back
@@ -585,15 +601,174 @@ def test_forged_or_foreign_journal_is_ignored(fixture, monkeypatch):
                       expected_episode=view['episode'], expected_count=2)
     [(attempt, _)] = _state_rows(fixture)
     journal = resets._db_path(fixture).parent / ('outcome-' + attempt)
-    for body, mode in (('other-account\nreset\n', 0o600),
-                       (resets._account_key('org-fixture') + '\nreset', 0o600),  # torn
-                       (resets._account_key('org-fixture') + '\nsurprise\n', 0o600),
-                       (resets._account_key('org-fixture') + '\nreset\n', 0o644)):
+    key = resets._account_key('org-fixture')
+    other_attempt = '00000000-0000-4000-8000-000000000000'
+    for body, mode in (('other-account\n%s\nreset\n' % attempt, 0o600),
+                       (key + '\n' + attempt + '\nreset', 0o600),  # torn
+                       (key + '\n' + attempt + '\nsurprise\n', 0o600),
+                       (key + '\n' + attempt + '\nreset\n', 0o644),
+                       (key + '\nreset\n', 0o600),  # pre-binding shape without attempt id
+                       (key + '\n' + other_attempt + '\nreset\n', 0o600)):  # body/filename mismatch
         journal.write_text(body)
         journal.chmod(mode)
         assert resets.observe(fixture)['blocked']
+        assert journal.exists()  # the pending attempt's own journal is never swept
         journal.unlink()
     assert _state_rows(fixture)[0][0] == attempt
+    # The same well-formed body is accepted, so the rejections above are specific.
+    journal.write_text(key + '\n' + attempt + '\nreset\n')
+    journal.chmod(0o600)
+    assert resets.observe(fixture)['last_outcome'] == 'reset'
+
+
+def test_hard_linked_journal_is_ignored(fixture, monkeypatch):
+    _, error, _ = _strand(fixture, monkeypatch)
+    assert error.reconcilable
+    [(attempt, _)] = _state_rows(fixture)
+    journal = resets._db_path(fixture).parent / ('outcome-' + attempt)
+    link = fixture / 'journal-link'
+    os.link(journal, link)
+    after = resets.observe(fixture)
+    assert after['blocked'] and after['last_outcome'] == 'pending'
+    assert journal.exists() and _state_rows(fixture)[0][0] == attempt
+    link.unlink()
+    assert resets.observe(fixture)['last_outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')] and len(_consumes()) == 1
+
+
+def test_unconfirmed_journal_durability_may_be_reconciled(fixture, monkeypatch):
+    """Written but the directory fsync failed: truthful 'may be reconciled' message."""
+    def no_dir_fsync(path):
+        raise OSError('fixture directory fsync failure')
+    monkeypatch.setattr(resets, '_fsync_dir', no_dir_fsync)
+    _, error, _ = _strand(fixture, monkeypatch)
+    assert error.journal == resets.WRITTEN and not error.reconcilable
+    assert str(error) == ('Reset was used but could not be recorded; it may be reconciled on the next '
+                          'check. If it stays blocked, check your Codex account before taking further action.')
+    assert 'stays blocked.' not in str(error)
+    [(attempt, result)] = _state_rows(fixture)
+    assert attempt and result == 'pending'
+    after = resets.observe(fixture)
+    assert after['blocked'] is False and after['last_outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')] and len(_consumes()) == 1
+    assert not list(resets._db_path(fixture).parent.glob('outcome-*'))
+
+
+def test_journal_write_handles_short_and_failed_writes(fixture, monkeypatch):
+    key = resets._account_key('org-fixture')
+    real_write = os.write
+    attempts = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
+                '33333333-3333-4333-8333-333333333333']
+    with monkeypatch.context() as scoped:
+        scoped.setattr(resets.os, 'write', lambda fd, data: real_write(fd, data[:1]))  # 1 byte per call
+        assert resets._write_outcome(fixture, key, attempts[0], 'reset') == resets.DURABLE
+    assert resets._read_outcome(fixture, key, attempts[0]) == 'reset'
+    with monkeypatch.context() as scoped:
+        scoped.setattr(resets.os, 'write', lambda fd, data: real_write(fd, data[:5]) and 0)  # then stalls
+        assert resets._write_outcome(fixture, key, attempts[1], 'reset') == resets.NOT_WRITTEN
+    assert resets._read_outcome(fixture, key, attempts[1]) is None
+    real_fsync = os.fsync
+    with monkeypatch.context() as scoped:
+        def fsync(fd):
+            raise OSError('fixture file fsync failure')
+        scoped.setattr(resets.os, 'fsync', fsync)
+        assert resets._write_outcome(fixture, key, attempts[2], 'reset') == resets.WRITTEN
+    assert os.fsync is real_fsync
+    assert resets._write_outcome(fixture, key, attempts[2], 'reset') == resets.NOT_WRITTEN  # O_EXCL
+    assert resets.Unrecorded('reset', resets.NOT_WRITTEN).reconcilable is False
+    assert 'stays blocked' in str(resets.Unrecorded('reset', resets.NOT_WRITTEN))
+
+
+def test_partial_journal_is_removed_after_successful_finalisation(fixture, monkeypatch):
+    view = resets.observe(fixture)
+    def partial(home, key, attempt, outcome):
+        path = resets._outcome_path(home, attempt)
+        path.write_bytes((key + '\n' + attempt[:8]).encode())  # torn by a short write
+        path.chmod(0o600)
+        return resets.NOT_WRITTEN
+    monkeypatch.setattr(resets, '_write_outcome', partial)
+    assert resets.redeem(fixture, expected_binding=view['binding'],
+                         expected_episode=view['episode'], expected_count=2)['outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')]
+    assert not list(resets._db_path(fixture).parent.glob('outcome-*'))
+
+
+def test_orphan_journals_are_swept_but_pending_journal_kept(fixture):
+    view = resets.observe(fixture)
+    FakeServer.fail_after_consume = True
+    with pytest.raises(resets.Unavailable):
+        resets.redeem(fixture, expected_binding=view['binding'],
+                      expected_episode=view['episode'], expected_count=2)
+    [(attempt, _)] = _state_rows(fixture)
+    folder = resets._db_path(fixture).parent
+    key = resets._account_key('org-fixture')
+    pending = folder / ('outcome-' + attempt)
+    pending.write_text(key + '\n' + attempt + '\n')  # torn journal of the pending attempt
+    orphan_attempt = '44444444-4444-4444-8444-444444444444'
+    orphan = folder / ('outcome-' + orphan_attempt)
+    orphan.write_text(key + '\n' + orphan_attempt + '\nreset\n')
+    unrelated = folder / 'outcome-not-a-uuid'
+    unrelated.write_text('keep')
+    for path in (pending, orphan, unrelated):
+        path.chmod(0o600)
+    blocked = resets.observe(fixture)
+    assert blocked['blocked']
+    assert pending.exists() and not orphan.exists() and unrelated.read_text() == 'keep'
+    # Admission sweeps too, even when it refuses.
+    orphan.write_text(key + '\n' + orphan_attempt + '\nreset\n')
+    with pytest.raises(resets.Unavailable, match='blocked'):
+        resets.redeem(fixture, expected_binding=view['binding'],
+                      expected_episode=view['episode'], expected_count=2)
+    assert pending.exists() and not orphan.exists()
+    assert _state_rows(fixture)[0][0] == attempt and len(_consumes()) == 1
+
+
+def test_sweep_is_bounded_and_ignores_errors(fixture, monkeypatch):
+    resets.observe(fixture)
+    folder = resets._db_path(fixture).parent
+    monkeypatch.setattr(resets, 'SWEEP_LIMIT', 3)
+    names = ['outcome-%08d-0000-4000-8000-000000000000' % i for i in range(10)]
+    for name in names:
+        (folder / name).write_text('x')
+    resets.observe(fixture)
+    assert len(list(folder.glob('outcome-*'))) >= len(names) - 3
+    real_unlink = os.unlink
+    def failing(path, *a, **k):
+        if os.path.basename(path).startswith('outcome-'):
+            raise PermissionError('fixture unlink failure')
+        return real_unlink(path, *a, **k)
+    monkeypatch.setattr(resets.os, 'unlink', failing)
+    assert resets.observe(fixture)['blocked'] is False  # sweep errors never fail a check
+
+
+def test_attempts_pruned_to_current_plus_newest(fixture, monkeypatch):
+    view = resets.observe(fixture)
+    FakeServer.fail_after_consume = True
+    with pytest.raises(resets.Unavailable):
+        resets.redeem(fixture, expected_binding=view['binding'],
+                      expected_episode=view['episode'], expected_count=2)
+    [(current, _)] = _state_rows(fixture)
+    key = resets._account_key('org-fixture')
+    other = resets._account_key('org-other')
+    conn = sqlite3.connect(resets._db_path(fixture))
+    with conn:
+        # The current attempt is the oldest row; even with an outcome set it is kept.
+        conn.execute("UPDATE attempts SET started=0, outcome='reset' WHERE attempt=?", (current,))
+        conn.executemany('INSERT INTO attempts VALUES (?,?,?,?)',
+            [('settled-%d' % i, key, float(i), 'reset') for i in range(1, 7)]
+            + [('unsettled-old', key, 0.5, None)]
+            + [('other-%d' % i, other, float(i), 'reset') for i in range(1, 7)])
+    conn.close()
+    monkeypatch.setattr(resets, 'ATTEMPTS_KEEP', 3)
+    assert resets.observe(fixture)['blocked']
+    conn = sqlite3.connect(resets._db_path(fixture))
+    try:
+        mine = {r[0] for r in conn.execute('SELECT attempt FROM attempts WHERE binding=?', (key,))}
+        theirs = conn.execute('SELECT COUNT(*) FROM attempts WHERE binding=?', (other,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert mine == {current, 'unsettled-old', 'settled-4', 'settled-5', 'settled-6'}
+    assert theirs == 6  # other accounts are pruned only on their own checks
 
 
 def test_failed_read_back_after_definite_outcome_reconciles_on_next_check(fixture, monkeypatch):
@@ -911,8 +1086,8 @@ def test_installed_hermes_config_gate_controls_mounted_monitor(tmp_path, monkeyp
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             calls = list(FakeServer.calls)
-            if (len([x for x in calls if isinstance(x, tuple)]) == count
-                    and calls[-1] == 'read' and isinstance(calls[-2], tuple)):
+            consumes = [i for i, x in enumerate(calls) if isinstance(x, tuple)]
+            if len(consumes) == count and 'read' in calls[consumes[-1] + 1:]:
                 return
             time.sleep(.01)
         pytest.fail('opted-in fixture did not consume after enabling the real config gate')

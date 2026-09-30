@@ -16,6 +16,8 @@ Root owns user-facing README and top-level technical references. This directory 
 
 ## Work Guidance
 
+- Open follow-up: a Codex reset attempt with no journal (crash before journalling, uncertain RPC, pre-upgrade row) stays blocked as `unrecorded` with no in-product clear; decide whether to add a guarded, user-confirmed clear (see [ticket](TICKET_CODEX_RESET_FINALISATION_LOCK.md#manual-recovery-for-an-attempt-with-no-journal)).
+
 - Overview chart/identity details belong in the local contract; measured latency and remaining runtime gaps belong in the investigation note. README remains authoritative for published user-facing behaviour until separately updated and verified.
 
 ## Verification

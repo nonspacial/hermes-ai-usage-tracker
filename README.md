@@ -149,7 +149,9 @@ On Plus accounts, automatic use can trigger at the five-hour limit, not only the
 
 If redemption returns an uncertain result, further attempts are blocked. Check your Codex account before taking further action; the plugin does not automatically retry an uncertain spend.
 
-If Codex confirmed the result but the plugin could not record it straight away, for example because another profile was using the shared reset record, you see **Reset was used but could not be recorded; it will be reconciled on the next check.** The next balance check records the saved result and clears the block without spending another reset.
+If Codex confirmed the result but the plugin could not record it straight away, for example because another profile was using the shared reset record, you see **Reset was used but could not be recorded; it will be reconciled on the next check.** The next balance check records the saved result and clears the block without spending another reset. If the message says it **may** be reconciled, the saved result could not be confirmed on disk; it normally clears the same way, but if the block remains, treat it as uncertain.
+
+If the badge stays blocked as uncertain, the plugin does not know whether the reset was spent (for example the backend stopped between Codex's answer and saving it). Open your Codex account and check the banked reset count and whether your five-hour or weekly limit was reset around that time. The block is deliberate: there is no in-product control to clear it, so no second reset can be spent by mistake.
 
 ## Export a report
 

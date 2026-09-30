@@ -99,6 +99,10 @@ def run():
             page.evaluate('releaseRedeem()')
             expect(controls.get_by_role('button',name='Resets: 1')).to_have_attribute('data-tone','waiting')
             assert page.evaluate("window.demoResetCalls.filter(x=>x.path==='/codex/resets/redeem').length") == 1
+            # Mutating reset routes outlast the host's 30 s default fetch timeout.
+            assert page.evaluate("window.demoResetCalls.filter(x=>x.method==='POST').map(x=>[x.path,x.timeoutMs])") == [
+                ['/codex/resets/auto',60000],['/codex/resets/redeem',60000]]
+            assert page.evaluate("window.demoResetCalls.filter(x=>x.method==='GET').every(x=>x.timeoutMs===undefined)")
             page.get_by_role('tab',name='Codex',exact=True).click()
             top=page.get_by_test_id('provider-limits').get_by_test_id('codex-resets')
             expect(top.get_by_role('button',name='Resets: 1')).to_be_visible()
@@ -114,7 +118,7 @@ def run():
             expect(page.get_by_test_id('quota-home').get_by_test_id('codex-resets').get_by_role('button',name='Resets: 0')).to_be_visible()
             assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
             assert not network and not errors,(network,errors)
-            print('PASS text-checkbox-badge order in both cards; direct guarded confirmation, zero/ineligible no-op, opt-in, no network')
+            print('PASS text-checkbox-badge order in both cards; direct guarded confirmation, zero/ineligible no-op, opt-in, 60 s mutating-route timeout, no network')
         finally:
             browser.close()
 
