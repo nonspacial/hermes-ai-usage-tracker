@@ -393,7 +393,7 @@ def mounted(browser):
         page.clock.run_for(60000)
         age = page.get_by_test_id('connection-status').get_attribute('data-au-freshness-age')
         assert age is not None, age
-        ages.append(int(age.rstrip('s')))
+        ages.append(int(re.fullmatch(r'(\d+)s ago', age)[1]))
     assert len(set(ages)) == 1 and ages[0] < 60, ages
     assert page.evaluate('ledgerReads.length') == reads, 'quiet rolling expiry read the ledger'
     assert page.evaluate("demoCalls.filter(p=>p.startsWith('/ledger/change-token')).length") > tokens
