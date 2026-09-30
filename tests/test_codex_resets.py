@@ -731,7 +731,8 @@ def test_sweep_is_bounded_and_ignores_errors(fixture, monkeypatch):
     for name in names:
         (folder / name).write_text('x')
     resets.observe(fixture)
-    assert len(list(folder.glob('outcome-*'))) >= len(names) - 3
+    # Only journal candidates count towards the limit (not state.sqlite3 etc.).
+    assert len(list(folder.glob('outcome-*'))) == len(names) - 3
     real_unlink = os.unlink
     def failing(path, *a, **k):
         if os.path.basename(path).startswith('outcome-'):
@@ -739,6 +740,112 @@ def test_sweep_is_bounded_and_ignores_errors(fixture, monkeypatch):
         return real_unlink(path, *a, **k)
     monkeypatch.setattr(resets.os, 'unlink', failing)
     assert resets.observe(fixture)['blocked'] is False  # sweep errors never fail a check
+
+
+class _LostTransaction:
+    """Connection proxy for _housekeep: SQLite auto-rolls back the whole
+    transaction (as on SQLITE_FULL/IOERR/NOMEM/BUSY) when ``fail_on`` runs."""
+    def __init__(self, conn, fail_on, lose=True):
+        self.conn, self.fail_on, self.lose = conn, fail_on, lose
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+    def execute(self, sql, *args):
+        if sql.startswith(self.fail_on):
+            if self.lose:
+                self.conn.execute('ROLLBACK')
+            raise sqlite3.OperationalError('fixture disk I/O error')
+        return self.conn.execute(sql, *args)
+
+
+_FAIL_AT = {'prune': 'DELETE FROM attempts', 'sweep': 'SELECT attempt FROM state'}
+
+
+def _authority(home):
+    conn = sqlite3.connect(resets._db_path(home))
+    try:
+        return (conn.execute('SELECT * FROM state ORDER BY binding').fetchall(),
+                conn.execute('SELECT * FROM attempts ORDER BY attempt').fetchall())
+    finally:
+        conn.close()
+
+
+def _seed_prunable(home, monkeypatch):
+    key = resets._account_key('org-fixture')
+    conn = sqlite3.connect(resets._db_path(home))
+    with conn:
+        conn.executemany('INSERT INTO attempts VALUES (?,?,?,?)',
+                         [('settled-%d' % i, key, float(i), 'reset') for i in range(1, 5)])
+    conn.close()
+    monkeypatch.setattr(resets, 'ATTEMPTS_KEEP', 1)
+
+
+def _lose_transaction(monkeypatch, at):
+    real = resets._housekeep
+    monkeypatch.setattr(resets, '_housekeep',
+                        lambda conn, *a: real(_LostTransaction(conn, _FAIL_AT[at]), *a))
+    return real
+
+
+@pytest.mark.parametrize('at', ['prune', 'sweep'])
+def test_lost_transaction_in_housekeeping_refuses_admission(fixture, monkeypatch, at):
+    view = resets.observe(fixture)
+    _seed_prunable(fixture, monkeypatch)
+    before = _authority(fixture)
+    real = _lose_transaction(monkeypatch, at)
+    with pytest.raises(resets.Unavailable):
+        resets.redeem(fixture, expected_binding=view['binding'],
+                      expected_episode=view['episode'], expected_count=2)
+    # Nothing ran outside the lost transaction: no pending row, no prune.
+    assert _authority(fixture) == before
+    assert _consumes() == []
+    monkeypatch.setattr(resets, '_housekeep', real)
+    assert resets.observe(fixture)['blocked'] is False
+    assert resets.redeem(fixture, expected_binding=view['binding'],
+                         expected_episode=view['episode'], expected_count=2)['outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')] and len(_consumes()) == 1
+
+
+@pytest.mark.parametrize('at', ['prune', 'sweep'])
+def test_lost_transaction_in_housekeeping_fails_observe(fixture, monkeypatch, at):
+    consume = FakeServer.call
+    view, error, _ = _strand(fixture, monkeypatch)
+    monkeypatch.setattr(FakeServer, 'call', consume)  # no lock held during later consumes
+    assert error.reconcilable
+    [(attempt, _)] = _state_rows(fixture)
+    journal = resets._db_path(fixture).parent / ('outcome-' + attempt)
+    _seed_prunable(fixture, monkeypatch)
+    before = _authority(fixture)
+    real = _lose_transaction(monkeypatch, at)
+    # The original failure surfaces; nothing continues after the lost transaction.
+    with pytest.raises(sqlite3.Error) as raised:
+        resets.observe(fixture)
+    assert _authority(fixture) == before  # reconciliation rolled back, nothing pruned
+    assert str(raised.value) == 'fixture disk I/O error'
+    assert journal.is_file() and len(_consumes()) == 1
+    monkeypatch.setattr(resets, '_housekeep', real)
+    assert resets.observe(fixture)['last_outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')] and not journal.exists()
+    FakeServer.state = snapshot(count=1, reset=FIXTURE_RESET_AT + 3600)  # a new episode
+    fresh = resets.observe(fixture)
+    assert fresh['redeemable']
+    assert resets.redeem(fixture, expected_binding=view['binding'],
+                         expected_episode=fresh['episode'], expected_count=1)['outcome'] == 'reset'
+    assert len(_consumes()) == 2
+
+
+@pytest.mark.parametrize('at', ['prune', 'sweep'])
+def test_housekeeping_statement_error_with_open_transaction_is_ignored(fixture, monkeypatch, at):
+    view = resets.observe(fixture)
+    _seed_prunable(fixture, monkeypatch)
+    real = resets._housekeep
+    monkeypatch.setattr(resets, '_housekeep',
+                        lambda conn, *a: real(_LostTransaction(conn, _FAIL_AT[at], lose=False), *a))
+    assert resets.observe(fixture)['blocked'] is False
+    assert resets.redeem(fixture, expected_binding=view['binding'],
+                         expected_episode=view['episode'], expected_count=2)['outcome'] == 'reset'
+    assert _state_rows(fixture) == [(None, 'reset')] and len(_consumes()) == 1
+    settled = [r for r in _authority(fixture)[1] if r[0].startswith('settled-')]
+    assert len(settled) == (4 if at == 'prune' else 1)  # prune skipped only when it failed
 
 
 def test_attempts_pruned_to_current_plus_newest(fixture, monkeypatch):
@@ -797,7 +904,7 @@ def test_unrecorded_route_error_is_distinct_409():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     with pytest.raises(HTTPException) as raised:
-        module._reset_error(resets.Unrecorded('reset', True))
+        module._reset_error(resets.Unrecorded('reset', resets.DURABLE))
     assert raised.value.status_code == 409
     assert raised.value.detail == 'Reset was used but could not be recorded; it will be reconciled on the next check.'
 

@@ -54,7 +54,7 @@ INFLIGHT_SECONDS = TOTAL_SECONDS + FINALISE_SECONDS + 30
 NOT_WRITTEN, WRITTEN, DURABLE = 0, 1, 2
 # Settled `attempts` rows kept per account (the current attempt is always kept).
 ATTEMPTS_KEEP = 200
-# At most this many directory entries are examined per orphan-journal sweep.
+# At most this many ``outcome-*`` entries are examined per orphan-journal sweep.
 SWEEP_LIMIT = 64
 
 
@@ -65,14 +65,12 @@ class Unavailable(Exception):
 class Unrecorded(Unavailable):
     """Codex returned a definite consume outcome, but recording it did not finish.
 
-    ``journal`` is the _write_outcome state (a bool means DURABLE/NOT_WRITTEN).
-    DURABLE: the next check clears the attempt. WRITTEN: the journal is readable
-    but its durability is unconfirmed, so the next check may clear it (not after
-    a crash). NOT_WRITTEN: the account stays blocked as ``unrecorded``.
+    ``journal`` is the _write_outcome state. DURABLE: the next check clears the
+    attempt. WRITTEN: the journal is readable but its durability is unconfirmed,
+    so the next check may clear it (not after a crash). NOT_WRITTEN: the
+    account stays blocked as ``unrecorded``.
     """
-    def __init__(self, outcome: str, journal):
-        if journal is True or journal is False:
-            journal = DURABLE if journal else NOT_WRITTEN
+    def __init__(self, outcome: str, journal: int):
         what = ('Reset was used but' if outcome in ('reset', 'alreadyRedeemed')
                 else 'Codex returned %s but it' % outcome)
         tail = ('it will be reconciled on the next check.' if journal == DURABLE
@@ -486,23 +484,43 @@ def _housekeep(conn, home: Path, key: str, settled: list) -> None:
     transaction (``settled``) are kept: _settle removes them after COMMIT.
     Then prunes this account's settled ``attempts`` rows beyond the newest
     ATTEMPTS_KEEP; the current attempt and unsettled rows are never pruned.
+
+    Filesystem errors are ignored. A SQLite error is ignored only while the
+    caller's transaction is still open: SQLite may roll the whole transaction
+    back (FULL/IOERR/NOMEM/BUSY), and continuing would autocommit the caller's
+    later writes without the lock, so that error is re-raised.
     """
     try:
         live = {row[0] for row in conn.execute('SELECT attempt FROM state WHERE attempt IS NOT NULL')}
+    except sqlite3.Error:
+        if not conn.in_transaction:
+            raise
+        live = None
+    if live is not None:
         live.update(settled)
-        with os.scandir(_db_path(home).parent) as entries:
-            for examined, entry in enumerate(entries):
-                if examined >= SWEEP_LIMIT:
-                    break
-                attempt = entry.name[len('outcome-'):]
-                if (entry.name.startswith('outcome-') and _canonical_attempt(attempt)
-                        and attempt not in live):
-                    try:
-                        os.unlink(entry.path)
-                    except OSError:
-                        pass
-    except (OSError, sqlite3.Error, Unavailable):
-        pass
+        try:
+            with os.scandir(_db_path(home).parent) as entries:
+                candidates = 0
+                for entry in entries:
+                    if not entry.name.startswith('outcome-'):
+                        continue
+                    candidates += 1
+                    if candidates > SWEEP_LIMIT:
+                        break
+                    attempt = entry.name[len('outcome-'):]
+                    if _canonical_attempt(attempt) and attempt not in live:
+                        try:
+                            os.unlink(entry.path)
+                        except OSError:
+                            pass
+        except (OSError, Unavailable):
+            pass
+    try:
+        conn.execute('SAVEPOINT housekeep')
+    except sqlite3.Error:
+        if not conn.in_transaction:
+            raise
+        return
     try:
         conn.execute(
             'DELETE FROM attempts WHERE binding=? AND outcome IS NOT NULL '
@@ -510,7 +528,10 @@ def _housekeep(conn, home: Path, key: str, settled: list) -> None:
             'AND attempt NOT IN (SELECT attempt FROM attempts WHERE binding=? AND outcome IS NOT NULL '
             'ORDER BY started DESC, rowid DESC LIMIT ?)', (key, key, ATTEMPTS_KEEP))
     except sqlite3.Error:
-        pass
+        if not conn.in_transaction:
+            raise
+        conn.execute('ROLLBACK TO housekeep')  # any failure here propagates: fail closed
+    conn.execute('RELEASE housekeep')
 
 
 def _record(conn, key: str, attempt: str, outcome: str) -> None:
