@@ -1,5 +1,5 @@
 """Offline integration tests of the packaged Desktop component. No account calls."""
-import os, re
+import os, re, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 ROOT=Path(__file__).resolve().parents[2];ART=Path(__file__).parent/'artifacts';ART.mkdir(exist_ok=True)
@@ -53,14 +53,32 @@ def assert_selected(group, name, attribute='aria-pressed'):
  assert style(selected)==on, 'Selection should persist after focus leaves'
  selected.evaluate('() => document.activeElement?.blur()')
 
+def packaged_version():
+ # plugin.yaml is the release source of truth; every other packaged version stamp must agree with it.
+ import json,yaml
+ version=yaml.safe_load((ROOT/'plugin.yaml').read_text())['version']
+ assert isinstance(version,str) and version,version
+ assert json.loads((ROOT/'dashboard/manifest.json').read_text())['version']==version
+ sys.path.insert(0,str(ROOT))
+ from ledger_runtime import VERSION
+ assert VERSION==version,(VERSION,version)
+ return version
+
 def run():
  # Artifacts are shared with the other independent UI suites; do not delete them here.
+ version=packaged_version()
+ # The preview carries no version banner (removed with the responsive layout); prove instead that it
+ # embeds the exact packaged Desktop source and fixture this version ships, so the run tests this build.
+ import build_preview
+ html=(ROOT/'preview.html').read_text()
+ assert build_preview.preview_source() in html,'preview.html is stale against desktop/plugin.js; run build_preview.py'
+ assert (ROOT/'tests/ui/all_profiles_fixture.js').read_text() in html,'preview.html is stale against the fixture'
+ print('PASS packaged version '+version+' agrees across plugin.yaml, dashboard manifest and ledger runtime; preview embeds current source')
  with sync_playwright() as p:
   b=p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH','/usr/bin/chromium'),headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
   page=b.new_page(viewport={'width':1500,'height':1150},color_scheme='light',locale='en-US');page.set_default_timeout(4500)
   errors=[];network=[];page.on('pageerror',lambda e:errors.append(str(e)));page.on('request',lambda r:network.append(r.url))
-  page.set_content((ROOT/'preview.html').read_text(),wait_until='domcontentloaded');page.wait_for_timeout(300)
-  assert '2.0.0-test.17' in page.locator('body').inner_text()
+  page.set_content(html,wait_until='domcontentloaded');page.wait_for_timeout(300)
   main=page.get_by_role('navigation',name='Providers',exact=True)
   subnav=page.get_by_role('navigation',name='Provider subpages',exact=True)
   assert_selected(main,'Subscriptions','aria-selected')
@@ -97,7 +115,10 @@ def run():
   page.screenshot(path=str(ART/'overview-subagents.png'),full_page=True)
   page.get_by_test_id('subagent-summary').click();page.wait_for_timeout(80)
   assert page.get_by_role('combobox',name='Agent scope').input_value()=='subagent'
-  assert '100.0% of known tokens' in page.get_by_test_id('subagent-summary').inner_text()
+  # The compact card shows the share as "N%"; its full "of known tokens" wording is on the span's tooltip.
+  share=page.get_by_test_id('subagent-summary').locator('span',has_text=re.compile(r'^Peak '))
+  assert ' · 100.0% · ' in share.inner_text(),share.inner_text()
+  assert '100.0% of known tokens' in share.get_attribute('title'),share.get_attribute('title')
   assert page.get_by_test_id('subagent-summary').get_attribute('aria-pressed')=='true'
   page.get_by_role('tab',name='Requests',exact=True).click();page.wait_for_timeout(80)
   assert page.get_by_role('columnheader',name='Agent',exact=True).count()==1
@@ -110,10 +131,14 @@ def run():
    assert_selected(page.get_by_role('group',name='Breakdown grouping'),name)
    assert page.get_by_role('columnheader',name='Subagent tokens',exact=True).count()==1
    page.screenshot(path=str(ART/('breakdown-'+name.lower()+'.png')),full_page=True)
-  page.locator('.au-breakdown tbody button').first.click();page.wait_for_timeout(80)
-  assert_selected(subnav,'Requests','aria-selected')
+  # Overview identity links filter in place (desktop/AGENTS.md); Requests then carries the same scope.
+  page.locator('.au-breakdown tbody button.au-drill').first.click();page.wait_for_timeout(80)
+  assert_selected(subnav,'Overview','aria-selected')
   assert_selected(main,'All providers','aria-selected')
-  assert page.get_by_role('button',name=re.compile('Subagent .* ×')).count()==1
+  assert page.get_by_test_id('request-navigation').get_by_role('button',name='Remove subagent filter',exact=True).count()==1
+  assert page.get_by_role('combobox',name='Agent scope').input_value()=='subagent'
+  subnav.get_by_role('tab',name='Requests',exact=True).click();page.wait_for_timeout(80)
+  assert page.get_by_role('button',name='Remove subagent filter',exact=True).count()>=1
   assert 'Primary' not in page.locator('tbody').inner_text()
   with page.expect_download() as d:page.get_by_role('button',name='Export request CSV',exact=True).click()
   csv=Path(d.value.path()).read_text();assert 'parent_session_id' in csv and 'agent_kind' in csv and 'project_id' in csv
@@ -135,8 +160,11 @@ def run():
   page.get_by_role('button',name='Cost',exact=True).click();page.wait_for_timeout(70)
   assert_selected(page.get_by_role('group',name='Usage display',exact=True),'Cost')
   assert 'Daily cost' in page.get_by_test_id('usage-chart').inner_text()
-  page.get_by_test_id('usage-chart').focus();page.get_by_test_id('usage-chart').press('ArrowRight')
-  assert page.get_by_role('status').count()>=1
+  chart=page.get_by_test_id('usage-chart');chart.focus();chart.press('ArrowRight')
+  # The selected point is described by the shared tooltip, not a visible pane status (desktop/AGENTS.md).
+  popup=page.locator('.au-tooltip[role="tooltip"]:visible')
+  assert popup.count()==1 and chart.get_attribute('aria-describedby')==popup.get_attribute('id')
+  assert popup.inner_text().strip() and chart.get_attribute('data-au-chart-summary') in popup.inner_text()
   page.get_by_role('button',name='Day',exact=True).click();page.wait_for_timeout(70)
   assert_selected(page.get_by_role('group',name='Breakdown grouping'),'Day')
   for view in ['Cache & costs','Compressions','Models & tasks','Requests','Overview']:
@@ -185,7 +213,8 @@ def run():
    assert input_card(page).locator('.au-number').inner_text()==expected
   page.get_by_role('button',name='Clear filters',exact=True).click();page.wait_for_timeout(50)
   page.get_by_role('button',name='Start test marker',exact=True).click();page.wait_for_timeout(80)
-  page.get_by_role('button',name='Add demo request',exact=True).click();page.wait_for_timeout(80)
+  # The preview banner (and its button) was removed; its fixture hook remains the way to add a request.
+  page.evaluate('addDemoEvent()');page.wait_for_timeout(80)
   page.get_by_role('button',name='End test marker',exact=True).click();page.wait_for_timeout(80)
   assert_selected(page.get_by_role('group',name='Time window',exact=True),'Custom')
   page.get_by_role('button',name='Past 24h',exact=True).click();page.wait_for_timeout(80)
