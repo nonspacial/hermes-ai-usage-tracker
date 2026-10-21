@@ -3551,6 +3551,48 @@ function UsagePageScope({selected}){
    currentRecord?.error?h('span',{role:'alert'},currentRecord.error):null):null)))
 }
 
+/* Sidebar row toggle. The host's nav row always navigates to its route, so a
+ * second click on AI usage + would re-issue the same page. A capture-phase
+ * listener remembers the view the user left and, when the row is clicked
+ * while the page is showing, returns there instead. */
+const NAV_ROW_SELECTOR = `[data-tour="sidebar-nav-${ID}:nav"]`
+let usageReturnRoute = null
+function currentRoute() {
+  const hash = String(globalThis.location?.hash || '').replace(/^#/, '')
+  return hash || '/'
+}
+function onUsagePage() { return currentRoute().split('?')[0] === ROUTE }
+function rememberUsageReturn() {
+  if (!onUsagePage()) usageReturnRoute = currentRoute()
+}
+function closeUsagePage() {
+  let to = usageReturnRoute
+  if (!to || to.split('?')[0] === ROUTE) {
+    const stored = host.state.focusedStoredSessionId?.get?.()
+    to = typeof stored === 'string' && stored ? '/' + stored : '/'
+  }
+  host.navigate(to)
+}
+function installNavToggle() {
+  const doc = globalThis.document
+  if (!doc?.addEventListener) return () => {}
+  const onClick = event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const target = event.target
+    const row = target instanceof Element ? target.closest('button') : null
+    if (!row) return
+    // The status-bar chip only opens the page; remember where it was opened from.
+    if (row.matches('.au-usage-chip')) { rememberUsageReturn(); return }
+    if (!(row.matches(NAV_ROW_SELECTOR) || row.querySelector(NAV_ROW_SELECTOR))) return
+    if (!onUsagePage()) { rememberUsageReturn(); return }
+    event.preventDefault()
+    event.stopPropagation()
+    haptic('tap')
+    closeUsagePage()
+  }
+  doc.addEventListener('click', onClick, true)
+  return () => doc.removeEventListener('click', onClick, true)
+}
 
 function UsageChip() {
  useEffect(()=>installTooltips(document.querySelector('.au-usage-chip')),[])
@@ -3609,7 +3651,8 @@ export default {
     // The host loads a new JS module on hot reload. A repeated register on
     // the same module (offline harness) must not kill its mounted readers.
     if(!pluginRegistered){clearLedgerMemory();ledgerMemoryConnection=null;pluginRegistered=true}
-    ctx.onDispose?.(()=>{clearLedgerMemory();pendingLedgerReads.clear();discoveredProfiles=null});
+    const disposeNavToggle = installNavToggle()
+    ctx.onDispose?.(()=>{disposeNavToggle();clearLedgerMemory();pendingLedgerReads.clear();discoveredProfiles=null});
     rest = ctx.rest
     socket = ctx.socket
     storage = ctx.storage
@@ -3653,7 +3696,6 @@ export default {
       area: SIDEBAR_NAV_AREA,
       data: { path: ROUTE, label: 'AI usage +', codicon: 'graph' }
     })
-
     ctx.register({
       id: 'chip',
       area: STATUSBAR_AREAS.right,
