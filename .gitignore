@@ -11,3 +11,4 @@ __pycache__/
 /tests/artifacts/
 /tests/ui/artifacts/
 /tests/results/
+docs/MIGRATION_RUNBOOK_2026-09-27.md
