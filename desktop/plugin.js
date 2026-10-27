@@ -1805,7 +1805,7 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  };
  const chartHelp=tipLines('Click the chart, then use ←/→ to step through buckets',
   canZoom?['Drag 15 minutes or more to zoom','Snaps to :00/:30, 30 minutes minimum']:[tipTone('muted','Drag zoom is unavailable'),tipTone('muted','This window is 30 minutes or shorter')],
-  tipTone('muted','Peak subagents counts start/stop pairs and recently active open children'));
+  tipTone('muted','Peak subagents counts start/stop pairs and open children bounded by their requests'));
  const chartHelpText=tipPlain(chartHelp);
  function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}

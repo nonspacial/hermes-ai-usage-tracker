@@ -303,7 +303,7 @@ def test_live_owner_running_only_while_recently_active(tmp_path, owners):
     recent, idle = Store(tmp_path / 'recent'), Store(tmp_path / 'idle')
     with recent.db() as c:
         start(c, 'run', now - 3000, 'worker')
-        request(c, 'r1', 'run', now - 1799, LIVE, ended=now - 1799)
+        request(c, 'r1', 'run', now - 1700, LIVE, ended=now - 1700)
     with idle.db() as c:
         start(c, 'run', now - 3000, 'worker')
         request(c, 'r1', 'run', now - 1900, LIVE, ended=now - 1801)
