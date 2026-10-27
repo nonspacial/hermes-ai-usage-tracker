@@ -782,6 +782,175 @@ def mounted_marker_custom_edit(browser, polling):
     return chosen, ends
 
 
+def started_marker_page(browser):
+    """Acknowledged-socket page with a freshly started (selected) test marker."""
+    page, errors, outbound = fallback_page(browser)
+    page.evaluate(MARKER_READS)
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    expect(page.locator('.au-quality-line').first).to_contain_text(re.compile(r'\d+ requests'))
+    page.clock.run_for(9000)
+    page.get_by_role('button', name='Start test marker', exact=True).click()
+    page.wait_for_function('savedTests.length>0')
+    page.clock.run_for(500)
+    marker = page.evaluate('({...savedTests[0]})')
+    assert page.evaluate('markerReads.at(-1).q.test_id') == marker['id'], 'Start test did not select its marker'
+    expect(page.get_by_role('button', name='Remove saved test marker filter')).to_be_visible()
+    return page, errors, outbound, marker
+
+
+def settle_read(page, reads):
+    """Advance the fake clock until a `/ledger` read after `reads` has settled."""
+    for _ in range(40):
+        page.clock.run_for(100)
+        if page.evaluate('n=>markerReads.length>n', reads):
+            break
+    else:
+        raise AssertionError('no /ledger read after the action')
+    page.clock.run_for(500)
+
+
+def local_input(page, seconds):
+    return page.evaluate('''s=>{const d=new Date(s*1000);
+      return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}''', seconds)
+
+
+def end_test(page, marker):
+    """Press End test marker; return the ended marker and the read it caused."""
+    reads = page.evaluate('markerReads.length')
+    page.get_by_role('button', name='End test marker', exact=True).first.click()
+    settle_read(page, reads)
+    assert page.evaluate('markerPosts') == ['start', 'stop'], page.evaluate('markerPosts')
+    ended = page.evaluate('({...savedTests[0]})')
+    assert ended['id'] == marker['id'] and ended['started'] == marker['started'] and ended['ended'], (ended, marker)
+    expect(page.get_by_role('button', name='Start test marker', exact=True).first).to_be_visible()
+    expect(page.get_by_role('button', name='End test marker', exact=True)).to_have_count(0)
+    return ended, page.evaluate('markerReads.at(-1)')
+
+
+def assert_marker_selected(page, ended, label):
+    """The read carries the marker and its window equals the factual bounds."""
+    read = page.evaluate('markerReads.at(-1)')
+    assert read['q'].get('test_id') == ended['id'], (label, read)
+    assert read['ws'] == ended['started'] and read['we'] == ended['ended'], (label, read, ended)
+    started = page.evaluate('s=>Math.floor(s/1800)*1800', ended['started'])
+    stopped = page.evaluate('([s,e])=>Math.max(Math.ceil(e/1800)*1800,Math.floor(s/1800)*1800+1800)',
+                            [ended['started'], ended['ended']])
+    expect(page.get_by_label('Window start', exact=True)).to_have_value(local_input(page, started))
+    expect(page.get_by_label('Window end', exact=True)).to_have_value(local_input(page, stopped))
+    expect(page.get_by_role('button', name='Remove saved test marker filter')).to_be_visible()
+
+
+def mounted_marker_end_after_edit(browser):
+    """Start → earlier From (deselects) → End: End only ends the test.
+
+    The user's typed open range stays the view (no test_id, no end); the button
+    returns to Start and the ended marker remains reselectable with its
+    factual bounds from Saved test windows.
+    """
+    page, errors, outbound, marker = started_marker_page(browser)
+    page.locator('.au-custom-range summary').click()
+    start_input = page.get_by_label('Window start', exact=True)
+    typed = local_input(page, page.evaluate('Math.floor(Date.now()/1800000)*1800-30*3600'))
+    start_input.fill(typed)
+    page.clock.run_for(500)
+    expected = page.evaluate('v=>Date.parse(v)/1000', typed)
+    read = page.evaluate('markerReads.at(-1)')
+    assert 'test_id' not in read['q'] and float(read['q']['start']) == expected, read
+    page.clock.run_for(90000)
+    ended, read = end_test(page, marker)
+    assert 'test_id' not in read['q'], ('End rewrote the view to the marker without test_id', read)
+    assert 'end' not in read['q'] and read['method'] == 'GET', ('End discarded the typed open range', read)
+    assert float(read['q']['start']) == expected and read['ws'] == expected, ('End moved From', read, expected)
+    expect(start_input).to_have_value(typed)
+    expect(page.get_by_label('Window end', exact=True)).to_have_value('')
+    expect(page.get_by_role('button', name='Remove saved test marker filter')).to_have_count(0)
+    # The view keeps growing as an open Custom range.
+    reads = page.evaluate('markerReads.length')
+    page.clock.run_for(60000)
+    assert page.evaluate('markerReads.length') > reads
+    later = page.evaluate('markerReads.at(-1)')
+    assert 'test_id' not in later['q'] and float(later['q']['start']) == expected and 'end' not in later['q'], later
+    # The ended marker is listed and reselectable with its factual bounds.
+    saved = page.get_by_role('combobox', name='Saved tests', exact=True)
+    expect(saved.locator(f'option[value="{ended["id"]}"]')).to_contain_text('· ended')
+    reads = page.evaluate('markerReads.length')
+    saved.select_option(ended['id'])
+    settle_read(page, reads)
+    assert_marker_selected(page, ended, 'reselected')
+    expect(page.get_by_role('button', name='Start test marker', exact=True).first).to_be_visible()
+    assert page.evaluate('({...savedTests[0]})') == ended, 'saved marker was rewritten'
+    assert page.evaluate('markerPosts') == ['start', 'stop']
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return expected, ended
+
+
+def mounted_marker_end_selected(browser):
+    """Start → End without editing: unchanged — the marker stays selected."""
+    page, errors, outbound, marker = started_marker_page(browser)
+    page.clock.run_for(90000)
+    ended, read = end_test(page, marker)
+    page.locator('.au-custom-range summary').click()
+    assert_marker_selected(page, ended, 'End while selected')
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return ended
+
+
+def mounted_marker_other_inputs(browser):
+    """Overview End input and Cache & costs From/End inputs also deselect."""
+    page, errors, outbound, marker = started_marker_page(browser)
+    remove = page.get_by_role('button', name='Remove saved test marker filter')
+    saved = page.get_by_role('combobox', name='Saved tests', exact=True)
+    start_value = page.get_by_label('Window start', exact=True).input_value()
+    begin = page.evaluate('v=>Date.parse(v)/1000', start_value)
+
+    def reselect():
+        reads = page.evaluate('markerReads.length')
+        saved.select_option(marker['id'])
+        settle_read(page, reads)
+        assert page.evaluate('markerReads.at(-1).q.test_id') == marker['id']
+        expect(remove).to_be_visible()
+
+    def edited(label, locator, value, start, end, view=None):
+        reads = page.evaluate('markerReads.length')
+        locator.fill(value)
+        settle_read(page, reads)
+        read = page.evaluate('markerReads.at(-1)')
+        assert 'test_id' not in read['q'], (label, 'edit kept the marker', read)
+        assert float(read['q']['start']) == start and read['ws'] == start, (label, read, start)
+        if end is None:
+            assert 'end' not in read['q'], (label, read)
+        else:
+            assert float(read['q']['end']) == end, (label, read, end)
+        if view:
+            assert read['q'].get('view') == view, (label, read)
+        expect(remove).to_have_count(0)
+        expect(page.get_by_role('button', name='End test marker', exact=True).first).to_be_visible()
+
+    page.locator('.au-custom-range summary').click()
+    closed = local_input(page, begin + 1800)
+    edited('Overview End', page.get_by_label('Window end', exact=True), closed, begin, begin + 1800)
+    reselect()
+    page.get_by_role('navigation', name='Provider subpages', exact=True).get_by_role(
+        'tab', name='Cache & costs', exact=True).click()
+    filters = page.get_by_test_id('cache-window-filters')
+    page.clock.run_for(500)
+    earlier = begin - 6 * 3600
+    edited('Cache start', filters.get_by_label('Cache window start', exact=True), local_input(page, earlier),
+           earlier, None, 'cache')
+    reselect()
+    edited('Cache end', filters.get_by_label('Cache window end', exact=True), local_input(page, begin + 1800),
+           begin, begin + 1800, 'cache')
+    assert page.evaluate('({...savedTests[0]})') == marker, 'saved marker was rewritten'
+    assert page.evaluate('markerPosts') == ['start'], page.evaluate('markerPosts')
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+
+
 def requests_shown(quality):
     match = re.search(r'([\d,]+) requests', quality.inner_text())
     assert match, quality.inner_text()
@@ -896,6 +1065,16 @@ def run():
                   f'keyboard and typed From each deselect the marker and read start={chosen:.0f} without end or '
                   f'test_id, response window starts there and grows {ends[0]:.0f} → {ends[1]:.0f}; saved marker '
                   'unchanged, test still running')
+        ended = mounted_marker_end_selected(browser)
+        print(f'PASS Start then End without editing: marker stays selected, read test_id with factual window '
+              f'{ended["started"]:.0f} → {ended["ended"]:.0f}, aligned inputs, button back to Start')
+        typed, ended = mounted_marker_end_after_edit(browser)
+        print(f'PASS Start → earlier From → End: End only ends the test; read keeps start={typed:.0f}, no end, no '
+              f'test_id, inputs unchanged, button back to Start; ended marker listed and reselected with factual '
+              f'window {ended["started"]:.0f} → {ended["ended"]:.0f}')
+        mounted_marker_other_inputs(browser)
+        print('PASS Overview End input and Cache & costs From/End inputs each deselect the marker (no test_id, '
+              'typed bounds, view=cache) while the test keeps running')
         browser.close()
 
 

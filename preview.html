@@ -3840,6 +3840,7 @@ function UsagePageScope({selected}){
   [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,chartBounds,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
  const [drillTrail,setDrillTrail]=useState({context:'',entries:[]});
  const pendingFilterFocus=useRef('');
+ const filterTestRef=useRef(filterTest);filterTestRef.current=filterTest;
  useEffect(()=>{
   if(!pendingFilterFocus.current)return;
   const field=pendingFilterFocus.current;
@@ -4073,7 +4074,11 @@ function UsagePageScope({selected}){
    downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,stored_accounting:r.stored_accounting||null,supplemental_valuation:r.supplemental_valuation||null,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
- async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});setChartBounds(null);if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else{const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
+ // End while the running marker is the selected view frames its ended window
+ // (still filtered by test_id). After a Custom edit deselected it, End only
+ // ends the test: the user's view and inputs stay; the marker stays saved.
+ // filterTestRef reads the selection when the POST settles, not at the click.
+ async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setChartBounds(null);setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else if(testId&&filterTestRef.current===testId){setChartBounds(null);const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}else setTestId('');ledger.hint()}catch(e){setErr(String(e.message||e))}}
  function chooseTest(id){const t=headerData?.tests?.find(t=>t.id===id);if(!t)return;setChartBounds(null);setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const bounds=t.ended?markerWindow(t.started,t.ended):[localHalfHour(t.started),''];setCustomStart(bounds[0]);setCustomEnd(bounds[1])}
  // A typed Custom bound is explicit intent to view that range: it leaves a
  // selected saved marker (as the Remove control or an outer period does)
