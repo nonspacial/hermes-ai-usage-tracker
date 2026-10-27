@@ -5,7 +5,8 @@ import time
 import pytest
 
 from _hermes_ai_usage_ledger_v2.storage import Store
-from _hermes_ai_usage_ledger_v2.observed_peak import OPEN_CHILD_GRACE_SECONDS, intervals, kind_of, peak
+from _hermes_ai_usage_ledger_v2.observed_peak import (OPEN_CHILD_GRACE_SECONDS, OPEN_CHILD_IDLE_SECONDS, intervals,
+                                                      kind_of, peak)
 from _hermes_ai_usage_ledger_v2 import aggregate, ownership
 from _hermes_ai_usage_ledger_v2.analytics_reload import AnalyticsRuntime
 
@@ -295,6 +296,44 @@ def test_dead_or_unknown_owner_ends_at_last_activity(tmp_path, owners, owner):
     assert peak_of(store.read(t0 + 90, now))['open_ended'] == 0
 
 
+def test_live_owner_running_only_while_recently_active(tmp_path, owners):
+    """Hermes can finalise a stalled child without a stop; a live owner alone is not enough."""
+    assert OPEN_CHILD_IDLE_SECONDS == 1800
+    now = time.time()
+    recent, idle = Store(tmp_path / 'recent'), Store(tmp_path / 'idle')
+    with recent.db() as c:
+        start(c, 'run', now - 3000, 'worker')
+        request(c, 'r1', 'run', now - 1799, LIVE, ended=now - 1799)
+    with idle.db() as c:
+        start(c, 'run', now - 3000, 'worker')
+        request(c, 'r1', 'run', now - 1900, LIVE, ended=now - 1801)
+    assert peak_of(recent.read(now - 3600, None)) == {'value': 1, 'unmatched': 0, 'basis': 'matched_child_lifecycle',
+                                                      'running': 1, 'open_ended': 0}
+    d = idle.read(now - 3600, None, view='overview', group='time')
+    assert peak_of(d) == {'value': 1, 'unmatched': 0, 'basis': 'matched_child_lifecycle',
+                          'running': 0, 'open_ended': 1}
+    # Ends at its last activity: nothing after it, nothing in a later window.
+    after = [b for b in d['trend']['buckets'] if b['start'] >= now - 1801]
+    assert after and all(b['peak_observed']['value'] == 0 and b['peak_observed']['open_ended'] == 0 for b in after)
+    assert peak_of(idle.read(now - 1801, None)) == {'value': 0, 'unmatched': 0, 'basis': 'matched_child_lifecycle',
+                                                    'running': 0, 'open_ended': 0}
+    d = idle.read(now - 3600, None, _include_peak_private=True)
+    assert [(kind_of(v), v[3]) for v in d['_peak_intervals']] == [('open_ended', now - 1801)]
+
+
+def test_live_owner_idle_for_days_is_not_counted_today(tmp_path, owners):
+    now = time.time()
+    store = Store(tmp_path)
+    with store.db() as c:
+        start(c, 'lost', now - 3 * 86400 - 100, 'worker')
+        request(c, 'r1', 'lost', now - 3 * 86400, LIVE)
+    d = store.read(now - 86400, None, view='overview', group='time')
+    assert peak_of(d) == {'value': 0, 'unmatched': 0, 'basis': 'matched_child_lifecycle',
+                          'running': 0, 'open_ended': 0}
+    assert all(b['peak_observed']['value'] == 0 for b in d['trend']['buckets'])
+    assert peak_of(store.read(now - 4 * 86400, None))['open_ended'] == 1
+
+
 def test_no_request_child_uses_grace_and_parent_owner(tmp_path, owners):
     now = time.time()
     store = Store(tmp_path)
@@ -423,11 +462,11 @@ def test_all_profiles_union_counts_running_children(tmp_path, owners):
 def test_refresh_never_returns_a_stale_running_peak(tmp_path, owners):
     """No ledger write, but the owner dies: the signed delta recomputes peaks."""
     now = time.time()
-    t0 = now - 7200
+    t0 = now - 3600
     store = Store(tmp_path)
     with store.db() as c:
         start(c, 'run', t0 + 100, 'worker')
-        request(c, 'r1', 'run', t0 + 200, LIVE, ended=t0 + 300)
+        request(c, 'r1', 'run', t0 + 200, LIVE, ended=t0 + 2000)  # recent: within the idle bound
     runtime = AnalyticsRuntime()
     args = (t0, t0 + 3600, '', 0, 10, '', '', '', 'exact', '', '', '')
     first = runtime.read(tmp_path, *args, view='overview', group='time')
@@ -446,11 +485,11 @@ def test_refresh_never_returns_a_stale_running_peak(tmp_path, owners):
 
 def test_older_receipt_without_split_fields_gains_them(tmp_path, owners):
     now = time.time()
-    t0 = now - 7200
+    t0 = now - 3600
     store = Store(tmp_path)
     with store.db() as c:
         start(c, 'run', t0 + 100, 'worker')
-        request(c, 'r1', 'run', t0 + 200, LIVE)
+        request(c, 'r1', 'run', t0 + 3000, LIVE)
     runtime = AnalyticsRuntime()
     args = (t0, t0 + 3600, '', 0, 10, '', '', '', 'exact', '', '', '')
     first = runtime.read(tmp_path, *args, view='overview', group='time')

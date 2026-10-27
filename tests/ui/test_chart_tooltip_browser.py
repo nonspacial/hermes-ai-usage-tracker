@@ -226,11 +226,11 @@ def test_chart_tooltip():
             assert not errors, errors
             # Older peak shape above (no running/open_ended): no open-child lines.
             assert 'still running' not in footer.inner_text() and 'without a stop record' not in footer.inner_text()
-            assert 'Peak subagents counts start/stop pairs and children still open' in popup.inner_text()
+            assert 'Peak subagents counts start/stop pairs and recently active open children' in popup.inner_text()
             # Counted open children add one plain line each to every peak tooltip.
             page.evaluate('''() => {window.demoPeakRunning=9;window.demoPeakOpenEnded=2;
               window.demoChange++;for(const s of window.demoSubscribers)s({type:'changed',mode:'native-events'})}''')
-            open_lines = ['9 still running', '2 ended without a stop record (counted until their last request)']
+            open_lines = ['9 still running', '2 without a stop record (counted until their last request)']
             expect(card_peak).to_have_attribute('title', re.compile(
                 r'\nPeak subagents: 2\nMost distinct child agents running at once in this window\n'
                 r'Counts matched start/stop pairs · 1 unmatched event left out\n' + re.escape('\n'.join(open_lines)) +

@@ -2,8 +2,9 @@
 
 A matched start/stop pair is a child lifetime. An open start (no later stop for
 that child session) is bounded only by evidence: it runs until the read's
-``now`` while its latest request's owner process is live, otherwise until its
-latest recorded request activity. Nothing is ever closed at the report's end.
+``now`` while its latest request's owner process is live and its latest request
+activity is recent, otherwise until that latest recorded request activity.
+Nothing is ever closed at the report's end.
 """
 import json
 import time
@@ -11,6 +12,11 @@ import time
 # A child whose start has no recorded request yet is counted as running only
 # this soon after its start, and only while its parent's request owner is live.
 OPEN_CHILD_GRACE_SECONDS = 120
+# A child with requests counts as running only while its latest request owner
+# is live and its latest request activity (max started/ended) is younger than
+# this. Hermes force-finalises a stalled async child (1200 s stuck in a tool
+# plus 120 s grace) without a subagent_stop; this adds margin over that.
+OPEN_CHILD_IDLE_SECONDS = 1800
 
 
 class _ChildKey(str):
@@ -92,22 +98,26 @@ def _latest_request(connection, session):
 def bound_open(connection, open_children, now, cache=None):
     """Resolve open children to counted intervals from recorded evidence.
 
-    Returns (intervals, counted). A child whose latest request owner is live
-    runs until ``now``; otherwise it ends at its latest request activity. A
-    child without requests runs until ``now`` only within the grace period and
-    while its parent's latest request owner is live; otherwise it is excluded.
+    Returns the counted (session, identity, start, end) intervals, the
+    session carrying its kind. A child with requests runs until ``now`` when
+    its latest request owner is live and its latest request activity (max
+    started/ended) is less than ``OPEN_CHILD_IDLE_SECONDS`` before ``now``;
+    otherwise it is ``open_ended`` at that activity. A child without requests
+    runs until ``now`` only within the grace period and while its parent's
+    latest request owner is live; otherwise it is excluded.
     """
     cache = {} if cache is None else cache
     counted = []
     for sid, identity, begin, parent in open_children:
         latest = _latest_request(connection, sid)
         if latest is not None:
-            if _owner_live(latest, cache):
+            row = connection.execute('SELECT MAX(started),MAX(ended) FROM main.requests WHERE session_id=?',
+                                     (sid,)).fetchone()
+            activity = max(v for v in (row[0], row[1]) if v is not None)
+            if now - activity < OPEN_CHILD_IDLE_SECONDS and _owner_live(latest, cache):
                 kind, finish = 'running', now
             else:
-                row = connection.execute('SELECT MAX(started),MAX(ended) FROM main.requests WHERE session_id=?',
-                                         (sid,)).fetchone()
-                kind, finish = 'open_ended', max(v for v in (row[0], row[1]) if v is not None)
+                kind, finish = 'open_ended', activity
         else:
             parent_request = _latest_request(connection, parent) if parent else None
             if (0 <= now - begin < OPEN_CHILD_GRACE_SECONDS and parent_request is not None

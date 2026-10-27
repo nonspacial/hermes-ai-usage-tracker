@@ -1805,7 +1805,7 @@ function UsageChart({data,mode,onSelectRange,allProviders=false}){
  };
  const chartHelp=tipLines('Click the chart, then use ←/→ to step through buckets',
   canZoom?['Drag 15 minutes or more to zoom','Snaps to :00/:30, 30 minutes minimum']:[tipTone('muted','Drag zoom is unavailable'),tipTone('muted','This window is 30 minutes or shorter')],
-  tipTone('muted','Peak subagents counts start/stop pairs and children still open'));
+  tipTone('muted','Peak subagents counts start/stop pairs and recently active open children'));
  const chartHelpText=tipPlain(chartHelp);
  function traces(values){let line='',area='',segment=[];function finish(){if(!segment.length)return;line+=segment.map((q,i)=>(i?' L ':' M ')+q[0]+','+q[1]).join('');area+=' M '+segment[0][0]+','+(H-B)+' L '+segment.map(q=>q.join(',')).join(' L ')+' L '+segment[segment.length-1][0]+','+(H-B)+' Z';segment=[]}
   values.forEach((v,i)=>{if(v==null)finish();else segment.push([xx(i),yy(v)])});finish();return {line,area}}
@@ -1877,10 +1877,10 @@ function missingFieldNote(summary,key){
 }
 function peakValue(value,coverage){return value?.value==null?'—':count(value.value)+(value.unmatched||coverage?.status==='partial'?' · partial':'')}
 function peakLabel(value,coverage){return 'Peak subagents: '+peakValue(value,coverage)}
-// Open children counted in the peak: still running (until now) or stopped
-// without a stop record (until their last recorded request).
+// Open children counted in the peak: still running (live owner, recent
+// activity; until now) or without a stop record (until their last request).
 function peakOpenLines(value){return [value?.running>0?count(value.running)+' still running':null,
- value?.open_ended>0?count(value.open_ended)+' ended without a stop record (counted until their last request)':null]}
+ value?.open_ended>0?count(value.open_ended)+' without a stop record (counted until their last request)':null]}
 function peakTitle(value,coverage){return tipLines(
  'Peak subagents: '+(value?.value==null?tipTone('warn','unavailable'):tipTone('key',count(value.value))),
  'Most distinct child agents running at once in this window',
