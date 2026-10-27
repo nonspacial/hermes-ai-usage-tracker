@@ -23,7 +23,7 @@ The root owns plugin integration (`bootstrap.py`, `install.py`, `build_preview.p
 
 - Read relevant existing technical references and code before describing implemented behaviour. Label proposed contracts or pending investigations distinctly from proven runtime state.
 - Scope edits and checks locally; run fixture-based behavioural verification, not source-text regex as the sole proof. Independently review candidate changes before delivery, then make a normal local commit for the accepted candidate.
-- For this delivery, the user has authorised `install.py` installation to both default and `infra` Hermes profiles after acceptance. Preserve both backup/rollback receipts and verify installed bytes against the exact committed source hashes. This does **not** authorise a push, restart, authenticated provider operation or live ledger/account mutation; repository-only documentation work must not install anything.
+- For this delivery, the user has authorised `install.py` installation to **every** local Hermes profile after acceptance: the default home (`~/.hermes`) and each profile under `~/.hermes/profiles/` (currently `infra` and `makeshit`). Preserve each profile's backup/rollback receipt and verify installed bytes against the exact committed source hashes. This does **not** authorise a push, restart, authenticated provider operation or live ledger/account mutation; repository-only documentation work must not install anything.
 - Read the nearest owner before changing source, fixture, catalogue or docs. Keep root references concise and link to local detail instead of copying it.
 
 ## Verification
