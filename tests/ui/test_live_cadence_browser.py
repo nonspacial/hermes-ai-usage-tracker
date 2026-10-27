@@ -301,6 +301,50 @@ PROBE = r'''async () => {
   allHeld.owner.dispose();
   reports.push(`notify with a held expiry/poll probe: GET /ledger at 150 ms, published before release (also with every probe held); trailing reads after release ${trailExpiry}/${trailPoll}, no stale shift`);
 
+  // Polls compare with the pre-read token of an active read, or of a settled
+  // read whose post-read check returned null (a probe was in flight). Under
+  // the 2 s polling fallback a slow read sees several polls answering the
+  // token it started from: no duplicate read. A different token still gives
+  // exactly one trailing read.
+  const slow=setup();slow.owner.start();await flush();await read(slow);
+  slow.setToken('s2');await slow.owner.checkForChanges();
+  if(slow.tasks.length!==1||slow.tasks[0].ms!==150)throw Error('slow read: changed poll did not queue');
+  await slow.run();if(slow.reads.length!==2)throw Error('slow read: read missing');
+  for(let i=0;i<3;i++){slow.advance(2000);await slow.owner.checkForChanges()}
+  await read(slow);
+  if(slow.tasks.length)throw Error('slow read: polls answering its pre-read token queued a duplicate read');
+  // Post-read check null: a poll probe is held across the end of the read.
+  slow.setToken('s3');await slow.owner.checkForChanges();await slow.run();
+  if(slow.reads.length!==3)throw Error('unconfirmed read: read missing');
+  slow.pin();let heldSlow=slow.owner.checkForChanges();await flush();
+  await read(slow);
+  if(slow.tasks.length)throw Error('unconfirmed read: follow-up without a change');
+  await slow.unpin();await heldSlow;await flush();
+  if(slow.tasks.length)throw Error('unconfirmed read: poll answering its pre-read token queued a duplicate read');
+  slow.advance(2000);await slow.owner.checkForChanges();
+  if(slow.tasks.length||slow.reads.length!==3)throw Error('unconfirmed read: later poll read again');
+  // A write while a read is in flight: polls mark it dirty once → one trailing read.
+  slow.setToken('s4');await slow.owner.checkForChanges();await slow.run();
+  if(slow.reads.length!==4)throw Error('mid-read write: read missing');
+  slow.advance(1000);slow.setToken('s5');
+  for(let i=0;i<2;i++){slow.advance(2000);await slow.owner.checkForChanges()}
+  slow.pin();heldSlow=slow.owner.checkForChanges();await flush();
+  await read(slow);await slow.unpin();await heldSlow;await flush();
+  if(slow.tasks.length!==1||slow.tasks[0].ms!==150)throw Error('mid-read write: trailing read not queued once '+slow.tasks.length);
+  await slow.run();await read(slow);await slow.run();
+  if(slow.reads.length!==5||slow.tasks.length)throw Error('mid-read write: not exactly one trailing read');
+  // A write after an unconfirmed read: the poll that sees it queues one read.
+  slow.setToken('s6');await slow.owner.checkForChanges();await slow.run();
+  slow.pin();heldSlow=slow.owner.checkForChanges();await flush();
+  slow.setToken('s7');await read(slow);
+  if(slow.tasks.length)throw Error('unconfirmed read: follow-up before any answer');
+  await slow.unpin();await heldSlow;await flush();
+  if(slow.tasks.length!==1||slow.tasks[0].ms!==150)throw Error('unconfirmed read: changed poll did not queue one read');
+  await slow.run();await read(slow);await slow.run();
+  if(slow.reads.length!==7||slow.tasks.length)throw Error('unconfirmed read: not exactly one read for the change');
+  slow.owner.dispose();
+  reports.push('polls during a slow or unconfirmed read compare with its pre-read token: no duplicate read; a write mid-read or after it → exactly one read');
+
   // (3) Overlapping hints, polls and expiry during one flight: exactly one
   // trailing read, then quiet.
   x.install();x.setToken('t3');x.owner.hint();await x.run();
@@ -458,6 +502,285 @@ def mounted_open_custom(browser):
     return ends
 
 
+POLL_SENTENCE = 'Live updates by change checks every 2 seconds; the live subscription is unavailable'
+# Records change-token probes (time and path) and /ledger reads (Playwright
+# clock time) and lets a case fail change checks. `ledgerDelay` delivers each
+# GET /ledger that many ms after its snapshot is taken (a slow plugin-host
+# round trip). A quiet event adds a request and moves the change token without
+# a socket frame, as on a secondary-profile plugin host.
+FALLBACK_SETUP = '''()=>{window.tokenChecks=[];window.tokenPaths=[];window.ledgerReads=[];window.failToken=false;
+  window.ledgerDelay=0;const o=rest;
+  rest=(path,options)=>{
+   if(path.startsWith('/ledger/change-token')){tokenChecks.push(performance.now());tokenPaths.push(path);
+    if(failToken)return Promise.reject(new Error('Synthetic change-check failure'))}
+   if(path.startsWith('/ledger?')){ledgerReads.push(performance.now());const delay=ledgerDelay;
+    if(delay)return o(path,options).then(r=>new Promise(resolve=>setTimeout(()=>resolve(r),delay)))}
+   return o(path,options)};
+  window.quietEvent=()=>{const e=JSON.parse(JSON.stringify(events.find(r=>r.status==='completed')));
+   e.id='quiet-'+performance.now();e.started=Date.now()/1000;e.ended=e.started+0.1;events.push(e);
+   window.demoChange++;return performance.now()};
+  window.setVisibility=state=>{Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>state});
+   document.dispatchEvent(new Event('visibilitychange'))}}'''
+
+
+def fallback_page(browser, prepare=''):
+    page = browser.new_page(viewport={'width': 1500, 'height': 1000})
+    errors, outbound = [], []
+    page.on('pageerror', lambda e: errors.append(str(e)))
+    page.on('request', lambda r: outbound.append(r.url))
+    page.route('**/*', lambda r: r.abort())
+    page.clock.install(time=datetime(2026, 9, 27, 10, 20, tzinfo=timezone.utc))
+    page.set_content((ROOT / 'preview.html').read_text(), wait_until='domcontentloaded')
+    page.evaluate('''()=>{events=events.filter(e=>e.status!=='pending')}''')
+    page.evaluate(FALLBACK_SETUP)
+    if prepare:
+        page.evaluate(prepare)
+    return page, errors, outbound
+
+
+def checks_since(page, start):
+    return page.evaluate('n=>tokenChecks.slice(n)', start)
+
+
+def assert_two_second_cadence(page, ms, label):
+    """Run `ms` of quiet visible time; every change check is exactly 2 s apart.
+
+    'No read while quiet' holds for this synthetic fixture only: on a live
+    profile each recorder heartbeat health write (every 15 s per producer,
+    no notify) moves the change token, so a poll reads after each one.
+    """
+    start = page.evaluate('tokenChecks.length')
+    reads = page.evaluate('ledgerReads.length')
+    page.clock.run_for(ms)
+    times = checks_since(page, start)
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert len(times) == ms // 2000, (label, times)
+    assert all(abs(gap - 2000) < 1 for gap in gaps), (label, gaps)
+    assert page.evaluate('ledgerReads.length') == reads, label + ': quiet poll read the ledger'
+    return len(times)
+
+
+def mounted_socket_fallback(browser):
+    """Refused/unacknowledged live subscription: 2 s change checks, Online badge."""
+    # The demo socket never acknowledges (the secondary-profile plugin host
+    # refuses plugin websockets since Hermes bf0203a).
+    page, errors, outbound = fallback_page(browser, 'window.failSocket=true')
+    badge = page.get_by_test_id('connection-status')
+    quality = page.locator('.au-quality-line').first
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    # A closed (non-rolling) period keeps minute expiry probes out of the counts.
+    page.get_by_role('group', name='Time window').get_by_role('button', name='All recorded', exact=True).click()
+    expect(quality).to_contain_text(re.compile(r'\d+ requests'))
+    page.clock.run_for(1000)
+    expect(badge).to_have_attribute('data-state', 'checking')
+    before_deadline = page.evaluate('tokenChecks.length')
+    # 8 s acknowledgement deadline → transport `polling`: Online, sentence.
+    page.clock.run_for(8000)
+    expect(badge).to_have_text('Online')
+    expect(badge).to_have_attribute('data-state', 'online')
+    title = badge.get_attribute('title')
+    assert POLL_SENTENCE in title and 'No recent subscription acknowledgement' not in title, title
+    assert page.evaluate('tokenChecks.length') - before_deadline <= 2, 'fast checks before the deadline'
+    # The shared tooltip shows the sentence as a plain (not warning) line.
+    badge.hover()
+    popup = page.locator('.au-tooltip[role="tooltip"]:visible').last
+    expect(popup).to_contain_text(POLL_SENTENCE)
+    line = popup.locator('.au-tip-line', has_text='Live updates by change checks')
+    assert line.count() == 1 and line.locator('.au-tip-warn').count() == 0, line.inner_html()
+    page.mouse.move(5, 995)
+    fast = assert_two_second_cadence(page, 10000, 'polling')
+    # A quiet write: the next 2 s poll sees the token, GET /ledger follows
+    # 150 ms after that poll and the pane repaints.
+    match = re.search(r'([\d,]+) requests', quality.inner_text())
+    assert match, quality.inner_text()
+    shown = int(match[1].replace(',', ''))
+    start = page.evaluate('tokenChecks.length')
+    event_at = page.evaluate('quietEvent()')
+    page.clock.run_for(2500)
+    poll_at = checks_since(page, start)[0]
+    read_at = page.evaluate('at=>ledgerReads.find(t=>t>at)', event_at)
+    assert read_at is not None, 'changed token did not read'
+    lag = read_at - poll_at
+    assert 150 <= lag < 200 and read_at - event_at <= 2200, (event_at, poll_at, read_at)
+    expect(quality).to_contain_text(f'{shown + 1:,} requests')
+    page.clock.run_for(1000)
+    # Hidden pane: no fast polling; the ordinary 20 s check remains.
+    start = page.evaluate('tokenChecks.length')
+    page.evaluate("setVisibility('hidden')")
+    page.clock.run_for(19500)
+    hidden_checks = len(checks_since(page, start))
+    page.clock.run_for(1000)
+    assert hidden_checks == 0 and len(checks_since(page, start)) == 1, checks_since(page, start)
+    # Visible again: the existing return check, then 2 s checks resume.
+    page.evaluate("setVisibility('visible')")
+    page.clock.run_for(1000)
+    assert_two_second_cadence(page, 6000, 'after visibility return')
+    # A read error keeps the existing Limited badge and texts.
+    page.evaluate('failLedger=true;quietEvent()')
+    page.clock.run_for(2500)
+    expect(badge).to_have_text('Limited')
+    title = badge.get_attribute('title')
+    assert 'No recent subscription acknowledgement' in title and 'Usage refresh failed' in title, title
+    assert POLL_SENTENCE not in title, title
+    page.evaluate('failLedger=false')
+    page.clock.run_for(6000)
+    expect(badge).to_have_text('Online')
+    assert POLL_SENTENCE in badge.get_attribute('title')
+    expect(quality).to_contain_text(f'{shown + 2:,} requests')
+    # A later acknowledgement: normal Online and the 20 s cadence.
+    page.clock.run_for(1000)
+    page.evaluate("failSocket=false;for(const s of demoSubscribers)s({type:'heartbeat',mode:'native-events'})")
+    page.clock.run_for(100)
+    expect(badge).to_have_text('Online')
+    assert POLL_SENTENCE not in badge.get_attribute('title')
+    start = page.evaluate('tokenChecks.length')
+    page.clock.run_for(19500)
+    acked_quiet = len(checks_since(page, start))
+    page.clock.run_for(1000)
+    assert acked_quiet == 0 and len(checks_since(page, start)) == 1, checks_since(page, start)
+    # The acknowledgement lapses (45 s): polling again.
+    page.evaluate('failSocket=true')
+    page.clock.run_for(46000)
+    expect(badge).to_have_text('Online')
+    assert POLL_SENTENCE in badge.get_attribute('title')
+    page.clock.run_for(500)
+    assert_two_second_cadence(page, 4000, 'after acknowledgement lapse')
+    # Failing change checks keep the existing Limited badge and text.
+    page.evaluate('failToken=true')
+    page.clock.run_for(7000)
+    expect(badge).to_have_text('Limited')
+    title = badge.get_attribute('title')
+    assert 'Change checks unavailable' in title and POLL_SENTENCE not in title, title
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return fast, lag
+
+
+def mounted_socket_unavailable(browser):
+    """A socket that throws or is absent polls at once; All profiles is unchanged."""
+    results = []
+    for label, prepare in [('throwing socket', "()=>{socket=()=>{throw new Error('HTTP 501 plugin websocket refused')}}"),
+                           ('no socket', '()=>{socket=null}')]:
+        page, errors, outbound = fallback_page(browser, prepare)
+        badge = page.get_by_test_id('connection-status')
+        page.get_by_role('tab', name='All providers', exact=True).click()
+        page.get_by_role('group', name='Time window').get_by_role('button', name='All recorded', exact=True).click()
+        expect(page.locator('.au-quality-line').first).to_contain_text(re.compile(r'\d+ requests'))
+        page.clock.run_for(500)
+        expect(badge).to_have_text('Online')
+        assert POLL_SENTENCE in badge.get_attribute('title'), label
+        assert_two_second_cadence(page, 6000, label)
+        if label == 'no socket':
+            # All profiles keeps Watching and its 30 s cadence.
+            page.get_by_role('combobox', name='Hermes profile').select_option('scope:all')
+            page.get_by_role('tab', name='All providers', exact=True).click()
+            expect(page.locator('.au-quality-line').first).to_contain_text(re.compile(r'\d+ requests'))
+            expect(badge).to_have_text('Watching')
+            page.clock.run_for(2000)
+            start = page.evaluate('tokenChecks.length')
+            page.clock.run_for(62000)
+            times = checks_since(page, start)
+            # Two 30 s polls (a token-adopting read may add its own post-read check).
+            assert len(times) >= 2 and abs(times[1] - times[0] - 30000) < 1, times
+            assert POLL_SENTENCE not in badge.get_attribute('title')
+        assert not errors, (label, errors)
+        assert not outbound, (label, outbound)
+        results.append(label)
+        page.close()
+    return results
+
+
+def polling_online(browser):
+    """Refused subscription, All providers, closed All recorded period, Online by polling."""
+    page, errors, outbound = fallback_page(browser, 'window.failSocket=true')
+    badge = page.get_by_test_id('connection-status')
+    quality = page.locator('.au-quality-line').first
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    page.get_by_role('group', name='Time window').get_by_role('button', name='All recorded', exact=True).click()
+    expect(quality).to_contain_text(re.compile(r'\d+ requests'))
+    page.clock.run_for(9000)
+    expect(badge).to_have_attribute('data-state', 'online')
+    page.clock.run_for(3000)
+    return page, errors, outbound, badge, quality
+
+
+def requests_shown(quality):
+    match = re.search(r'([\d,]+) requests', quality.inner_text())
+    assert match, quality.inner_text()
+    return int(match[1].replace(',', ''))
+
+
+def mounted_slow_read_polling(browser):
+    """2 s polling with GET /ledger taking 3 s: one read per quiet write; a write mid-read → one trailing read."""
+    page, errors, outbound, badge, quality = polling_online(browser)
+    page.evaluate('ledgerDelay=3000')
+    shown = requests_shown(quality)
+    # One quiet write: the poll that sees it starts one read; the polls that
+    # land during its 3 s flight answer that read's pre-read token.
+    reads = page.evaluate('ledgerReads.length')
+    page.evaluate('quietEvent()')
+    page.clock.run_for(12000)
+    single = page.evaluate('n=>ledgerReads.slice(n)', reads)
+    assert len(single) == 1, ('duplicate read for one quiet write', single)
+    expect(quality).to_contain_text(f'{shown + 1:,} requests')
+    # A second write lands while the next read is in flight (after its
+    # snapshot): exactly one trailing read, started only after the first settles.
+    reads = page.evaluate('ledgerReads.length')
+    page.evaluate('quietEvent()')
+    page.clock.run_for(2200)
+    assert page.evaluate('ledgerReads.length') == reads + 1, 'quiet write did not start a read'
+    page.evaluate('quietEvent()')
+    page.clock.run_for(12000)
+    trailing = page.evaluate('n=>ledgerReads.slice(n)', reads)
+    assert len(trailing) == 2 and trailing[1] - trailing[0] >= 3150, ('mid-read write', trailing)
+    expect(quality).to_contain_text(f'{shown + 3:,} requests')
+    expect(badge).to_have_text('Online')
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return single, trailing
+
+
+def mounted_polling_switches(browser):
+    """Profile switch and Reconnect while polling: no old-profile probes; 8 s wait, then 2 s checks."""
+    page, errors, outbound, badge, quality = polling_online(browser)
+    combobox = page.get_by_role('combobox', name='Hermes profile')
+    start = page.evaluate('tokenPaths.length')
+    combobox.select_option('profile:default')
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    expect(quality).to_contain_text(re.compile(r'\d+ requests'))
+    page.clock.run_for(1000)
+    expect(badge).to_have_attribute('data-state', 'checking')
+    page.clock.run_for(8000)
+    expect(badge).to_have_text('Online')
+    assert POLL_SENTENCE in badge.get_attribute('title')
+    page.clock.run_for(500)
+    assert_two_second_cadence(page, 6000, 'after profile switch')
+    paths = page.evaluate('n=>tokenPaths.slice(n)', start)
+    assert paths and all('profile=default' in p for p in paths), paths
+    # Reconnect: the subscription is retried (Reconnecting, normal cadence),
+    # then the 8 s deadline returns to polling and 2 s checks.
+    page.get_by_test_id('connection-status').click()
+    # Move away so the shared tooltip restores the badge's native title.
+    page.mouse.move(5, 995)
+    page.clock.run_for(500)
+    assert badge.get_attribute('data-state') != 'online', badge.get_attribute('data-state')
+    start = page.evaluate('tokenChecks.length')
+    page.clock.run_for(5000)
+    early = checks_since(page, start)
+    gaps = [b - a for a, b in zip(early, early[1:])]
+    assert not any(abs(gap - 2000) < 1 for gap in gaps), ('2 s checks while reconnecting', early)
+    page.clock.run_for(3500)
+    expect(badge).to_have_text('Online')
+    assert POLL_SENTENCE in badge.get_attribute('title')
+    page.clock.run_for(500)
+    assert_two_second_cadence(page, 6000, 'after reconnect')
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+
+
 def run():
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'),
@@ -475,6 +798,21 @@ def run():
               'change checks only, the freshness age resetting each minute as on main; reconciliation and later notify still read')
         ends = mounted_open_custom(browser)
         print(f'PASS mounted open-ended Custom: GET without end, 5-minute buckets labelled, one read per visible minute, window end grew {ends[0]:.0f} → {ends[1]:.0f}')
+        fast, lag = mounted_socket_fallback(browser)
+        print(f'PASS unacknowledged subscription: Reconnecting until the 8 s deadline, then Online with the polling '
+              f'sentence; {fast} change checks exactly 2 s apart in 10 quiet visible seconds, no read; quiet write → '
+              f'GET /ledger {lag:.0f} ms after the 2 s poll answer and repaint; hidden 19.5 s → no check, 20 s check '
+              'kept; visible → 2 s resumes; read error → Limited (old texts) then Online; heartbeat ack → plain Online, '
+              'no check for 19.5 s then 20 s; 45 s ack lapse → polling again; failing change checks → Limited')
+        variants = mounted_socket_unavailable(browser)
+        print('PASS ' + ' and '.join(variants) + ': Online with the polling sentence and exactly 2 s checks at once; '
+              'All profiles keeps Watching and 30 s checks')
+        single, trailing = mounted_slow_read_polling(browser)
+        print(f'PASS polling with a 3 s GET /ledger: one quiet write → {len(single)} read; a write during the next '
+              f'read → {len(trailing)} reads (one trailing, {trailing[1] - trailing[0]:.0f} ms after the first started)')
+        mounted_polling_switches(browser)
+        print('PASS polling: profile switch probes only the new profile, Online by polling after its 8 s deadline, '
+              '2 s checks; Reconnect retries the subscription without 2 s checks, then polls at 2 s after 8 s')
         browser.close()
 
 

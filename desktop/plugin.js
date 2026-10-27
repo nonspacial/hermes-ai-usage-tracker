@@ -2352,6 +2352,15 @@ function clearLedgerMemory(){ledgerMemory.clear();ledgerMemoryBytes=0;ledgerMemo
 // Notify hint debounce (also the trailing read after a hinted flight) and the
 // reuse window for a coordinator-observed pre-read change token.
 const LEDGER_HINT_DEBOUNCE_MS=150, LEDGER_CHECK_REUSE_MS=2000;
+// Change-check cadence while the live subscription is not acknowledged
+// (transport `polling`) and the pane is visible. Since Hermes bf0203a a
+// secondary profile's plugin host carries REST only and refuses plugin
+// websockets, so this poll is that profile's near-real-time path. The launch
+// profile also polls after an acknowledgement lapse or without an SDK socket,
+// so the tooltip states the fact without naming the host as the cause.
+const LEDGER_POLL_FALLBACK_MS=2000;
+const LEDGER_POLL_FALLBACK_DETAIL='Live updates by change checks every '+LEDGER_POLL_FALLBACK_MS/1000+
+ ' seconds; the live subscription is unavailable.';
 // Every top-level DTO field a rolling skip may carry forward. Each is either
 // not window-scoped (identity, projection, inventory, markers, providers,
 // health/rates, which change only with a ledger write and so the hint) or is
@@ -2692,6 +2701,12 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
   // read that produced lastShown, else null. expireAfter: an expiry tick
   // arrived during a flight; re-evaluate it when the flight settles.
   let lastShown=null,lastReadStarted=null,shownToken=null,expireAfter=false;
+  // readBase: the pre-read token of the active read, kept after it settles
+  // while its post-read check returned null (a probe was in flight), until a
+  // background answer matches it or the next read starts. A poll equal to it
+  // proves nothing was written since that read's snapshot began, so it never
+  // queues a duplicate read.
+  let readBase=null;
   const now=()=>clock.now?.()??Date.now();
   let lastFallback=now();
   // A disposed coordinator never donates its unresolved response to a new
@@ -2782,6 +2797,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    // token; a stale one only costs a follow-up, so reuse only a fresh one.
    before=recentCheck()||await check();
    if(!current())return;
+   readBase=before?.change_token??null;
    const beforeInventory=ledgerInventoryKey(before,profile);
    // Validate the backend generation before showing any prior response. The
    // filesystem hint does not authenticate this cache or its accounting.
@@ -2859,6 +2875,8 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    if(before!==null&&after!==null&&before.change_token!==after.change_token)dirty=true;
    // A token observed only after the read cannot certify this response.
    if(before!==null&&after?.change_token===before.change_token)token=after.change_token;
+   // Without a post-read answer the pre-read token stays the poll baseline.
+   if(after!==null)readBase=null;
    const received=now();
    if(revision&&response?.analytics_revision&&response.analytics_revision!==revision)dirty=true;
    lastRevision=response?.analytics_revision||null;
@@ -2875,7 +2893,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    failures=0;
   }catch(error){
    if(!current())return;
-   failed=true;failures++;
+   failed=true;failures++;readBase=null;
    publish({error,fetching:false,manual:manualForNext});
   }finally{
    active=false;
@@ -2939,6 +2957,21 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    // certified read: the freshness age restarts, as after a read.
    publish({data:shifted,received:now()});
   }
+  // A background answer queues a read only when it differs from the token
+  // the latest read is known to cover: while a read is active, or after one
+  // whose post-read check returned null, that read's pre-read token (a match
+  // there means nothing was written since its snapshot began, and confirms
+  // it); otherwise the certified token. Any different answer queues exactly
+  // one read (a flight marks dirty once; a queued read is joined), so a real
+  // change is never dropped or deferred.
+  function observe(next){
+   if(readBase!==null){
+    if(next.change_token===readBase){if(!active){token=readBase;readBase=null}return}
+    queue();return;
+   }
+   if(token===null){token=next.change_token;queue();return}
+   if(next.change_token!==token)queue();
+  }
   async function checkForChanges(){
    if(!alive)return;
    if(unsupported){
@@ -2950,14 +2983,13 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    lastFallback=now();
    const recovered=await check(true);
    if(!alive)return;
-   if(recovered!==null){if(token!==recovered.change_token)queue();return}
+   if(recovered!==null){observe(recovered);return}
    if(!windowSeconds&&document.visibilityState!=='hidden')hint();
    return;
   }
   const next=await check(true);
   if(!alive||next===null)return;
-  if(token===null){token=next.change_token;queue();return}
-  if(next.change_token!==token)queue();
+  observe(next);
  }
  function refresh(){
   if(!current()||manual)return;
@@ -2977,7 +3009,9 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds,growing=false}){
   // without it get fresh reads, never potentially cross-server cached values.
   if(ledgerMemoryConnection!==connection){clearLedgerMemory();ledgerMemoryConnection=connection}
   const [state,setState]=useState({view:null,data:null,error:null,fetching:false,manual:false,checkLimited:false});
-  const [owner]=useState(()=>({key:null,epoch:0,coordinator:null}));
+  // polling: the page's recorder transport is `polling` (subscription not
+  // acknowledged); cadence re-arms the change-check timer for it.
+  const [owner]=useState(()=>({key:null,epoch:0,coordinator:null,polling:false,cadence:null}));
   const key=JSON.stringify([connection,hostProfile,pickerValue(profile),view,path,windowSeconds,!!growing]);
   if(owner.key!==key){owner.coordinator?.dispose();owner.key=key;owner.epoch++;owner.coordinator=null}
   useEffect(()=>{
@@ -2988,19 +3022,31 @@ function useLiveLedger({profile,path,view,enabled,windowSeconds,growing=false}){
    }});
    owner.coordinator=coordinator;
    coordinator.start();
-   const interval=setInterval(()=>coordinator.checkForChanges(),isAllProfiles(profile)?30000:20000);
+   // Change checks every 20s (30s for All profiles), or every 2s while a
+   // selected profile's live subscription is not acknowledged and the pane is
+   // visible. One interval at a time; re-armed only when the period changes,
+   // so no check runs faster than the current period (probes share flights).
+   let interval=null,every=0;
+   const cadence=()=>{
+    const ms=owner.polling&&!isAllProfiles(profile)&&document.visibilityState==='visible'?
+     LEDGER_POLL_FALLBACK_MS:isAllProfiles(profile)?30000:20000;
+    if(ms===every)return;
+    clearInterval(interval);every=ms;interval=setInterval(()=>coordinator.checkForChanges(),ms);
+   };
+   owner.cadence=cadence;cadence();
    // A filesystem hint can miss mutations; force bounded reconciliation even
    // with unchanged metadata. Rolling bounds are re-evaluated every visible
    // minute and read only when the edge or hint requires it (expire()); an
    // open-ended Custom window also ticks each visible minute and always reads.
    const minute=!!(windowSeconds||growing);
    const expiry=setInterval(()=>{if(document.visibilityState!=='hidden')minute?coordinator.expire():coordinator.hint()},minute?60000:LEDGER_RECONCILE_MS);
-   const visible=()=>{if(document.visibilityState==='visible'){coordinator.checkForChanges();minute?coordinator.expire():coordinator.hint()}};
+   const visible=()=>{cadence();if(document.visibilityState==='visible'){coordinator.checkForChanges();minute?coordinator.expire():coordinator.hint()}};
    document.addEventListener('visibilitychange',visible);
-   return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null};
+   return()=>{coordinator.dispose();clearInterval(interval);clearInterval(expiry);document.removeEventListener('visibilitychange',visible);if(owner.coordinator===coordinator)owner.coordinator=null;if(owner.cadence===cadence)owner.cadence=null};
   },[key,enabled]);
   const current=state.view===key&&state.epoch===owner.epoch?state:{data:null,error:null,fetching:false,manual:false,checkLimited:false};
-  return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh()};
+  return {...current,hint:()=>owner.coordinator?.hint(),refresh:()=>owner.coordinator?.refresh(),
+   setPolling:value=>{value=!!value;if(owner.polling===value)return;owner.polling=value;owner.cadence?.()}};
 }
 function RefreshMenu({refresh,reload,busy}){
  const choose=action=>event=>{event.currentTarget.closest('details').removeAttribute('open');action()};
@@ -3036,9 +3082,14 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
   const update=(state,detail)=>{if(live)setTransport({scope:profile,enabled,state,detail})};
   if(isAllProfiles(profile)){update('limited','All profiles uses read-only change checks. Recorder health is per profile.');return()=>{live=false}}
   if(!enabled){update('not_needed','Live analytics subscription is idle on Subscriptions.');return()=>{live=false}}
-  if(!socket){update('limited','Live update subscription unavailable. REST polling continues.');return()=>{live=false}}
+  // No acknowledged native-events subscription: `polling`. Since Hermes
+  // bf0203a a secondary profile's plugin host refuses plugin websockets
+  // (HTTP 501/1008) and the subscription never acknowledges, so the pane
+  // relies on fast REST change checks (useLiveLedger). The detail is the
+  // previous `limited` text, still shown when checks or reads fail.
+  if(!socket){update('polling','Live update subscription unavailable. REST polling continues.');return()=>{live=false}}
   update('connecting','Waiting for the live update subscription to acknowledge.');
-  const deadline=ms=>{clearTimeout(timer);timer=setTimeout(()=>update('limited','No recent subscription acknowledgement. REST polling continues.'),ms)};
+  const deadline=ms=>{clearTimeout(timer);timer=setTimeout(()=>update(mode==='native-events'?'polling':'limited','No recent subscription acknowledgement. REST polling continues.'),ms)};
   deadline(8000);
   let stop;
   try{stop=socket('/ledger/events?profile='+encodeURIComponent(profile),frame=>{
@@ -3049,7 +3100,7 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
     control.onHint?.();
    }
    if(frame.type==='connected')queryClient.invalidateQueries({queryKey:[ID,'connection',profile]},{cancelRefetch:false});
-  })}catch(_){clearTimeout(timer);update('limited','Live update subscription failed. REST polling continues.')}
+  })}catch(_){clearTimeout(timer);update('polling','Live update subscription failed. REST polling continues.')}
   return()=>{live=false;clearTimeout(timer);if(typeof stop==='function')stop()};
  },[profile,enabled,connectionEpoch]);
  async function reconnect(){
@@ -3073,7 +3124,10 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
   if(state==='online'){
    if(changeLimited&&enabled){state='limited';detail+=' Change checks unavailable. Reading every 60 seconds while visible.'}
    else if(link?.state==='connecting'||!link){state='checking';detail='Recorder heartbeat verified. Waiting for the live update subscription.'}
-   else if(link.state==='limited'){state='limited';detail+=' '+link.detail}
+   // Polling with working change checks and reads is Online; a read error
+   // keeps the previous Limited wording.
+   else if(link.state==='limited'||link.state==='polling'&&readError){state='limited';detail+=' '+link.detail}
+   else if(link.state==='polling')detail+=' '+LEDGER_POLL_FALLBACK_DETAIL;
   }
   label=({online:'Online',limited:'Limited',not_recording:'Not recording',unverified:'Unverified',checking:'Reconnecting'})[state]||'Unverified';
  }else if(checked?.stale){state='disconnected';label='Disconnected';detail='Recorder status is stale; waiting for a fresh check.'}
@@ -3082,7 +3136,8 @@ function useRecorderHealth({profile,enabled,onHint,readError,changeLimited}){
   detail+=' Usage refresh failed. Showing the last good snapshot, if any. Retrying automatically.';
  }
  if(isAllProfiles(profile)){state='limited';label=pending?'Refreshing':readError||changeLimited?'Limited':'Watching';detail=readError?'Read-only aggregate refresh failed. Showing the last good response, if any. Retrying automatically.':changeLimited?'Read-only. Change checks unavailable. Reading every 60 seconds while visible.':'Read-only. Checks for changes every 30 seconds. Rolling windows move on each visible minute. No aggregate events.'}
- return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting'};
+ return {status,reconnect,state,label,detail,readOnly:isAllProfiles(profile),busy:!!pending||link?.state==='connecting',
+  polling:!isAllProfiles(profile)&&enabled&&link?.state==='polling'};
 }
 function ConnectionBadge({connection,disabled,freshness}){
  const {state,label,detail,busy,reconnect,readOnly}=connection;
@@ -3103,8 +3158,9 @@ function ConnectionBadge({connection,disabled,freshness}){
  // One recorder fact per line: state, each detail sentence, then the action.
  const tone=state==='online'?'ok':state==='checking'||label==='Watching'||label==='Refreshing'?'key':'warn';
  const detailLines=String(detail||'').split(/(?<=[.!?])\s+|\s+·\s+/).filter(Boolean).map(line=>
-  // Heuristic: backend detail is free text, so a keyword regex picks warning lines.
-  /fail|stale|unavailable|not recording|No live|No recent|No readable/i.test(line)?tipTone('warn',line.replace(/\.$/,'')):tipEsc(line.replace(/\.$/,'')));
+  // Heuristic: backend detail is free text, so a keyword regex picks warning
+  // lines. The polling sentence accompanies Online and stays a plain line.
+  line!==LEDGER_POLL_FALLBACK_DETAIL&&/fail|stale|unavailable|not recording|No live|No recent|No readable/i.test(line)?tipTone('warn',line.replace(/\.$/,'')):tipEsc(line.replace(/\.$/,'')));
  const title=tipLines(tipTone(tone,label),detailLines,readOnly?'Click to refresh read-only data':['Click to reconnect and refresh',tipTone('muted','Running agents are not restarted')]);
  // The age belongs to the committed selection only; never borrow a header or
  // cached snapshot from a different tab, provider or profile for this badge.
@@ -3290,6 +3346,8 @@ function UsagePageScope({selected}){
  const windowSeconds=period!=='custom'?ranges[period]:0;
  const ledger=useLiveLedger({profile:selected,path:'/ledger?'+params,view:projectionScope,enabled:!isQuota&&customValid,windowSeconds,growing});
  const connection=useRecorderHealth({profile:selected,enabled:!isQuota,onHint:ledger.hint,readError:ledger.error,changeLimited:ledger.checkLimited});
+ // A refused/unacknowledged subscription switches the change checks to 2s.
+ useEffect(()=>{ledger.setPolling(connection.polling)},[connection.polling]);
  useQuery({...CONNECTION_QUERY_OPTIONS,queryKey:[ID,'connection',selected],queryFn:connection.status});
  const [reloadControl]=useState(()=>({busy:false,alive:true,scope:selected}));reloadControl.scope=selected;
  const [reloadBusy,setReloadBusy]=useState(false),[reloadNotice,setReloadNotice]=useState(null);

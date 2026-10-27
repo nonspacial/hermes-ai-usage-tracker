@@ -191,7 +191,7 @@ Normal Hermes request hooks cover OpenAI-compatible Chat Completions, Responses 
 
 ### The recorder badge is not green
 
-Click the badge to check recorder status and reconnect the analytics subscription. **Not recording** means no valid producer heartbeat was found. **Limited** means capture or subscription support is degraded; polling may still work. **Disconnected** means a check failed or its status expired.
+Click the badge to check recorder status and reconnect the analytics subscription. **Not recording** means no valid producer heartbeat was found. **Limited** means capture is degraded, change checks fail or a usage read failed; polling may still work. A profile whose plugin host refuses the live subscription (secondary profiles since Hermes `bf0203a`) stays **Online** while change checks every 2 seconds keep it current; the badge tooltip says "Live updates by change checks every 2 seconds; the live subscription is unavailable." Each recorder heartbeat (every 15 seconds per recording process) also moves the change token, so such a profile still does a full usage read about every 15 seconds while recording processes run. **Disconnected** means a check failed or its status expired.
 
 **Online** confirms recent recorder and connection checks, not complete capture of every request path. See [recorder status and reload controls](ANALYTICS_RELOAD.md) for the detailed meanings.
 
