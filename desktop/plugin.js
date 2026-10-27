@@ -3284,6 +3284,7 @@ function UsagePageScope({selected}){
   [selected,provider,restoringProvider,catalogueReady,tab,displayMode,period,customStart,customEnd,chartBounds,filterTest,compMode,breakdownGroup,requestFilters,skillsView,skillsModel,skillsSkill]);
  const [drillTrail,setDrillTrail]=useState({context:'',entries:[]});
  const pendingFilterFocus=useRef('');
+ const filterTestRef=useRef(filterTest);filterTestRef.current=filterTest;
  useEffect(()=>{
   if(!pendingFilterFocus.current)return;
   const field=pendingFilterFocus.current;
@@ -3517,8 +3518,16 @@ function UsagePageScope({selected}){
    downloadFile('hermes-request-ledger.csv',csvText(rows.map(r=>({profile:r.profile||(!aggregate?selected:''),profile_id:r.profile_id||'',original_ids:r.original_ids||null,...(aggregate?{export_atomic:false,profile_coverage:exportCoverage}:{}),started_utc:new Date(r.started*1000).toISOString(),ended_utc:r.ended?new Date(r.ended*1000).toISOString():'',id:r.id,provider:r.provider,model:r.response_model||r.model,session_id:r.session_id,agent_kind:r.agent_kind,parent_session_id:r.parent_session_id,root_session_id:r.root_session_id,subagent_id:r.subagent_id,agent_role:r.agent_role,project:r.project_label,project_source:r.project_source,project_id:r.project_id,task:r.task,status:r.status,source:r.source,service_tier:r.service_tier,returned_service_tier:r.returned_service_tier,...r.usage,cache_write_tokens:r.calculated_cache_writes?.tokens??null,cache_write_method:'session_read_delta',provider_cache_write_tokens:r.usage?.cache_write_tokens??null,calculated_cache_writes:r.calculated_cache_writes||null,cost:r.cost,stored_accounting:r.stored_accounting||null,supplemental_valuation:r.supplemental_valuation||null,compression_id:r.compression_id,cache_read_change:r.cache_read_change||null}))))
   if(aggregate)setErr('CSV exported: '+rows.length+' rows · '+exportCoverage?.status+' profile coverage. Independent page/profile snapshots, not an atomic export; concurrent changes may require a retry.');
  }catch(e){if(reloadControl.alive)setErr(String(e.message||e))}finally{if(reloadControl.alive)setBusy(false)}}
- async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});setChartBounds(null);if(action==='start'){setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else{const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}ledger.hint()}catch(e){setErr(String(e.message||e))}}
+ // End while the running marker is the selected view frames its ended window
+ // (still filtered by test_id). After a Custom edit deselected it, End only
+ // ends the test: the user's view and inputs stay; the marker stays saved.
+ // filterTestRef reads the selection when the POST settles, not at the click.
+ async function test(action){if(aggregate)return;setErr('');try{const d=await rest('/ledger/tests?profile='+encodeURIComponent(selected),{method:'POST',body:{action,id:testId,label:'Reset test '+new Date().toLocaleString()}});if(action==='start'){setChartBounds(null);setTestId(d.id);setFilterTest(d.id);setPeriod('custom');setCustomStart(localHalfHour(d.started));setCustomEnd('')}else if(testId&&filterTestRef.current===testId){setChartBounds(null);const bounds=markerWindow(d.started,d.ended);setCustomStart(bounds[0]);setCustomEnd(bounds[1]);setTestId('')}else setTestId('');ledger.hint()}catch(e){setErr(String(e.message||e))}}
  function chooseTest(id){const t=headerData?.tests?.find(t=>t.id===id);if(!t)return;setChartBounds(null);setTestId(t.ended?'':t.id);setFilterTest(t.id);setPeriod('custom');const bounds=t.ended?markerWindow(t.started,t.ended):[localHalfHour(t.started),''];setCustomStart(bounds[0]);setCustomEnd(bounds[1])}
+ // A typed Custom bound is explicit intent to view that range: it leaves a
+ // selected saved marker (as the Remove control or an outer period does)
+ // without rewriting the marker or ending a running test; drag zoom keeps it.
+ function editCustomBound(set,value){set(value);setChartBounds(null);setFilterTest('')}
  function changePeriod(v){if(v===period)return;setPeriod(v);setChartBounds(null);setFilterTest('');setAnchor(Date.now()/1000);if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null})}
  function selectChartRange(lo,hi){
   setCustomStart(localHalfHour(lo));setCustomEnd(localHalfHour(hi));setChartBounds({start:lo,end:hi});setPeriod('custom');if(bucketStart!=null)editRequestFilters({bucketStart:null,bucketEnd:null});
@@ -3570,11 +3579,11 @@ function UsagePageScope({selected}){
    h('div',{className:'au-segment au-period-buttons',role:'group','aria-label':'Time window'},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('button',{key:v,'aria-pressed':period===v,onClick:()=>changePeriod(v)},l))),
    h('select',{className:'au-period-select','aria-label':'Time window',value:period,onChange:e=>changePeriod(e.target.value)},...Object.entries({'1h':'Past hour','24h':'Past 24h','7d':'7 days','30d':'30 days','90d':'90 days',all:'All recorded',custom:'Custom'}).map(([v,l])=>h('option',{key:v,value:v},l))),
    period==='custom'?h('details',{className:'au-custom-range'},h('summary',{},'Custom range'),h('div',{className:'au-custom-panel',role:'group','aria-label':'Custom time bounds'},
-    h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>{setCustomStart(e.target.value);setChartBounds(null)}}),
-    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',...tipProps(tipLines('Leave empty to view up to now','The window keeps growing')),onChange:e=>{setCustomEnd(e.target.value);setChartBounds(null)}}),
+    h('input',{type:'datetime-local',step:1800,value:customStart,'aria-label':'Window start',onChange:e=>editCustomBound(setCustomStart,e.target.value)}),
+    h('input',{type:'datetime-local',step:1800,value:customEnd,'aria-label':'Window end',...tipProps(tipLines('Leave empty to view up to now','The window keeps growing')),onChange:e=>editCustomBound(setCustomEnd,e.target.value)}),
     !customValid?h('span',{role:'alert',className:'au-muted'},'Choose start and end on :00 or :30, at least 30 minutes apart, or leave end empty for until now (start at least 30 minutes ago). No data is requested until valid.'):null)):null)),
   h('div',{className:'au-toolbar au-filters'},
-  filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',...tipProps(tipLines('Custom edits and chart zoom stay inside the saved marker','Remove it to view times outside the marker')),onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
+  filterTest?h('button',{className:'au-marker-action',type:'button','aria-label':'Remove saved test marker filter',...tipProps(tipLines('Chart zoom stays inside the saved marker','Editing Custom start or end, or removing it, shows times outside the marker')),onClick:()=>{setFilterTest('');setTestId('')}},'Saved marker · Remove ×'):null,
   h('select',{'aria-label':'Agent scope',value:agent,onChange:e=>editRequestFilters({agent:e.target.value,subagentId:''})},...Object.entries({'':'All agents',primary:'Primary agents',subagent:'Subagents only',unknown:'Unattributed'}).map(([v,l])=>h('option',{key:v,value:v},l))),
   h('select',{'aria-label':'Project',value:project,onChange:e=>editRequestFilters({project:e.target.value})},h('option',{value:''},'All projects'),...(headerData?.project_options||[]).map(p=>h('option',{key:p.id,value:p.id,title:p.path||'Metadata unavailable'},p.label+provenance(p)+(p.basis?.includes('working_directory')?' · directory':'')))),
   h('input',{placeholder:aggregate?'Qualified session ID (use drill-down)':'Session ID (optional)',value:session,onChange:e=>editRequestFilters({session:e.target.value}),'aria-label':'Session ID'}),
@@ -3598,7 +3607,7 @@ function UsagePageScope({selected}){
   tab==='Requests'||tab==='Overview'?h(RequestNavigation,{filters:requestFilters,history:drillHistory,identityLabels,projects:headerData?.project_options,onBack:returnFromDrill,onShowAll:tab==='Overview'?clearRequestFilters:showAllRequests,onRemove:removeRequestFilter,overview:tab==='Overview'}):null,
   err?notice(err):null,
   ledger.error?h('p',{className:'au-muted',role:'alert','data-testid':'usage-stale'},data?'Showing the last good recorded usage; refresh failed. Retrying automatically. '+String(ledger.error.message||ledger.error):'Usage unavailable; retrying automatically. '+String(ledger.error.message||ledger.error)):null,
-  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>{setCustomStart(v);setChartBounds(null)},onEnd:v=>{setCustomEnd(v);setChartBounds(null)},window:headerData?.window}):null,
+  tab==='Cache & costs'?h(CacheWindowFilters,{period,onPeriod:changePeriod,startValue:customStart,endValue:customEnd,onStart:v=>editCustomBound(setCustomStart,v),onEnd:v=>editCustomBound(setCustomEnd,v),window:headerData?.window}):null,
   body||h('p',{className:'au-muted',role:'status','data-testid':'ledger-view-pending'},data?.summary===null?'Recorded usage unavailable for this selection.':'Loading '+tab+(tab==='Overview'?' · '+breakdownGroup:'')+'…'),
   field&&displayData?.summary?h('div',{className:'au-toolbar','data-testid':'record-pagination'},
    h('span',{className:'au-muted'},'Showing '+shownRows.length+' of '+displayData.list_count+' records'),
