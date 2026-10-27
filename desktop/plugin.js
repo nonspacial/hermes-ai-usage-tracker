@@ -2355,10 +2355,12 @@ const LEDGER_HINT_DEBOUNCE_MS=150, LEDGER_CHECK_REUSE_MS=2000;
 // Change-check cadence while the live subscription is not acknowledged
 // (transport `polling`) and the pane is visible. Since Hermes bf0203a a
 // secondary profile's plugin host carries REST only and refuses plugin
-// websockets, so this poll is that profile's near-real-time path.
+// websockets, so this poll is that profile's near-real-time path. The launch
+// profile also polls after an acknowledgement lapse or without an SDK socket,
+// so the tooltip states the fact without naming the host as the cause.
 const LEDGER_POLL_FALLBACK_MS=2000;
 const LEDGER_POLL_FALLBACK_DETAIL='Live updates by change checks every '+LEDGER_POLL_FALLBACK_MS/1000+
- ' seconds (this profile\'s plugin host does not carry live subscriptions).';
+ ' seconds; the live subscription is unavailable.';
 // Every top-level DTO field a rolling skip may carry forward. Each is either
 // not window-scoped (identity, projection, inventory, markers, providers,
 // health/rates, which change only with a ledger write and so the hint) or is
@@ -2699,6 +2701,12 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
   // read that produced lastShown, else null. expireAfter: an expiry tick
   // arrived during a flight; re-evaluate it when the flight settles.
   let lastShown=null,lastReadStarted=null,shownToken=null,expireAfter=false;
+  // readBase: the pre-read token of the active read, kept after it settles
+  // while its post-read check returned null (a probe was in flight), until a
+  // background answer matches it or the next read starts. A poll equal to it
+  // proves nothing was written since that read's snapshot began, so it never
+  // queues a duplicate read.
+  let readBase=null;
   const now=()=>clock.now?.()??Date.now();
   let lastFallback=now();
   // A disposed coordinator never donates its unresolved response to a new
@@ -2789,6 +2797,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    // token; a stale one only costs a follow-up, so reuse only a fresh one.
    before=recentCheck()||await check();
    if(!current())return;
+   readBase=before?.change_token??null;
    const beforeInventory=ledgerInventoryKey(before,profile);
    // Validate the backend generation before showing any prior response. The
    // filesystem hint does not authenticate this cache or its accounting.
@@ -2866,6 +2875,8 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    if(before!==null&&after!==null&&before.change_token!==after.change_token)dirty=true;
    // A token observed only after the read cannot certify this response.
    if(before!==null&&after?.change_token===before.change_token)token=after.change_token;
+   // Without a post-read answer the pre-read token stays the poll baseline.
+   if(after!==null)readBase=null;
    const received=now();
    if(revision&&response?.analytics_revision&&response.analytics_revision!==revision)dirty=true;
    lastRevision=response?.analytics_revision||null;
@@ -2882,7 +2893,7 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    failures=0;
   }catch(error){
    if(!current())return;
-   failed=true;failures++;
+   failed=true;failures++;readBase=null;
    publish({error,fetching:false,manual:manualForNext});
   }finally{
    active=false;
@@ -2946,6 +2957,21 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    // certified read: the freshness age restarts, as after a read.
    publish({data:shifted,received:now()});
   }
+  // A background answer queues a read only when it differs from the token
+  // the latest read is known to cover: while a read is active, or after one
+  // whose post-read check returned null, that read's pre-read token (a match
+  // there means nothing was written since its snapshot began, and confirms
+  // it); otherwise the certified token. Any different answer queues exactly
+  // one read (a flight marks dirty once; a queued read is joined), so a real
+  // change is never dropped or deferred.
+  function observe(next){
+   if(readBase!==null){
+    if(next.change_token===readBase){if(!active){token=readBase;readBase=null}return}
+    queue();return;
+   }
+   if(token===null){token=next.change_token;queue();return}
+   if(next.change_token!==token)queue();
+  }
   async function checkForChanges(){
    if(!alive)return;
    if(unsupported){
@@ -2957,14 +2983,13 @@ function makeLedgerCoordinator({profile,path,windowSeconds,growing=false,publish
    lastFallback=now();
    const recovered=await check(true);
    if(!alive)return;
-   if(recovered!==null){if(token!==recovered.change_token)queue();return}
+   if(recovered!==null){observe(recovered);return}
    if(!windowSeconds&&document.visibilityState!=='hidden')hint();
    return;
   }
   const next=await check(true);
   if(!alive||next===null)return;
-  if(token===null){token=next.change_token;queue();return}
-  if(next.change_token!==token)queue();
+  observe(next);
  }
  function refresh(){
   if(!current()||manual)return;
@@ -3133,8 +3158,9 @@ function ConnectionBadge({connection,disabled,freshness}){
  // One recorder fact per line: state, each detail sentence, then the action.
  const tone=state==='online'?'ok':state==='checking'||label==='Watching'||label==='Refreshing'?'key':'warn';
  const detailLines=String(detail||'').split(/(?<=[.!?])\s+|\s+·\s+/).filter(Boolean).map(line=>
-  // Heuristic: backend detail is free text, so a keyword regex picks warning lines.
-  /fail|stale|unavailable|not recording|No live|No recent|No readable/i.test(line)?tipTone('warn',line.replace(/\.$/,'')):tipEsc(line.replace(/\.$/,'')));
+  // Heuristic: backend detail is free text, so a keyword regex picks warning
+  // lines. The polling sentence accompanies Online and stays a plain line.
+  line!==LEDGER_POLL_FALLBACK_DETAIL&&/fail|stale|unavailable|not recording|No live|No recent|No readable/i.test(line)?tipTone('warn',line.replace(/\.$/,'')):tipEsc(line.replace(/\.$/,'')));
  const title=tipLines(tipTone(tone,label),detailLines,readOnly?'Click to refresh read-only data':['Click to reconnect and refresh',tipTone('muted','Running agents are not restarted')]);
  // The age belongs to the committed selection only; never borrow a header or
  // cached snapshot from a different tab, provider or profile for this badge.
