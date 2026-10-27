@@ -705,6 +705,83 @@ def polling_online(browser):
     return page, errors, outbound, badge, quality
 
 
+MARKER_READS = '''()=>{window.markerReads=[];window.markerPosts=[];const o=rest;
+  rest=async(path,options)=>{
+   if(path.startsWith('/ledger/tests'))markerPosts.push(options?.body?.action);
+   const r=await o(path,options);
+   if(path.startsWith('/ledger?'))markerReads.push({q:Object.fromEntries(new URLSearchParams(path.split('?')[1])),
+    method:options?.method||'GET',ws:r?.window?.start,we:r?.window?.end});
+   return r}}'''
+
+
+def mounted_marker_custom_edit(browser, polling):
+    """Start test marker, then edit Custom From: the edit deselects the marker.
+
+    Owner flow: with the open marker selected (window = marker start..now),
+    editing From to an earlier time must read the typed open range, not stay
+    clamped to the marker. The saved marker and the running test are untouched.
+    """
+    page, errors, outbound = fallback_page(browser, 'window.failSocket=true' if polling else '')
+    page.evaluate(MARKER_READS)
+    badge = page.get_by_test_id('connection-status')
+    page.get_by_role('tab', name='All providers', exact=True).click()
+    expect(page.locator('.au-quality-line').first).to_contain_text(re.compile(r'\d+ requests'))
+    page.clock.run_for(9000)
+    expect(badge).to_have_attribute('data-state', 'online')
+    assert (POLL_SENTENCE in (badge.get_attribute('title') or '')) == polling
+    page.get_by_role('button', name='Start test marker', exact=True).click()
+    page.wait_for_function('savedTests.length>0')
+    page.clock.run_for(500)
+    marker = page.evaluate('({...savedTests[0]})')
+    assert page.evaluate('markerReads.at(-1).q.test_id') == marker['id'], 'Start test did not select its marker'
+    remove = page.get_by_role('button', name='Remove saved test marker filter')
+    expect(remove).to_be_visible()
+    page.locator('.au-custom-range summary').click()
+    start_input = page.get_by_label('Window start', exact=True)
+    expect(page.get_by_label('Window end', exact=True)).to_have_value('')
+
+    def last_open_read(label):
+        value = start_input.input_value()
+        expected = page.evaluate('v=>Date.parse(v)/1000', value)
+        read = page.evaluate('markerReads.at(-1)')
+        assert 'test_id' not in read['q'], (label, 'Custom edit kept the marker', read, marker)
+        assert 'end' not in read['q'] and read['method'] == 'GET', (label, read)
+        assert float(read['q']['start']) == expected and read['ws'] == expected, (label, value, read)
+        return expected
+
+    # (1) Keyboard edit as in the picker: focus From, step its first segment back.
+    box = start_input.bounding_box()
+    page.mouse.click(box['x'] + 12, box['y'] + box['height'] / 2)
+    page.keyboard.press('ArrowDown')
+    page.clock.run_for(500)
+    keyed = last_open_read('keyboard')
+    assert keyed < marker['started'] - 3600, (keyed, marker)
+    expect(remove).to_have_count(0)
+    # (2) A typed earlier From, still open-ended.
+    typed = page.evaluate('''()=>{const t=Math.floor(Date.now()/1800000)*1800000-30*3600000,d=new Date(t);
+      return new Date(t-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}''')
+    start_input.fill(typed)
+    page.clock.run_for(500)
+    chosen = last_open_read('fill')
+    # The window keeps the chosen start and grows each visible minute.
+    ends = []
+    for _ in range(2):
+        reads = page.evaluate('markerReads.length')
+        page.clock.run_for(60000)
+        assert page.evaluate('markerReads.length') > reads, 'open Custom did not read on the minute'
+        assert last_open_read('minute') == chosen
+        ends.append(page.evaluate('markerReads.at(-1).we'))
+    assert ends[1] - ends[0] >= 59, ends
+    # The saved marker keeps its timestamps and the test keeps running.
+    assert page.evaluate('({...savedTests[0]})') == marker, 'saved marker was rewritten'
+    assert page.evaluate('markerPosts') == ['start'], page.evaluate('markerPosts')
+    expect(page.get_by_role('button', name='End test marker', exact=True).first).to_be_visible()
+    assert not errors, errors
+    assert not outbound, outbound
+    page.close()
+    return chosen, ends
+
+
 def requests_shown(quality):
     match = re.search(r'([\d,]+) requests', quality.inner_text())
     assert match, quality.inner_text()
@@ -813,6 +890,12 @@ def run():
         mounted_polling_switches(browser)
         print('PASS polling: profile switch probes only the new profile, Online by polling after its 8 s deadline, '
               '2 s checks; Reconnect retries the subscription without 2 s checks, then polls at 2 s after 8 s')
+        for polling in (True, False):
+            chosen, ends = mounted_marker_custom_edit(browser, polling)
+            print(f'PASS Start test marker then Custom From edit ({"polling" if polling else "acknowledged socket"}): '
+                  f'keyboard and typed From each deselect the marker and read start={chosen:.0f} without end or '
+                  f'test_id, response window starts there and grows {ends[0]:.0f} → {ends[1]:.0f}; saved marker '
+                  'unchanged, test still running')
         browser.close()
 
 

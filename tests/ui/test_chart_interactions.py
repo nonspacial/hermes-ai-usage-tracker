@@ -376,18 +376,30 @@ def test_chart_interactions():
             query=parse_qs(urlsplit(calls()[-1]).query)
             assert query['test_id']==['boundary-fixture']
             assert page.get_by_role('button',name='Remove saved test marker filter').is_visible()
+            assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
+            # A typed Custom bound is explicit intent to view that range: it
+            # leaves the selected marker (like Remove) and reads the typed
+            # fringe, without rewriting the saved marker.
+            boundary=page.evaluate('({...savedTests[0]})')
             open_custom()
-            page.get_by_label('Window start',exact=True).fill(datetime.fromtimestamp(
-                (page.evaluate('savedTests[0].started')//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
-            page.get_by_label('Window end',exact=True).fill(datetime.fromtimestamp(
-                ((page.evaluate('savedTests[0].ended')+1799)//1800)*1800).strftime('%Y-%m-%dT%H:%M'))
+            earlier=(boundary['started']//1800)*1800-1800
+            page.get_by_label('Window start',exact=True).fill(datetime.fromtimestamp(earlier).strftime('%Y-%m-%dT%H:%M'))
+            page.wait_for_function('window.chartData?.requests?.some(r=>r.id==="outside-marker-fixture")')
+            query=parse_qs(urlsplit(calls()[-1]).query)
+            typed_end=page.evaluate('v=>Date.parse(v)/1000',page.get_by_label('Window end',exact=True).input_value())
+            assert 'test_id' not in query and float(query['start'][0])==earlier and float(query['end'][0])==typed_end, query
+            expect(page.get_by_role('button',name='Remove saved test marker filter')).to_have_count(0)
+            assert page.evaluate('({...savedTests[0]})')==boundary
+            close_custom()
+            # The visible Remove control still leaves a reselected marker.
+            page.get_by_role('combobox', name='Saved tests').select_option('boundary-fixture')
+            page.wait_for_function('window.chartData?.window?.start === savedTests[0].started')
             assert parse_qs(urlsplit(calls()[-1]).query)['test_id']==['boundary-fixture']
             assert 'outside-marker-fixture' not in [r['id'] for r in page.evaluate('window.chartData.requests')]
-            close_custom()
             page.get_by_role('button',name='Remove saved test marker filter').click()
             page.wait_for_function('window.chartData?.requests?.some(r=>r.id==="outside-marker-fixture")')
             assert 'test_id' not in parse_qs(urlsplit(calls()[-1]).query)
-            assert 'outside-marker-fixture' in [r['id'] for r in page.evaluate('window.chartData.requests')]
+            assert page.evaluate('({...savedTests[0]})')==boundary
 
             # Adaptive bucket labels follow trend.unit/seconds for every step
             # of the backend ladder (fixture mirror, opt-in), and the half-hour
