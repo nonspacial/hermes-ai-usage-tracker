@@ -151,6 +151,20 @@ PROBE = r'''async () => {
   await unprovable('fresh price catalogue (UTC-day stale flag)',y=>{y.shape.body={price_catalogs:[{source_id:'a',stale:false}]}});
   await unprovable('unrecognised field',y=>{y.shape.body={future_rate_per_hour:3}});
   await unprovable('bucket boundary crossing',()=>{},40*60000);
+  // A running subagent is bounded by the read time and its owner's liveness,
+  // which change without a ledger write: never skip while one is counted.
+  const lifecycle=extra=>({subagent_summary:{peak_observed:{value:1,unmatched:0,basis:'matched_child_lifecycle',...extra}}});
+  await unprovable('running subagent',y=>{y.shape.body=lifecycle({running:1,open_ended:0})});
+  await unprovable('malformed running count',y=>{y.shape.body=lifecycle({running:'1'})});
+  const quietPeak=async(label,body)=>{
+   const y=setup();y.shape.body=body;y.owner.start();await flush();await read(y);
+   y.advance(60000);await y.owner.expire();await flush();
+   if(y.tasks.length||y.reads.length!==1)throw Error(label+': did not skip');y.owner.dispose();
+  };
+  // Factual ends (matched or last-request bounded) and older responses
+  // without the split stay skippable.
+  await quietPeak('stopped-without-record children',lifecycle({running:0,open_ended:2}));
+  await quietPeak('older peak shape',lifecycle({}));
   const progression=async(label,path,expectSkip)=>{
    const y=setup({extra:path});y.shape.body={cache_read_progression:{eligible_pairs:0}};
    y.owner.start();await flush();await read(y);y.advance(60000);await y.owner.expire();await flush();
@@ -167,7 +181,7 @@ PROBE = r'''async () => {
   const comp=setup({view:'compressions'});comp.owner.start();await flush();await read(comp);
   comp.advance(60000);await comp.owner.expire();await flush();
   if(comp.tasks.length!==1)throw Error('Compressions view skipped');comp.owner.dispose();
-  reports.push('expiry reads on changed token, leading attempts, owner-live/unresolved, any compression, quota, crossing, fresh catalogue, unknown field, bucket crossing, filtered cache-read progression, Compressions view');
+  reports.push('expiry reads on changed token, leading attempts, owner-live/unresolved, any compression, quota, crossing, fresh catalogue, unknown field, bucket crossing, running subagent, filtered cache-read progression, Compressions view; stop-less/older peaks still skip');
 
   // C1 end to end: a compression in the leading bucket ages out; the tick
   // reads and the new count is published.

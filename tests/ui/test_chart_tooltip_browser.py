@@ -155,8 +155,9 @@ def test_chart_tooltip():
                     ' tokens · '+b.attempts.toLocaleString(undefined)+(b.attempts===1?' request':' requests')+'\\nPeak subagents: 2 · partial';
             }''', known)
             expect(footer).to_have_text(known_expected)
-            # Local zone, not UTC: the page runs in Europe/Paris.
-            assert ' UTC' not in known_expected and ('CEST' in known_expected or 'GMT+2' in known_expected), known_expected
+            # Local zone, not UTC: the page runs in Europe/Paris (CEST in
+            # summer, CET in winter; the bucket date follows the wall clock).
+            assert ' UTC' not in known_expected and any(z in known_expected for z in ('CEST', 'CET', 'GMT+1', 'GMT+2')), known_expected
             assert 'Click the chart, then use ←/→ to step through buckets' in popup.inner_text()
             assert 'Drag 15 minutes or more to zoom' in popup.inner_text()
             assert popup.evaluate('e=>e.lastElementChild.dataset.testid') == 'chart-point-summary'
@@ -223,6 +224,30 @@ def test_chart_tooltip():
             assert 'includes missing usage' not in footer.inner_text()
             assert chart.locator('.au-chart-tip').inner_text() == ''
             assert not errors, errors
+            # Older peak shape above (no running/open_ended): no open-child lines.
+            assert 'still running' not in footer.inner_text() and 'without a stop record' not in footer.inner_text()
+            assert 'Peak subagents counts start/stop pairs and children still open' in popup.inner_text()
+            # Counted open children add one plain line each to every peak tooltip.
+            page.evaluate('''() => {window.demoPeakRunning=9;window.demoPeakOpenEnded=2;
+              window.demoChange++;for(const s of window.demoSubscribers)s({type:'changed',mode:'native-events'})}''')
+            open_lines = ['9 still running', '2 ended without a stop record (counted until their last request)']
+            expect(card_peak).to_have_attribute('title', re.compile(
+                r'\nPeak subagents: 2\nMost distinct child agents running at once in this window\n'
+                r'Counts matched start/stop pairs · 1 unmatched event left out\n' + re.escape('\n'.join(open_lines)) +
+                r'\nMissing hooks can make this an undercount\n'))
+            expect(card_peak).to_have_text(re.compile(r'^Peak 2 · partial · '))
+            page.wait_for_function('window.tooltipData?.subagent_summary?.peak_observed?.running === 9')
+            page.locator('.au-upper').evaluate('e=>e.scrollTop=150')
+            page.mouse.move(*point(missing))
+            expect(footer).to_contain_text('9 still running')
+            lines = footer.locator('.au-tip-line').all_text_contents()
+            assert lines[-3:] == ['Peak subagents: 2 · partial', *open_lines], lines
+            assert footer.locator('.au-tip-line').nth(len(lines) - 1).locator('[class*="au-tip-"]').count() == 0
+            assert footer.locator('.au-tip-line').nth(len(lines) - 2).locator('[class*="au-tip-"]').count() == 0
+            assert footer.evaluate('e=>getComputedStyle(e).color') == chart.locator('.au-line').first.evaluate('e=>getComputedStyle(e).stroke')
+            page.evaluate('window.demoPeakRunning=null;window.demoPeakOpenEnded=null')
+            assert not errors, errors
+            print('PASS peak open children: running/stop-less lines on card and chart footer; older shape adds none')
             structured_copy(page, errors)
             print('PASS structured tooltip copy: lines, theme-token tones, hostile names escaped, plain accessible description')
             print('PASS synthetic chart tooltip: exact unknown summary, absent pane text, focus/hover/keyboard, instructions, live theme, no fetch')

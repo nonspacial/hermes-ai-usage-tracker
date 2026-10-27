@@ -238,9 +238,14 @@ def test_tampered_receipt_still_fails_validation(tmp_path):
 NEW_FIELDS = {'unpriced', 'unpriced_total', 'unpriced_reason'}
 
 
-def strip_new(value):
+# The open-child peak split is additive inside peak_observed and postdates the reference.
+PEAK_SPLIT = {'running', 'open_ended'}
+
+
+def strip_new(value, parent=None):
     if isinstance(value, dict):
-        return {k: strip_new(v) for k, v in value.items() if k not in NEW_FIELDS}
+        return {k: strip_new(v, k) for k, v in value.items()
+                if k not in NEW_FIELDS and not (parent == 'peak_observed' and k in PEAK_SPLIT)}
     if isinstance(value, list):
         return [strip_new(v) for v in value]
     return value
