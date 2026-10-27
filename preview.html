@@ -1051,6 +1051,26 @@ function installTooltips(root){
  const tip=document.createElement('span');tip.className='au-tooltip';tip.id='au-hover-tip-'+Math.random().toString(36).slice(2);
  tip.setAttribute('role','tooltip');tip.style.position='fixed';tip.style.display='none';document.body.appendChild(tip);
  let active=null,svgTitle=null,original=null,markup=null,previousDescription=null,previousLabel=null;
+ // Titled ancestors of the active element (up to the root) lose their title
+ // too while the bubble shows, else the browser draws the nearest one's
+ // native tooltip on top. node → {text, svg}; restored on hide only if absent.
+ const held=new Map();
+ const ancestorTitle=node=>{const title=node.getAttribute('title');if(title)return {text:title,svg:null};
+  const svg=node.namespaceURI==='http://www.w3.org/2000/svg'&&node.querySelector(':scope > title');
+  return svg?.textContent?{text:svg.textContent,svg}:null};
+ function suppressAncestors(){
+  for(let node=active.parentElement;node&&root.contains(node);node=node.parentElement){
+   const found=ancestorTitle(node);if(!found)continue;
+   held.set(node,found);if(found.svg)found.svg.textContent='';else node.removeAttribute('title');
+  }
+ }
+ function restoreAncestors(){
+  for(const [node,{text,svg}] of held){
+   if(svg){if(svg.textContent==='')svg.textContent=text}
+   else if(!node.hasAttribute('title'))node.setAttribute('title',text);
+  }
+  held.clear();
+ }
  // Structured copy is used only while it still describes the plain text;
  // otherwise the plain title is shown line by line, never parsed as markup.
  const markupFor=(node,text)=>{const value=node.getAttribute('data-au-tip');
@@ -1074,11 +1094,14 @@ function installTooltips(root){
    else active.setAttribute('aria-describedby',previousDescription);
    if(svgTitle){if(previousLabel===null)active.removeAttribute('aria-label');else active.setAttribute('aria-label',previousLabel)}
   }
+  restoreAncestors();
   active=null;svgTitle=null;markup=null;tip.style.display='none';tip.textContent='';
  }
  function locate(target){
   for(let node=target;node&&root.contains(node);node=node.parentElement){
    if(node.nodeType!==1)continue;
+   if(node===active)return {node,text:original,svg:svgTitle};
+   const kept=held.get(node);if(kept)return {node,text:kept.text,svg:kept.svg};
    const title=node.getAttribute('title');if(title)return {node,text:title,svg:null};
    const svg=node.namespaceURI==='http://www.w3.org/2000/svg'&&node.querySelector(':scope > title');
    if(svg?.textContent)return {node,text:svg.textContent,svg};
@@ -1128,7 +1151,9 @@ function installTooltips(root){
    hide();return;
   }
   if(found.node===active)return;
-  hide();active=found.node;original=found.text;svgTitle=found.svg;markup=markupFor(active,original);
+  // hide() restores held ancestor titles, so re-read the current text.
+  hide();const current=locate(target)||found;
+  active=current.node;original=current.text;svgTitle=current.svg;markup=markupFor(active,original);
   previousDescription=active.getAttribute('aria-describedby');previousLabel=active.getAttribute('aria-label');
   active.setAttribute('data-au-tooltip',original);
   active.setAttribute('aria-describedby',[previousDescription,tip.id].filter(Boolean).join(' '));
@@ -1136,6 +1161,7 @@ function installTooltips(root){
   // while the styled explanation is present. Restore the title on departure.
   if(svgTitle){active.setAttribute('aria-label',previousLabel||original);svgTitle.textContent=''}
   else active.removeAttribute('title');
+  suppressAncestors();
   renderTip();tip.style.display='block';
   position();
  }
@@ -1158,6 +1184,12 @@ function installTooltips(root){
     original=svgTitle.textContent;markup=markupFor(active,original);active.dataset.auTooltip=original;
     if(previousLabel===null)active.setAttribute('aria-label',original);
     renderTip();svgTitle.textContent='';position();
+   }
+   // A held ancestor re-rendered meanwhile: keep the newer text, stay silent.
+   const kept=record.attributeName==='title'&&held.get(record.target);
+   if(kept&&!kept.svg){const current=record.target.getAttribute('title');if(current){kept.text=current;record.target.removeAttribute('title')}}
+   for(const entry of held.values())if(entry.svg&&(record.target===entry.svg||entry.svg.contains(record.target))&&entry.svg.textContent){
+    entry.text=entry.svg.textContent;entry.svg.textContent='';
    }
   }
   if(active)position();
